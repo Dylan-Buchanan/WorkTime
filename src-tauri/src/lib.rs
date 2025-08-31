@@ -182,8 +182,9 @@ fn complete_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resul
     if !was_break {
         if let Some(task) = s.tasks.get_mut(&timer.task_id) {
             task.completed_pomodoros += 1.0;
-            if task.completed_pomodoros >= task.target_pomodoros as f32 && task.completed_at.is_none() {
-                task.completed_at = Some(now);
+            // Auto-extend if this would finish the task (user continues flow)
+            if task.completed_at.is_none() && task.completed_pomodoros >= task.target_pomodoros as f32 {
+                task.target_pomodoros += 1; // extend by one
             }
         }
         s.current_cycle_pomodoros += 1;
@@ -266,7 +267,8 @@ pub fn run() {
             stop_work_timer,
             skip_break,
             delete_task,
-            archive_task
+            archive_task,
+            finalize_task
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -289,4 +291,20 @@ fn stop_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
     s.timer = None;
     save_state(&app, &s)?;
     Ok(s.clone())
+}
+
+#[tauri::command]
+fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid) -> Result<Task, String> {
+    let mut s = state.0.lock().unwrap();
+    if s.timer.as_ref().map(|t| t.task_id) == Some(task_id) { s.timer = None; }
+    {
+        let task_mut = s.tasks.get_mut(&task_id).ok_or("Task not found")?;
+        if task_mut.completed_at.is_none() {
+            task_mut.target_pomodoros = task_mut.completed_pomodoros.ceil() as u32;
+            task_mut.completed_at = Some(Utc::now());
+        }
+    }
+    let cloned = s.tasks.get(&task_id).unwrap().clone();
+    save_state(&app, &s)?;
+    Ok(cloned)
 }

@@ -11,15 +11,7 @@ function format(ms: number) {
 }
 
 export const TimerPanel: React.FC = () => {
-    const {
-        state,
-        startWork,
-        startBreak,
-        completeTimer,
-        skipBreak,
-        remainingMs,
-        error,
-    } = useAppState();
+    const { state, startWork, skipBreak, remainingMs, error } = useAppState();
     const timer = state?.timer;
     const stopWork = useAppState().stopWork; // Added stopWork
     const ms = remainingMs();
@@ -51,16 +43,10 @@ export const TimerPanel: React.FC = () => {
                 {!timer && (
                     <button onClick={() => startWork()}>Start Work</button>
                 )}
-                {!timer && (
-                    <button onClick={() => startBreak()}>Start Break</button>
-                )}
                 {timer && ms === 0 && (
-                    <button
-                        style={{ background: "#4caf50" }}
-                        onClick={() => completeTimer()}
-                    >
-                        Complete
-                    </button>
+                    <span style={{ fontSize: 14, color: "#4caf50" }}>
+                        Transitioning...
+                    </span>
                 )}
                 {timer && timer.kind === "Work" && ms > 0 && (
                     <button onClick={() => stopWork()}>Stop Early</button>

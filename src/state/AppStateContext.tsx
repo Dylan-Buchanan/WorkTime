@@ -4,6 +4,7 @@ import React, {
     useEffect,
     useState,
     useCallback,
+    useRef,
 } from "react";
 import { AppStateData, Settings } from "./types";
 import { invoke } from "@tauri-apps/api/core";
@@ -38,6 +39,7 @@ interface AppContextShape {
     updateSettings: (s: Settings) => Promise<void>;
     remainingMs: () => number;
     error: string | null;
+    finalizeTask: (id: string) => Promise<void>;
 }
 
 const AppStateContext = createContext<AppContextShape | undefined>(undefined);
@@ -46,7 +48,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
     children,
 }) => {
     const [state, setState] = useState<AppStateData | null>(null);
-    const [, setTick] = useState(0);
+    const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
@@ -62,6 +64,36 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
         const id = setInterval(() => setTick((t) => t + 1), 1000);
         return () => clearInterval(id);
     }, []);
+
+    // Auto progression robust loop
+    const progressing = useRef(false);
+    useEffect(() => {
+        if (!state?.timer) {
+            progressing.current = false;
+            return;
+        }
+        const end = new Date(state.timer.ends_at).getTime();
+        const remaining = end - Date.now();
+        if (remaining <= 0 && !progressing.current) {
+            progressing.current = true;
+            (async () => {
+                try {
+                    const finishedKind = state.timer?.kind;
+                    await invoke("complete_timer");
+                    await refresh();
+                    if (finishedKind === "Work") {
+                        await invoke("start_break_timer");
+                    } else {
+                        await ensureActiveTask().catch(() => {});
+                        await invoke("start_work_timer");
+                    }
+                    await refresh();
+                } finally {
+                    progressing.current = false;
+                }
+            })();
+        }
+    }, [tick, state?.timer, refresh]);
 
     useEffect(() => {
         ensureNotification();
@@ -143,6 +175,9 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
     const updateSettings = (s: Settings) =>
         wrapVoid(() => invoke("update_settings", { settings: s }));
 
+    const finalizeTask = (id: string) =>
+        wrapVoid(() => invoke("finalize_task", { task_id: id, taskId: id }));
+
     const remainingMs = () => {
         if (!state?.timer) return 0;
         const end = new Date(state.timer.ends_at).getTime();
@@ -164,6 +199,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
                 updateSettings,
                 remainingMs,
                 error,
+                finalizeTask,
             }}
         >
             {children}

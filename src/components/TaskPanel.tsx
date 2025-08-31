@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useAppState } from "../state/AppStateContext";
 
 export const TaskPanel: React.FC = () => {
-    const { state, createTask, setActiveTask } = useAppState();
+    const { state, createTask, setActiveTask, finalizeTask } = useAppState();
     const [name, setName] = useState("");
     const [target, setTarget] = useState(4);
 
@@ -52,17 +52,31 @@ export const TaskPanel: React.FC = () => {
                             {t.target_pomodoros})
                         </span>
                         {state?.active_task === t.id && (
-                            <span
-                                style={{
-                                    fontSize: 10,
-                                    background: "#1976d2",
-                                    color: "white",
-                                    padding: "2px 4px",
-                                    borderRadius: 3,
-                                }}
-                            >
-                                ACTIVE
-                            </span>
+                            <>
+                                <span
+                                    style={{
+                                        fontSize: 10,
+                                        background: "#1976d2",
+                                        color: "white",
+                                        padding: "2px 4px",
+                                        borderRadius: 3,
+                                        marginRight: 4,
+                                    }}
+                                >
+                                    ACTIVE
+                                </span>
+                                {!t.completed_at && (
+                                    <button
+                                        style={{ fontSize: 10 }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            finalizeTask(t.id);
+                                        }}
+                                    >
+                                        Complete
+                                    </button>
+                                )}
+                            </>
                         )}
                     </li>
                 ))}
