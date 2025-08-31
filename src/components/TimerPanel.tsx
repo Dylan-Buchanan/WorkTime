@@ -1,5 +1,6 @@
 import React from "react";
 import { useAppState } from "../state/AppStateContext";
+import { useSounds } from "../hooks/useSounds";
 
 function format(ms: number) {
     const total = Math.floor(ms / 1000);
@@ -13,6 +14,7 @@ function format(ms: number) {
 export const TimerPanel: React.FC = () => {
     const { state, startWork, skipBreak, remainingMs, error } = useAppState();
     const timer = state?.timer;
+    const { play } = useSounds();
     const stopWork = useAppState().stopWork; // Added stopWork
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
@@ -41,7 +43,15 @@ export const TimerPanel: React.FC = () => {
             )}
             <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
                 {!timer && (
-                    <button onClick={() => startWork()}>Start Work</button>
+                    <button
+                        onMouseEnter={() => play("hover")}
+                        onClick={() => {
+                            startWork();
+                            play("startPomodoro");
+                        }}
+                    >
+                        Start Work
+                    </button>
                 )}
                 {timer && ms === 0 && (
                     <span style={{ fontSize: 14, color: "#4caf50" }}>
@@ -49,10 +59,26 @@ export const TimerPanel: React.FC = () => {
                     </span>
                 )}
                 {timer && timer.kind === "Work" && ms > 0 && (
-                    <button onClick={() => stopWork()}>Stop Early</button>
+                    <button
+                        onMouseEnter={() => play("hover")}
+                        onClick={() => {
+                            stopWork();
+                            play("pressSide");
+                        }}
+                    >
+                        Stop Early
+                    </button>
                 )}
                 {isBreak && timer && ms > 0 && (
-                    <button onClick={() => skipBreak()}>Skip Break</button>
+                    <button
+                        onMouseEnter={() => play("hover")}
+                        onClick={() => {
+                            skipBreak();
+                            play("pressSide");
+                        }}
+                    >
+                        Skip Break
+                    </button>
                 )}
             </div>
         </div>

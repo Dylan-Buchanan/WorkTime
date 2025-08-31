@@ -7,6 +7,7 @@ import React, {
     useRef,
 } from "react";
 import { AppStateData, Settings } from "./types";
+import { useSounds } from "../hooks/useSounds";
 import { invoke } from "@tauri-apps/api/core";
 // We lazy import notification functions to avoid type resolution issues if plugin not yet built
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
@@ -50,6 +51,12 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
     const [state, setState] = useState<AppStateData | null>(null);
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    let soundApi: { play: (k: any) => void } | null = null;
+    try {
+        soundApi = useSounds();
+    } catch {
+        /* ignore sound init errors */
+    }
 
     const refresh = useCallback(async () => {
         const s = await invoke<AppStateData>("get_state");
@@ -80,6 +87,11 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
                 try {
                     const finishedKind = state.timer?.kind;
                     await invoke("complete_timer");
+                    if (finishedKind === "Work") {
+                        soundApi?.play("pomodoroFinish");
+                    } else {
+                        soundApi?.play("breakOver");
+                    }
                     await refresh();
                     if (finishedKind === "Work") {
                         await invoke("start_break_timer");

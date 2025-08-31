@@ -1,8 +1,10 @@
 import React, { useState } from "react";
 import { useAppState } from "../state/AppStateContext";
+import { useSounds } from "../hooks/useSounds";
 
 export const TaskPanel: React.FC = () => {
     const { state, createTask, setActiveTask, finalizeTask } = useAppState();
+    const { play } = useSounds();
     const [name, setName] = useState("");
     const [target, setTarget] = useState(4);
 
@@ -16,6 +18,7 @@ export const TaskPanel: React.FC = () => {
                     e.preventDefault();
                     if (!name) return;
                     await createTask(name, target);
+                    play("pressSide");
                     setName("");
                 }}
             >
@@ -31,7 +34,9 @@ export const TaskPanel: React.FC = () => {
                     style={{ width: 60 }}
                     onChange={(e) => setTarget(Number(e.target.value))}
                 />
-                <button type="submit">Add</button>
+                <button type="submit" onMouseEnter={() => play("hover")}>
+                    Add
+                </button>
             </form>
             <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
                 {tasks.map((t) => (
@@ -45,7 +50,10 @@ export const TaskPanel: React.FC = () => {
                             display: "flex",
                             alignItems: "center",
                         }}
-                        onClick={() => setActiveTask(t.id)}
+                        onClick={() => {
+                            setActiveTask(t.id);
+                            play("pressSide");
+                        }}
                     >
                         <span style={{ flex: 1 }}>
                             {t.name} ({t.completed_pomodoros}/
@@ -68,9 +76,11 @@ export const TaskPanel: React.FC = () => {
                                 {!t.completed_at && (
                                     <button
                                         style={{ fontSize: 10 }}
+                                        onMouseEnter={() => play("hover")}
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             finalizeTask(t.id);
+                                            play("completeTask");
                                         }}
                                     >
                                         Complete

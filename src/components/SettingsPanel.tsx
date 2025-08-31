@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { useAppState } from "../state/AppStateContext";
 import { Settings } from "../state/types";
+import { useSounds } from "../hooks/useSounds";
 
 export const SettingsPanel: React.FC = () => {
     const { state, updateSettings } = useAppState();
+    const { play } = useSounds();
     const s = state?.settings;
     const [local, setLocal] = useState<Settings | null>(s || null);
     React.useEffect(() => {
@@ -34,7 +36,15 @@ export const SettingsPanel: React.FC = () => {
                     />
                 </label>
             ))}
-            <button onClick={() => updateSettings(local)}>Save</button>
+            <button
+                onMouseEnter={() => play("hover")}
+                onClick={() => {
+                    updateSettings(local);
+                    play("pressSide");
+                }}
+            >
+                Save
+            </button>
         </div>
     );
 };
