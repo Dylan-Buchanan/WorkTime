@@ -60,6 +60,7 @@ interface AppContextShape {
     resumeTimer: () => void;
     isPaused: boolean;
     tick: number; // increments every second for live UI updates
+    resetAll: () => Promise<void>;
 }
 
 const AppStateContext = createContext<AppContextShape | undefined>(undefined);
@@ -421,6 +422,16 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
         wrapVoid(() => invoke("resume_timer"));
     };
 
+    const resetAll = async () => {
+        try {
+            setError(null);
+            await invoke("reset_app_state");
+            await refresh();
+        } catch (e: any) {
+            setError(e?.message || e?.toString?.() || "Failed to reset");
+        }
+    };
+
     return (
         <AppStateContext.Provider
             value={{
@@ -441,6 +452,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
                 resumeTimer,
                 isPaused: !!state?.timer?.paused,
                 tick,
+                resetAll,
             }}
         >
             {children}

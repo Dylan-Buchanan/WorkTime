@@ -300,7 +300,8 @@ pub fn run() {
             skip_break,
             delete_task,
             archive_task,
-            finalize_task
+            finalize_task,
+            reset_app_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -388,4 +389,12 @@ fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: 
     let cloned = s.tasks.get(&task_id).unwrap().clone();
     save_state(&app, &s)?;
     Ok(cloned)
+}
+
+#[tauri::command]
+fn reset_app_state(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<AppStateData, String> {
+    let mut s = state.0.lock().unwrap();
+    *s = AppStateData::default();
+    save_state(&app, &s)?;
+    Ok(s.clone())
 }

@@ -93,6 +93,7 @@ interface PMContextShape {
     setView: (v: "list" | "board") => void;
     setListGrouping: (g: ProjectManagerState["ui"]["listGrouping"]) => void;
     setFilters: (patch: Partial<ProjectManagerState["ui"]>) => void;
+    resetPM: () => void;
 }
 
 const PMContext = createContext<PMContextShape | undefined>(undefined);
@@ -384,6 +385,10 @@ export const ProjectManagerProvider: React.FC<{
             ui: { ...prev.ui, ...patch },
         }));
 
+    const resetPM = () => {
+        persist(() => buildDefaultState());
+    };
+
     // Expose & log each render (development aid)
     useEffect(() => {
         (globalThis as any).__PM__ = {
@@ -419,6 +424,7 @@ export const ProjectManagerProvider: React.FC<{
                 setView,
                 setListGrouping,
                 setFilters,
+                resetPM,
             }}
         >
             {children}
