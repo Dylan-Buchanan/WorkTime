@@ -113,8 +113,28 @@ fn save_state(app: &tauri::AppHandle, state: &AppStateData) -> Result<(), String
 
 // Commands
 #[tauri::command]
-fn get_state(state: tauri::State<AppState>) -> Result<AppStateData, String> {
-    Ok(state.0.lock().unwrap().clone())
+fn get_state(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<AppStateData, String> {
+    // Also perform a lightweight maintenance pass: any task that has a completed_at timestamp
+    // but is not yet archived (perhaps from older versions) will be archived automatically
+    // so it no longer appears in the selectable task list.
+    let mut s_guard = state.0.lock().unwrap();
+    let mut mutated = false;
+    // Collect task ids needing archival
+    for task in s_guard.tasks.values_mut() {
+        if task.completed_at.is_some() && !task.archived {
+            task.archived = true;
+            mutated = true;
+        }
+    }
+    // If active task is now archived, clear selection so user must choose a new active task.
+    if let Some(active_id) = s_guard.active_task {
+        if s_guard.tasks.get(&active_id).map(|t| t.archived).unwrap_or(false) {
+            s_guard.active_task = None;
+            mutated = true;
+        }
+    }
+    if mutated { let _ = save_state(&app, &s_guard); }
+    Ok(s_guard.clone())
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,7 +358,11 @@ fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: 
             task_mut.target_pomodoros = task_mut.completed_pomodoros.ceil() as u32;
             task_mut.completed_at = Some(Utc::now());
         }
+        // Auto-archive finalized tasks so they are removed from selectable list.
+        if !task_mut.archived { task_mut.archived = true; }
     }
+    // If the active task was just archived, clear the active selection.
+    if s.active_task == Some(task_id) { s.active_task = None; }
     let cloned = s.tasks.get(&task_id).unwrap().clone();
     save_state(&app, &s)?;
     Ok(cloned)
