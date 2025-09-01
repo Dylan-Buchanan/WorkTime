@@ -301,6 +301,7 @@ pub fn run() {
             delete_task,
             archive_task,
             finalize_task,
+            set_task_target,
             reset_app_state
         ])
         .run(tauri::generate_context!())
@@ -387,6 +388,22 @@ fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: 
     // If the active task was just archived, clear the active selection.
     if s.active_task == Some(task_id) { s.active_task = None; }
     let cloned = s.tasks.get(&task_id).unwrap().clone();
+    save_state(&app, &s)?;
+    Ok(cloned)
+}
+
+// Explicitly update a task's target_pomodoros (used to sync Project Manager estimate changes)
+#[tauri::command]
+fn set_task_target(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid, target: u32) -> Result<Task, String> {
+    let mut s = state.0.lock().unwrap();
+    let task = s.tasks.get_mut(&task_id).ok_or("Task not found")?;
+    let new_target = target.max(1); // always at least 1
+    task.target_pomodoros = new_target;
+    // If target set below completed progress, leave as-is; next maintenance pass may auto-extend again.
+    if task.completed_pomodoros > task.target_pomodoros as f32 {
+        task.target_pomodoros = task.completed_pomodoros.ceil() as u32;
+    }
+    let cloned = task.clone();
     save_state(&app, &s)?;
     Ok(cloned)
 }

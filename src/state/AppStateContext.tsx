@@ -385,6 +385,41 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
         });
     }, [state?.logs, state?.timer, tick, pmState, pmUpdateTask]);
 
+    // Propagate estimate changes from PM task -> backend timer task target_pomodoros
+    useEffect(() => {
+        if (!pmState || !state) return;
+        // Build quick lookup of backend targets
+        const backendTargets: Record<string, number> = {};
+        Object.values(state.tasks).forEach((t) => {
+            backendTargets[t.id] = t.target_pomodoros;
+        });
+        let cancelled = false;
+        (async () => {
+            for (const pt of Object.values(pmState.tasks) as any[]) {
+                if (!pt.appTaskId) continue;
+                if (typeof pt.estimatePomos !== "number") continue;
+                const current = backendTargets[pt.appTaskId];
+                if (current === undefined) continue;
+                if (pt.estimatePomos !== current) {
+                    try {
+                        await invoke("set_task_target", {
+                            task_id: pt.appTaskId,
+                            taskId: pt.appTaskId, // alias just in case
+                            target: pt.estimatePomos,
+                        });
+                        if (cancelled) return;
+                        await refresh();
+                    } catch {
+                        // ignore individual failures
+                    }
+                }
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [pmState?.tasks, state?.tasks, refresh]);
+
     // Proactively link active app task to a single matching PM task by title (if not already linked)
     useEffect(() => {
         if (!state || !pmState) return;
