@@ -41,6 +41,9 @@ interface AppContextShape {
     remainingMs: () => number;
     error: string | null;
     finalizeTask: (id: string) => Promise<void>;
+    pauseTimer: () => void;
+    resumeTimer: () => void;
+    isPaused: boolean;
 }
 
 const AppStateContext = createContext<AppContextShape | undefined>(undefined);
@@ -51,6 +54,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
     const [state, setState] = useState<AppStateData | null>(null);
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    // Pause handled by backend (timer.paused flag)
     let soundApi: { play: (k: any) => void } | null = null;
     try {
         soundApi = useSounds();
@@ -75,7 +79,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
     // Auto progression robust loop
     const progressing = useRef(false);
     useEffect(() => {
-        if (!state?.timer) {
+        if (!state?.timer || state.timer.paused) {
             progressing.current = false;
             return;
         }
@@ -192,8 +196,19 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const remainingMs = () => {
         if (!state?.timer) return 0;
+        if (state.timer.paused) {
+            return (state.timer.paused_remaining_secs || 0) * 1000;
+        }
         const end = new Date(state.timer.ends_at).getTime();
         return Math.max(0, end - Date.now());
+    };
+    const pauseTimer = () => {
+        if (!state?.timer || state.timer.paused) return;
+        wrapVoid(() => invoke("pause_timer"));
+    };
+    const resumeTimer = () => {
+        if (!state?.timer || !state.timer.paused) return;
+        wrapVoid(() => invoke("resume_timer"));
     };
 
     return (
@@ -212,6 +227,9 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({
                 remainingMs,
                 error,
                 finalizeTask,
+                pauseTimer,
+                resumeTimer,
+                isPaused: !!state?.timer?.paused,
             }}
         >
             {children}

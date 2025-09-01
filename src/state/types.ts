@@ -93,6 +93,8 @@ export interface ActiveTimer {
     started_at: string;
     ends_at: string;
     kind: TimerKind;
+    paused?: boolean;
+    paused_remaining_secs?: number;
 }
 
 export interface AppStateData {

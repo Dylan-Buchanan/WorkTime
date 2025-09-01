@@ -65,6 +65,8 @@ pub struct ActiveTimer {
     pub started_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub kind: TimerKind,
+    pub paused: bool,
+    pub paused_remaining_secs: i64, // remaining seconds when paused
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -162,7 +164,7 @@ fn start_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Res
     let task_id = s.active_task.ok_or("No active task")?;
     let mins = s.settings.work_minutes as i64;
     let now = Utc::now();
-    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::minutes(mins), kind: TimerKind::Work };
+    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::minutes(mins), kind: TimerKind::Work, paused: false, paused_remaining_secs: 0 };
     s.timer = Some(timer.clone());
     save_state(&app, &s)?;
     Ok(timer)
@@ -209,7 +211,7 @@ fn start_break_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Re
     let mins = if is_long { s.settings.long_break_minutes } else { s.settings.short_break_minutes } as i64;
     let kind = if is_long { TimerKind::LongBreak } else { TimerKind::ShortBreak };
     let now = Utc::now();
-    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::minutes(mins), kind };
+    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::minutes(mins), kind, paused: false, paused_remaining_secs: 0 };
     s.timer = Some(timer.clone());
     save_state(&app, &s)?;
     Ok(timer)
@@ -264,6 +266,8 @@ pub fn run() {
             start_work_timer,
             start_break_timer,
             complete_timer,
+            pause_timer,
+            resume_timer,
             stop_work_timer,
             skip_break,
             delete_task,
@@ -291,6 +295,37 @@ fn stop_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
     s.timer = None;
     save_state(&app, &s)?;
     Ok(s.clone())
+}
+
+#[tauri::command]
+fn pause_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
+    let mut s = state.0.lock().unwrap();
+    let mut timer = s.timer.clone().ok_or("No active timer")?;
+    if timer.paused { return Err("Already paused".into()); }
+    let now = Utc::now();
+    if now >= timer.ends_at { return Err("Timer already finished".into()); }
+    let remaining = (timer.ends_at - now).num_seconds().max(0);
+    timer.paused = true;
+    timer.paused_remaining_secs = remaining;
+    s.timer = Some(timer.clone());
+    save_state(&app, &s)?;
+    Ok(timer)
+}
+
+#[tauri::command]
+fn resume_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
+    let mut s = state.0.lock().unwrap();
+    let mut timer = s.timer.clone().ok_or("No active timer")?;
+    if !timer.paused { return Err("Timer not paused".into()); }
+    let now = Utc::now();
+    let new_end = now + chrono::Duration::seconds(timer.paused_remaining_secs);
+    timer.paused = false;
+    timer.started_at = now; // treat resume as new start for remaining segment
+    timer.ends_at = new_end;
+    timer.paused_remaining_secs = 0;
+    s.timer = Some(timer.clone());
+    save_state(&app, &s)?;
+    Ok(timer)
 }
 
 #[tauri::command]

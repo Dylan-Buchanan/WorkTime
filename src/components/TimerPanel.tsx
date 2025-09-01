@@ -12,7 +12,16 @@ function format(ms: number) {
 }
 
 export const TimerPanel: React.FC = () => {
-    const { state, startWork, skipBreak, remainingMs, error } = useAppState();
+    const {
+        state,
+        startWork,
+        skipBreak,
+        remainingMs,
+        error,
+        pauseTimer,
+        resumeTimer,
+        isPaused,
+    } = useAppState();
     const timer = state?.timer;
     const { play } = useSounds();
     const stopWork = useAppState().stopWork; // Added stopWork
@@ -41,7 +50,14 @@ export const TimerPanel: React.FC = () => {
                     {new Date(state!.timer!.ends_at).toLocaleTimeString()}
                 </div>
             )}
-            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+            <div
+                style={{
+                    display: "flex",
+                    gap: 8,
+                    justifyContent: "center",
+                    flexWrap: "wrap",
+                }}
+            >
                 {!timer && (
                     <button
                         onMouseEnter={() => play("hover")}
@@ -53,12 +69,34 @@ export const TimerPanel: React.FC = () => {
                         Start Work
                     </button>
                 )}
+                {timer && !isPaused && ms > 0 && (
+                    <button
+                        onMouseEnter={() => play("hover")}
+                        onClick={() => {
+                            pauseTimer();
+                            play("pressSide");
+                        }}
+                    >
+                        Pause
+                    </button>
+                )}
+                {timer && isPaused && (
+                    <button
+                        onMouseEnter={() => play("hover")}
+                        onClick={() => {
+                            resumeTimer();
+                            play("pressSide");
+                        }}
+                    >
+                        Resume
+                    </button>
+                )}
                 {timer && ms === 0 && (
                     <span style={{ fontSize: 14, color: "#4caf50" }}>
                         Transitioning...
                     </span>
                 )}
-                {timer && timer.kind === "Work" && ms > 0 && (
+                {timer && !isPaused && timer.kind === "Work" && ms > 0 && (
                     <button
                         onMouseEnter={() => play("hover")}
                         onClick={() => {
@@ -69,7 +107,7 @@ export const TimerPanel: React.FC = () => {
                         Stop Early
                     </button>
                 )}
-                {isBreak && timer && ms > 0 && (
+                {isBreak && timer && ms > 0 && !isPaused && (
                     <button
                         onMouseEnter={() => play("hover")}
                         onClick={() => {
