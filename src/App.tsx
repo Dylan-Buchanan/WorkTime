@@ -14,6 +14,7 @@ import { useSounds } from "./hooks/useSounds";
 import { ProjectManagerProvider } from "./state/ProjectManagerContext";
 import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPage";
 import { AppStateProvider } from "./state/AppStateContext";
+import AnalyticsPage from "./components/AnalyticsPage";
 
 const App: React.FC = () => {
     return (
@@ -34,6 +35,10 @@ const App: React.FC = () => {
                                 <Route
                                     path="/projects"
                                     element={<ProjectManagerPage />}
+                                />
+                                <Route
+                                    path="/analytics"
+                                    element={<AnalyticsPage />}
                                 />
                             </Routes>
                         </div>
@@ -92,6 +97,19 @@ const TopNav: React.FC = () => {
                 }}
             >
                 Projects
+            </Link>
+            <Link
+                to="/analytics"
+                onClick={() => handleClick("/analytics")}
+                onMouseEnter={() => play("hover")}
+                style={{
+                    ...linkStyle,
+                    ...(loc.pathname.startsWith("/analytics")
+                        ? activeStyle
+                        : {}),
+                }}
+            >
+                Analytics
             </Link>
         </div>
     );
