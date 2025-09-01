@@ -19,8 +19,8 @@ import AnalyticsPage from "./components/AnalyticsPage";
 const App: React.FC = () => {
     return (
         <BrowserRouter>
-            <AppStateProvider>
-                <ProjectManagerProvider>
+            <ProjectManagerProvider>
+                <AppStateProvider>
                     <div
                         style={{
                             display: "flex",
@@ -43,8 +43,8 @@ const App: React.FC = () => {
                             </Routes>
                         </div>
                     </div>
-                </ProjectManagerProvider>
-            </AppStateProvider>
+                </AppStateProvider>
+            </ProjectManagerProvider>
         </BrowserRouter>
     );
 };

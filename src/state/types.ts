@@ -38,6 +38,7 @@ export interface PMTask {
     dueDate?: string; // ISO date
     estimatePomos?: number; // estimated pomodoros
     timeSpentMinutes: number;
+    workedPomos?: number; // derived from timer logs (completed work minutes / 25)
     lastWorkedAt?: string; // ISO
     description?: string; // markdown
     tags: string[];

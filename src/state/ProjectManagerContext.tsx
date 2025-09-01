@@ -245,6 +245,7 @@ export const ProjectManagerProvider: React.FC<{
             dueDate: opts.dueDate,
             estimatePomos: (opts as any).estimatePomos || undefined,
             timeSpentMinutes: opts.timeSpentMinutes || 0,
+            workedPomos: 0,
             lastWorkedAt: opts.lastWorkedAt,
             description: opts.description || "",
             tags: opts.tags || [],

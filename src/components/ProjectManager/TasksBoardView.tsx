@@ -198,6 +198,18 @@ const TaskCard: React.FC<{
                             />
                         </div>
                     )}
+                    <div className="mt-1 text-[10px] opacity-60 flex items-center gap-2">
+                        <span>{(task.timeSpentMinutes || 0).toFixed(1)}m</span>
+                        <span>
+                            {(
+                                task.workedPomos ||
+                                (task.timeSpentMinutes || 0) / 25
+                            ).toFixed(1)}
+                            p
+                            {task.estimatePomos &&
+                                " / " + task.estimatePomos + "p"}
+                        </span>
+                    </div>
                 </div>
             </div>
         </div>

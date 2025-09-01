@@ -66,7 +66,7 @@ const TaskRow: React.FC<{
             className={`px-3 py-2 grid items-center gap-2 cursor-pointer hover:bg-neutral-800 ${
                 selected ? "bg-neutral-800" : ""
             }`}
-            style={{ gridTemplateColumns: "16px 1fr auto auto auto" }}
+            style={{ gridTemplateColumns: "16px 1fr auto auto auto auto" }}
         >
             <input
                 type="checkbox"
@@ -98,6 +98,22 @@ const TaskRow: React.FC<{
                 }`}
             >
                 {task.dueDate?.slice(5) || "--"}
+            </div>
+            <div className="text-[10px] text-neutral-500 flex flex-col items-end leading-tight">
+                <span>
+                    {(task.timeSpentMinutes || 0).toFixed(1)}m
+                    {task.estimatePomos && (
+                        <>
+                            {" "}
+                            ·{" "}
+                            {(
+                                task.workedPomos ||
+                                (task.timeSpentMinutes || 0) / 25
+                            ).toFixed(1)}
+                            p{"/" + task.estimatePomos + "p"}
+                        </>
+                    )}
+                </span>
             </div>
         </div>
     );
