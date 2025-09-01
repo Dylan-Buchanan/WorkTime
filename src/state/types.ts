@@ -96,6 +96,8 @@ export interface ActiveTimer {
     kind: TimerKind;
     paused?: boolean;
     paused_remaining_secs?: number;
+    planned_secs?: number; // total planned duration in seconds
+    accumulated_secs?: number; // elapsed active seconds before current segment
 }
 
 export interface AppStateData {

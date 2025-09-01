@@ -7,89 +7,90 @@ export const TaskPanel: React.FC = () => {
     const { play } = useSounds();
     const [name, setName] = useState("");
     const [target, setTarget] = useState(4);
-
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
 
     return (
-        <div>
-            <h3>Tasks</h3>
+        <div className="space-y-3">
+            <div className="flex items-center justify-between">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+                    Tasks
+                </h3>
+                <span className="text-[10px] text-neutral-500">
+                    {tasks.length}
+                </span>
+            </div>
             <form
                 onSubmit={async (e) => {
                     e.preventDefault();
-                    if (!name) return;
-                    await createTask(name, target);
+                    if (!name.trim()) return;
+                    await createTask(name.trim(), target);
                     play("pressSide");
                     setName("");
                 }}
+                className="flex gap-2"
             >
                 <input
                     value={name}
                     placeholder="Task name"
                     onChange={(e) => setName(e.target.value)}
+                    className="flex-1 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
                 <input
                     type="number"
                     min={1}
                     value={target}
-                    style={{ width: 60 }}
                     onChange={(e) => setTarget(Number(e.target.value))}
+                    className="w-14 bg-neutral-800/60 border border-neutral-700 rounded px-1 py-1 text-[11px] text-center focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
-                <button type="submit" onMouseEnter={() => play("hover")}>
+                <button
+                    type="submit"
+                    onMouseEnter={() => play("hover")}
+                    className="px-2 py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors"
+                >
                     Add
                 </button>
             </form>
-            <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
-                {tasks.map((t) => (
-                    <li
-                        key={t.id}
-                        style={{
-                            padding: "4px 0",
-                            cursor: "pointer",
-                            fontWeight:
-                                state?.active_task === t.id ? "bold" : "normal",
-                            display: "flex",
-                            alignItems: "center",
-                        }}
-                        onClick={() => {
-                            setActiveTask(t.id);
-                            play("pressSide");
-                        }}
-                    >
-                        <span style={{ flex: 1 }}>
-                            {t.name} ({t.completed_pomodoros}/
-                            {t.target_pomodoros})
-                        </span>
-                        {state?.active_task === t.id && (
-                            <>
-                                <span
-                                    style={{
-                                        fontSize: 10,
-                                        background: "#1976d2",
-                                        color: "white",
-                                        padding: "2px 4px",
-                                        borderRadius: 3,
-                                        marginRight: 4,
-                                    }}
-                                >
+            <ul className="space-y-1">
+                {tasks.map((t) => {
+                    const active = state?.active_task === t.id;
+                    return (
+                        <li
+                            key={t.id}
+                            onClick={() => {
+                                setActiveTask(t.id);
+                                play("pressSide");
+                            }}
+                            className={`group flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-[11px] border border-transparent hover:border-neutral-700 hover:bg-neutral-800/50 transition ${
+                                active
+                                    ? "bg-neutral-800/60 border-neutral-700"
+                                    : ""
+                            }`}
+                        >
+                            <span className="flex-1 truncate">
+                                {t.name} ({t.completed_pomodoros}/
+                                {t.target_pomodoros})
+                            </span>
+                            {active && (
+                                <span className="text-[9px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-indigo-600 text-white">
                                     ACTIVE
                                 </span>
-                                {!t.completed_at && (
-                                    <button
-                                        style={{ fontSize: 10 }}
-                                        onMouseEnter={() => play("hover")}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            finalizeTask(t.id);
-                                            play("completeTask");
-                                        }}
-                                    >
-                                        Complete
-                                    </button>
-                                )}
-                            </>
-                        )}
-                    </li>
-                ))}
+                            )}
+                            {active && !t.completed_at && (
+                                <button
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        finalizeTask(t.id);
+                                        play("completeTask");
+                                    }}
+                                    className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white"
+                                >
+                                    Complete
+                                </button>
+                            )}
+                        </li>
+                    );
+                })}
             </ul>
         </div>
     );

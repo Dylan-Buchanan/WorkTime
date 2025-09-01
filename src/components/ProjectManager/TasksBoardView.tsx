@@ -132,8 +132,7 @@ const TaskCard: React.FC<{
         ? Math.min(
               100,
               Math.round(
-                  (task.timeSpentMinutes / ((task.estimatePomos || 1) * 25)) *
-                      100
+                  ((task.workedPomos || 0) / (task.estimatePomos || 1)) * 100
               )
           )
         : 0;
@@ -201,11 +200,7 @@ const TaskCard: React.FC<{
                     <div className="mt-1 text-[10px] opacity-60 flex items-center gap-2">
                         <span>{(task.timeSpentMinutes || 0).toFixed(1)}m</span>
                         <span>
-                            {(
-                                task.workedPomos ||
-                                (task.timeSpentMinutes || 0) / 25
-                            ).toFixed(1)}
-                            p
+                            {(task.workedPomos || 0).toFixed(1)}p
                             {task.estimatePomos &&
                                 " / " + task.estimatePomos + "p"}
                         </span>

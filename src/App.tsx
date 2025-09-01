@@ -21,15 +21,9 @@ const App: React.FC = () => {
         <BrowserRouter>
             <ProjectManagerProvider>
                 <AppStateProvider>
-                    <div
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            height: "100vh",
-                        }}
-                    >
+                    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
                         <TopNav />
-                        <div style={{ flex: 1, minHeight: 0 }}>
+                        <div className="flex-1 min-h-0">
                             <Routes>
                                 <Route path="/" element={<MainLayout />} />
                                 <Route
@@ -52,36 +46,23 @@ const App: React.FC = () => {
 const TopNav: React.FC = () => {
     const { play } = useSounds();
     const loc = useLocation();
-    const linkStyle: React.CSSProperties = {
-        textDecoration: "none",
-        padding: "4px 8px",
-        borderRadius: 4,
-    };
-    const activeStyle: React.CSSProperties = {
-        background: "#222",
-        fontWeight: 600,
-    };
+    const base = "px-2 py-1 rounded transition-colors";
+    const linkClass = (active: boolean) =>
+        `${base} ${
+            active
+                ? "bg-neutral-800 text-neutral-100"
+                : "hover:bg-neutral-800/60"
+        }`;
     const handleClick = (to: string) => {
         if (loc.pathname !== to) play("pressSide");
     };
     return (
-        <div
-            style={{
-                display: "flex",
-                gap: 12,
-                padding: "8px 12px",
-                borderBottom: "1px solid #333",
-                fontSize: 12,
-            }}
-        >
+        <div className="flex gap-2 px-3 py-2 border-b border-neutral-800 text-[11px] bg-neutral-950/70 backdrop-blur">
             <Link
                 to="/"
                 onClick={() => handleClick("/")}
                 onMouseEnter={() => play("hover")}
-                style={{
-                    ...linkStyle,
-                    ...(loc.pathname === "/" ? activeStyle : {}),
-                }}
+                className={linkClass(loc.pathname === "/")}
             >
                 Timer
             </Link>
@@ -89,12 +70,7 @@ const TopNav: React.FC = () => {
                 to="/projects"
                 onClick={() => handleClick("/projects")}
                 onMouseEnter={() => play("hover")}
-                style={{
-                    ...linkStyle,
-                    ...(loc.pathname.startsWith("/projects")
-                        ? activeStyle
-                        : {}),
-                }}
+                className={linkClass(loc.pathname.startsWith("/projects"))}
             >
                 Projects
             </Link>
@@ -102,12 +78,7 @@ const TopNav: React.FC = () => {
                 to="/analytics"
                 onClick={() => handleClick("/analytics")}
                 onMouseEnter={() => play("hover")}
-                style={{
-                    ...linkStyle,
-                    ...(loc.pathname.startsWith("/analytics")
-                        ? activeStyle
-                        : {}),
-                }}
+                className={linkClass(loc.pathname.startsWith("/analytics"))}
             >
                 Analytics
             </Link>
@@ -116,28 +87,14 @@ const TopNav: React.FC = () => {
 };
 
 const MainLayout: React.FC = () => (
-    <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>
-        <div
-            style={{
-                width: 300,
-                borderRight: "1px solid #333",
-                padding: 12,
-                overflowY: "auto",
-            }}
-        >
+    <div className="flex h-full">
+        <aside className="w-72 border-r border-neutral-800 p-3 flex flex-col gap-6 overflow-y-auto bg-neutral-900/30 backdrop-blur-sm">
             <TaskPanel />
             <SettingsPanel />
-        </div>
-        <div
-            style={{
-                flex: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-            }}
-        >
+        </aside>
+        <main className="flex-1 flex items-center justify-center p-4 min-h-0">
             <TimerPanel />
-        </div>
+        </main>
     </div>
 );
 

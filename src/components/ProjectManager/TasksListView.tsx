@@ -105,12 +105,8 @@ const TaskRow: React.FC<{
                     {task.estimatePomos && (
                         <>
                             {" "}
-                            ·{" "}
-                            {(
-                                task.workedPomos ||
-                                (task.timeSpentMinutes || 0) / 25
-                            ).toFixed(1)}
-                            p{"/" + task.estimatePomos + "p"}
+                            · {(task.workedPomos || 0).toFixed(1)}p
+                            {"/" + task.estimatePomos + "p"}
                         </>
                     )}
                 </span>

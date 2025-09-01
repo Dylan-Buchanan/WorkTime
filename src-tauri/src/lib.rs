@@ -67,6 +67,10 @@ pub struct ActiveTimer {
     pub kind: TimerKind,
     pub paused: bool,
     pub paused_remaining_secs: i64, // remaining seconds when paused
+    #[serde(default)]
+    pub planned_secs: i64, // total planned active seconds (excludes paused gaps)
+    #[serde(default)]
+    pub accumulated_secs: i64, // active (non-paused) seconds elapsed before current run segment
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,7 +188,8 @@ fn start_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Res
     let task_id = s.active_task.ok_or("No active task")?;
     let mins = s.settings.work_minutes as i64;
     let now = Utc::now();
-    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::minutes(mins), kind: TimerKind::Work, paused: false, paused_remaining_secs: 0 };
+    let planned_secs = mins * 60;
+    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::seconds(planned_secs), kind: TimerKind::Work, paused: false, paused_remaining_secs: 0, planned_secs, accumulated_secs: 0 };
     s.timer = Some(timer.clone());
     save_state(&app, &s)?;
     Ok(timer)
@@ -199,14 +204,16 @@ fn complete_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resul
 
     // Log
     let was_break = timer.kind != TimerKind::Work;
-    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: ((timer.ends_at - timer.started_at).num_seconds() as f32)/60.0, finished_at: now, was_break, break_skipped: false });
+    // For completed timers, we treat duration as the planned length (work or break)
+    let planned_secs = if timer.planned_secs > 0 { timer.planned_secs } else { (timer.ends_at - timer.started_at).num_seconds() };
+    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: (planned_secs as f32)/60.0, finished_at: now, was_break, break_skipped: false });
 
     if !was_break {
         if let Some(task) = s.tasks.get_mut(&timer.task_id) {
             task.completed_pomodoros += 1.0;
-            // Auto-extend if this would finish the task (user continues flow)
-            if task.completed_at.is_none() && task.completed_pomodoros >= task.target_pomodoros as f32 {
-                task.target_pomodoros += 1; // extend by one
+            // Auto-extend only if user exceeded original estimate (strictly greater)
+            if task.completed_at.is_none() && task.completed_pomodoros > task.target_pomodoros as f32 {
+                task.target_pomodoros = task.completed_pomodoros.ceil() as u32; // raise to ceiling of actual
             }
         }
         s.current_cycle_pomodoros += 1;
@@ -231,7 +238,8 @@ fn start_break_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Re
     let mins = if is_long { s.settings.long_break_minutes } else { s.settings.short_break_minutes } as i64;
     let kind = if is_long { TimerKind::LongBreak } else { TimerKind::ShortBreak };
     let now = Utc::now();
-    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::minutes(mins), kind, paused: false, paused_remaining_secs: 0 };
+    let planned_secs = mins * 60;
+    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::seconds(planned_secs), kind, paused: false, paused_remaining_secs: 0, planned_secs, accumulated_secs: 0 };
     s.timer = Some(timer.clone());
     save_state(&app, &s)?;
     Ok(timer)
@@ -304,14 +312,21 @@ fn stop_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
     let timer = s.timer.clone().ok_or("No active timer")?;
     if timer.kind != TimerKind::Work { return Err("Not a work timer".into()); }
     let now = Utc::now();
-    let total_secs = (timer.ends_at - timer.started_at).num_seconds() as f32;
-    let elapsed_secs = (now - timer.started_at).num_seconds().clamp(0, total_secs as i64) as f32;
-    let fraction = if total_secs > 0.0 { elapsed_secs / total_secs } else { 0.0 };
+    // Use planned length for denominator and accumulated + current segment for elapsed
+    let planned_secs = if timer.planned_secs > 0 { timer.planned_secs as f32 } else { (timer.ends_at - timer.started_at).num_seconds() as f32 };
+    let current_segment = (now - timer.started_at).num_seconds().max(0) as f32;
+    let elapsed_secs = timer.accumulated_secs as f32 + current_segment;
+    let clamped_elapsed = elapsed_secs.min(planned_secs);
+    let fraction = if planned_secs > 0.0 { clamped_elapsed / planned_secs } else { 0.0 };
     if let Some(task) = s.tasks.get_mut(&timer.task_id) {
         task.completed_pomodoros += fraction;
-        if task.completed_pomodoros >= task.target_pomodoros as f32 && task.completed_at.is_none() { task.completed_at = Some(now); }
+        // Do NOT set completed_at automatically here; user must finalize explicitly.
+        if task.completed_pomodoros > task.target_pomodoros as f32 {
+            // Extend target to ceiling of actual progress (keeps task visible)
+            task.target_pomodoros = task.completed_pomodoros.ceil() as u32;
+        }
     }
-    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: elapsed_secs / 60.0, finished_at: now, was_break: false, break_skipped: false });
+    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: clamped_elapsed / 60.0, finished_at: now, was_break: false, break_skipped: false });
     s.timer = None;
     save_state(&app, &s)?;
     Ok(s.clone())
@@ -324,7 +339,14 @@ fn pause_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<A
     if timer.paused { return Err("Already paused".into()); }
     let now = Utc::now();
     if now >= timer.ends_at { return Err("Timer already finished".into()); }
-    let remaining = (timer.ends_at - now).num_seconds().max(0);
+    // Accumulate active seconds so far in this run segment
+    let segment_elapsed = (now - timer.started_at).num_seconds().max(0);
+    timer.accumulated_secs += segment_elapsed;
+    let remaining = if timer.planned_secs > 0 {
+        (timer.planned_secs - timer.accumulated_secs).max(0)
+    } else {
+        (timer.ends_at - now).num_seconds().max(0)
+    };
     timer.paused = true;
     timer.paused_remaining_secs = remaining;
     s.timer = Some(timer.clone());
@@ -340,7 +362,7 @@ fn resume_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<
     let now = Utc::now();
     let new_end = now + chrono::Duration::seconds(timer.paused_remaining_secs);
     timer.paused = false;
-    timer.started_at = now; // treat resume as new start for remaining segment
+    timer.started_at = now; // new segment start; accumulated_secs preserves prior progress
     timer.ends_at = new_end;
     timer.paused_remaining_secs = 0;
     s.timer = Some(timer.clone());
