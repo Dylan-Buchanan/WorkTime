@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { ProjectManagerState, Project, PMTask, TaskPriority, TaskStatus } from "./types";
+import { useAppState } from "./AppStateContext";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -67,7 +68,11 @@ interface PMContextShape {
     updateProject: (id: string, patch: Partial<Project>) => void;
     archiveProject: (id: string, archive?: boolean) => void;
     deleteProject: (id: string) => void;
-    createTask: (title: string, opts?: Partial<PMTask>) => PMTask;
+    createTask: (title: string, opts?: Partial<PMTask>) => Promise<PMTask>;
+    ensureMetadataForAppTask: (
+        appTaskId: string,
+        meta: { title: string; estimatePomos?: number }
+    ) => PMTask;
     updateTask: (id: string, patch: Partial<PMTask>) => void;
     archiveTask: (id: string, archive?: boolean) => void;
     setSelectedTask: (id: string | null) => void;
@@ -108,6 +113,7 @@ export const ProjectManagerProvider: React.FC<{
         } catch {}
         return defaultState;
     });
+    const app = useAppState();
 
     const persist = useCallback((next: ProjectManagerState | ((prev: ProjectManagerState) => ProjectManagerState)) => {
         setState((prev) => {
@@ -174,77 +180,110 @@ export const ProjectManagerProvider: React.FC<{
         });
     };
 
-    const createTask = (title: string, opts: Partial<PMTask> = {}): PMTask => {
-        const id = uuid();
+    const createTaskLocal = (
+        title: string,
+        opts: Partial<PMTask> = {},
+        options: { id?: string } = {}
+    ): PMTask => {
         let projectId = opts.projectId ?? null;
-        if (!projectId && state.ui.selectedProjectIds.length === 1) {
-            projectId = state.ui.selectedProjectIds[0];
+        if (projectId && !state.projects[projectId]) {
+            projectId = null;
         }
-        // Fallback: assign first available project if still null
+        if (!projectId && state.ui.selectedProjectIds.length === 1) {
+            const selected = state.ui.selectedProjectIds[0];
+            if (selected && state.projects[selected]) {
+                projectId = selected;
+            }
+        }
         if (!projectId) {
             const first = Object.keys(state.projects)[0];
             if (first) projectId = first;
         }
         if (!projectId) {
-            // As a last resort create a General project
             const gen = Object.values(state.projects).find((p) => p.name === "General");
             if (gen) projectId = gen.id;
             else {
-                const tempId = uuid();
-                const project: Project = {
-                    id: tempId,
-                    name: "General",
-                    color: randomColor(),
-                    description: "",
-                    isArchived: false,
-                    sortOrder: Object.keys(state.projects).length,
-                    createdAt: now(),
-                    updatedAt: now(),
-                };
-                const withProject: ProjectManagerState = {
-                    ...state,
-                    projects: { ...state.projects, [tempId]: project },
-                    ui: { ...state.ui, selectedProjectIds: [tempId] },
-                };
-                persist(withProject);
-                projectId = tempId;
+                projectId = createProject("General").id;
             }
         }
-        const task: PMTask = {
-            id,
-            title,
-            projectId,
-            status: opts.status || "Backlog",
-            priority: opts.priority || "Medium",
-            dueDate: opts.dueDate,
-            estimatePomos: (opts as any).estimatePomos || undefined,
-            timeSpentMinutes: opts.timeSpentMinutes || 0,
-            workedPomos: 0,
-            lastWorkedAt: opts.lastWorkedAt,
-            description: opts.description || "",
-            tags: opts.tags || [],
-            links: opts.links || [],
-            checklist: opts.checklist || [],
-            sortOrder: Object.values(state.tasks).filter((t) => t.status === (opts.status || "Backlog")).length,
-            isArchived: false,
-            createdAt: now(),
-            updatedAt: now(),
-            appTaskId: (opts as any).appTaskId,
-        };
+
+        const id = options.id || uuid();
+        const status = opts.status || "Backlog";
+        let created: PMTask | null = null;
         persist((prev) => {
-            const next = { ...prev, tasks: { ...prev.tasks, [id]: task } };
+            const sortOrder = Object.values(prev.tasks).filter((t) => t.status === status).length;
+            const task: PMTask = {
+                id,
+                title,
+                projectId,
+                status,
+                priority: opts.priority || "Medium",
+                dueDate: opts.dueDate,
+                estimatePomos:
+                    (opts as any).estimatePomos !== undefined
+                        ? (opts as any).estimatePomos
+                        : undefined,
+                timeSpentMinutes: opts.timeSpentMinutes || 0,
+                workedPomos: opts.workedPomos || 0,
+                lastWorkedAt: opts.lastWorkedAt,
+                description: opts.description || "",
+                tags: opts.tags || [],
+                links: opts.links || [],
+                checklist: opts.checklist || [],
+                sortOrder,
+                isArchived: opts.isArchived ?? false,
+                createdAt: now(),
+                updatedAt: now(),
+                appTaskId: (opts as any).appTaskId,
+            };
+            created = task;
+            const next = {
+                ...prev,
+                tasks: { ...prev.tasks, [id]: task },
+            };
             try {
-                console.log("[PM] createTask", {
+                console.log("[PM] createTaskLocal", {
                     id,
                     title,
                     projectId,
+                    status,
                     totalTasksBefore: Object.keys(prev.tasks).length,
                     totalTasksAfter: Object.keys(next.tasks).length,
                 });
             } catch {}
             return next;
         });
-        return task;
+        return created!;
+    };
+
+    const createTask = async (title: string, opts: Partial<PMTask> = {}): Promise<PMTask> => {
+        const activeBefore = app.state?.active_task;
+        let target = (opts as any).estimatePomos as number | undefined;
+        if (
+            target === undefined &&
+            typeof opts.timeSpentMinutes === "number" &&
+            opts.timeSpentMinutes > 0
+        ) {
+            const workLength = app.state?.settings.work_minutes || 25;
+            target = Math.max(1, Math.round(opts.timeSpentMinutes / workLength));
+        }
+        if (typeof target !== "number" || !Number.isFinite(target) || target <= 0) {
+            target = 1;
+        }
+        const created = await app.createTask(title, Math.max(1, Math.floor(target)));
+        if (activeBefore && activeBefore !== created.id) {
+            try {
+                await app.setActiveTask(activeBefore);
+            } catch {}
+        }
+        return createTaskLocal(title, {
+            ...opts,
+            estimatePomos:
+                (opts as any).estimatePomos !== undefined
+                    ? (opts as any).estimatePomos
+                    : created.target_pomodoros,
+            appTaskId: created.id,
+        });
     };
     const updateTask = (id: string, patch: Partial<PMTask>) => {
         const t = state.tasks[id];
@@ -254,6 +293,33 @@ export const ProjectManagerProvider: React.FC<{
             ...prev,
             tasks: { ...prev.tasks, [id]: upd },
         }));
+    };
+    const ensureMetadataForAppTask = (
+        appTaskId: string,
+        meta: { title: string; estimatePomos?: number }
+    ): PMTask => {
+        let existing = Object.values(state.tasks).find((t) => t.appTaskId === appTaskId);
+        if (!existing) {
+            return createTaskLocal(meta.title || "Untitled", {
+                estimatePomos: meta.estimatePomos,
+                appTaskId,
+            });
+        }
+        const patch: Partial<PMTask> = {};
+        if (meta.title && existing.title !== meta.title) {
+            patch.title = meta.title;
+        }
+        if (
+            meta.estimatePomos !== undefined &&
+            meta.estimatePomos !== existing.estimatePomos
+        ) {
+            patch.estimatePomos = meta.estimatePomos;
+        }
+        if (Object.keys(patch).length > 0) {
+            updateTask(existing.id, patch);
+            existing = { ...existing, ...patch };
+        }
+        return existing;
     };
     const archiveTask = (id: string, archive: boolean = true) => updateTask(id, { isArchived: archive });
     const setSelectedTask = (id: string | null) =>
@@ -373,6 +439,7 @@ export const ProjectManagerProvider: React.FC<{
                 archiveProject,
                 deleteProject,
                 createTask,
+                ensureMetadataForAppTask,
                 updateTask,
                 archiveTask,
                 setSelectedTask,

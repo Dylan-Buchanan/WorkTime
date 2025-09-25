@@ -17,7 +17,7 @@ export const ProjectManagerPage: React.FC = () => {
     const [quick, setQuick] = useState("");
     const activeProjectId = state.ui.selectedProjectIds[0] || null;
 
-    const submitQuick = () => {
+    const submitQuick = async () => {
         const raw = quick.trim();
         if (!raw) return;
         const { task, projectName } = quickAddParse(raw);
@@ -30,7 +30,7 @@ export const ProjectManagerPage: React.FC = () => {
             alert("Select a project first");
             return;
         }
-        const created = createTask(task.title || "Untitled", {
+        const created = await createTask(task.title || "Untitled", {
             ...task,
             projectId,
         });
@@ -57,13 +57,17 @@ export const ProjectManagerPage: React.FC = () => {
                     value={quick}
                     onChange={(e) => setQuick(e.target.value)}
                     onKeyDown={(e) => {
-                        if (e.key === "Enter") submitQuick();
+                        if (e.key === "Enter") {
+                            void submitQuick();
+                        }
                     }}
                     placeholder="Quick add: Title @Project ^YYYY-MM-DD #tag !high"
                     className="flex-1 bg-neutral-900 rounded px-2 py-1"
                 />
                 <button
-                    onClick={submitQuick}
+                    onClick={() => {
+                        submitQuick();
+                    }}
                     className="px-2 py-1 rounded bg-neutral-800"
                 >
                     Add
@@ -140,10 +144,10 @@ const ViewSwitch: React.FC<{
 const InlineAddTask: React.FC<{ projectId: string }> = ({ projectId }) => {
     const { createTask, setFilters } = usePM();
     const [title, setTitle] = React.useState("");
-    const submit = () => {
+    const submit = async () => {
         const t = title.trim();
         if (!t) return;
-        const task = createTask(t, { projectId });
+        const task = await createTask(t, { projectId });
         setFilters({ selectedTaskId: task.id });
         setTitle("");
     };
@@ -153,13 +157,17 @@ const InlineAddTask: React.FC<{ projectId: string }> = ({ projectId }) => {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onKeyDown={(e) => {
-                    if (e.key === "Enter") submit();
+                    if (e.key === "Enter") {
+                        void submit();
+                    }
                 }}
                 placeholder="Add task title"
                 className="flex-1 bg-neutral-900 rounded px-2 py-1"
             />
             <button
-                onClick={submit}
+                onClick={() => {
+                    submit();
+                }}
                 className="px-2 py-1 rounded bg-neutral-800"
             >
                 Add
