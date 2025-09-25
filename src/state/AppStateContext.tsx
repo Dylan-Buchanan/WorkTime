@@ -37,7 +37,7 @@ async function ensureNotification() {
 
 interface AppContextShape {
     state: AppStateData | null;
-    refresh: () => Promise<void>;
+    refresh: () => Promise<AppStateData>;
     createTask: (name: string, target: number) => Promise<void>;
     setActiveTask: (id: string) => Promise<void>;
     startWork: () => Promise<void>;
@@ -70,9 +70,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         /* ignore sound init errors */
     }
 
-    const refresh = useCallback(async () => {
+    const refresh = useCallback(async (): Promise<AppStateData> => {
         const s = await invoke<AppStateData>("get_state");
         setState(s);
+        return s;
     }, []);
 
     useEffect(() => {
@@ -108,12 +109,15 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                     if (finishedKind) {
                         await maybeNotifyTimerEnd(finishedKind as any, finishedTaskId);
                     }
-                    await refresh();
+                    const afterComplete = await refresh();
                     if (finishedKind === "Work") {
                         await invoke("start_break_timer");
-                    } else {
-                        await ensureActiveTask().catch(() => {});
-                        await invoke("start_work_timer");
+                    } else if (afterComplete.active_task) {
+                        try {
+                            await invoke("start_work_timer");
+                        } catch (err) {
+                            console.warn("Failed to auto-start work timer", err);
+                        }
                     }
                     await refresh();
                 } finally {

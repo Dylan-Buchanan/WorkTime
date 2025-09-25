@@ -375,7 +375,13 @@ fn resume_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<
 #[tauri::command]
 fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid) -> Result<Task, String> {
     let mut s = state.0.lock().unwrap();
-    if s.timer.as_ref().map(|t| t.task_id) == Some(task_id) { s.timer = None; }
+    if let Some(timer) = s.timer.clone() {
+        if timer.task_id == task_id {
+            if timer.kind == TimerKind::Work {
+                s.timer = None;
+            }
+        }
+    }
     {
         let task_mut = s.tasks.get_mut(&task_id).ok_or("Task not found")?;
         if task_mut.completed_at.is_none() {
