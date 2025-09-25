@@ -179,8 +179,63 @@ fn set_active_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id
     let id = task_id.or_else(|| payload.map(|p| p.task_id)).ok_or("Missing task id")?;
     let mut s = state.0.lock().unwrap();
     if !s.tasks.contains_key(&id) { return Err("Task not found".into()); }
+
+    if let Some(timer) = s.timer.clone() {
+        if timer.kind == TimerKind::Work && timer.task_id != id {
+            let now = Utc::now();
+            let total_planned = if timer.planned_secs > 0 { timer.planned_secs } else { (timer.ends_at - timer.started_at).num_seconds() };
+            let mut elapsed = if timer.paused {
+                timer.accumulated_secs
+            } else {
+                timer.accumulated_secs + (now - timer.started_at).num_seconds().max(0)
+            };
+            if elapsed < 0 { elapsed = 0; }
+            if elapsed > total_planned { elapsed = total_planned; }
+
+            if elapsed > 0 {
+                let work_secs = (s.settings.work_minutes as f32) * 60.0;
+                if let Some(task) = s.tasks.get_mut(&timer.task_id) {
+                    if work_secs > 0.0 {
+                        let fraction = (elapsed as f32 / work_secs).clamp(0.0, 1.0);
+                        task.completed_pomodoros += fraction;
+                        if task.completed_pomodoros > task.target_pomodoros as f32 {
+                            task.target_pomodoros = task.completed_pomodoros.ceil() as u32;
+                        }
+                    }
+                }
+                s.logs.push(PomodoroLogEntry {
+                    task_id: timer.task_id,
+                    duration_minutes: elapsed as f32 / 60.0,
+                    finished_at: now,
+                    was_break: false,
+                    break_skipped: false,
+                });
+            }
+
+            let remaining = total_planned - elapsed;
+            if remaining > 0 {
+                let mut updated_timer = timer;
+                updated_timer.task_id = id;
+                updated_timer.planned_secs = remaining;
+                updated_timer.accumulated_secs = 0;
+                if updated_timer.paused {
+                    updated_timer.paused_remaining_secs = remaining;
+                } else {
+                    updated_timer.paused_remaining_secs = 0;
+                }
+                updated_timer.started_at = now;
+                updated_timer.ends_at = now + chrono::Duration::seconds(remaining);
+                s.timer = Some(updated_timer);
+            } else {
+                s.timer = None;
+            }
+        }
+    }
+
     s.active_task = Some(id);
-    save_state(&app, &s)?; Ok(()) }
+    save_state(&app, &s)?;
+    Ok(())
+}
 
 #[tauri::command]
 fn start_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
@@ -206,11 +261,18 @@ fn complete_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resul
     let was_break = timer.kind != TimerKind::Work;
     // For completed timers, we treat duration as the planned length (work or break)
     let planned_secs = if timer.planned_secs > 0 { timer.planned_secs } else { (timer.ends_at - timer.started_at).num_seconds() };
-    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: (planned_secs as f32)/60.0, finished_at: now, was_break, break_skipped: false });
+    let planned_secs_f = planned_secs as f32;
+    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: planned_secs_f / 60.0, finished_at: now, was_break, break_skipped: false });
 
     if !was_break {
+        let work_secs = (s.settings.work_minutes as f32) * 60.0;
         if let Some(task) = s.tasks.get_mut(&timer.task_id) {
-            task.completed_pomodoros += 1.0;
+            let fraction = if work_secs > 0.0 {
+                (planned_secs_f / work_secs).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            task.completed_pomodoros += fraction;
             // Auto-extend only if user exceeded original estimate (strictly greater)
             if task.completed_at.is_none() && task.completed_pomodoros > task.target_pomodoros as f32 {
                 task.target_pomodoros = task.completed_pomodoros.ceil() as u32; // raise to ceiling of actual
