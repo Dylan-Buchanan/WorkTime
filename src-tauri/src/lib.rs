@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
-use tauri::Manager; // for path(), manage()
-use tauri_plugin_notification::NotificationExt; // Notification construction APIs vary; using extension only
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tauri::Manager; // for path(), manage()
+use tauri_plugin_notification::NotificationExt; // Notification construction APIs vary; using extension only
 use uuid::Uuid;
 
 // Data Models
@@ -47,6 +47,19 @@ impl Default for Settings {
             segment_length: 4,
         }
     }
+}
+
+fn full_cycle_duration_secs(settings: &Settings) -> i64 {
+    let segment = settings.segment_length.max(1) as i64;
+    let work_secs = settings.work_minutes as i64 * 60;
+    let short_break_secs = settings.short_break_minutes as i64 * 60;
+    let long_break_secs = settings.long_break_minutes as i64 * 60;
+
+    let mut total = work_secs * segment;
+    if segment > 1 {
+        total += short_break_secs * (segment - 1);
+    }
+    total + long_break_secs
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,7 +109,9 @@ impl Default for AppStateData {
 struct AppState(Mutex<AppStateData>);
 
 // Persistence helpers
-fn data_file_path(app: &tauri::AppHandle) -> PathBuf { app.path().app_data_dir().unwrap().join("data.json") }
+fn data_file_path(app: &tauri::AppHandle) -> PathBuf {
+    app.path().app_data_dir().unwrap().join("data.json")
+}
 
 fn load_state(app: &tauri::AppHandle) -> AppStateData {
     let path = data_file_path(app);
@@ -110,7 +125,9 @@ fn load_state(app: &tauri::AppHandle) -> AppStateData {
 
 fn save_state(app: &tauri::AppHandle, state: &AppStateData) -> Result<(), String> {
     let path = data_file_path(app);
-    if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let data = serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?;
     fs::write(path, data).map_err(|e| e.to_string())
 }
@@ -132,20 +149,34 @@ fn get_state(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<App
     }
     // If active task is now archived, clear selection so user must choose a new active task.
     if let Some(active_id) = s_guard.active_task {
-        if s_guard.tasks.get(&active_id).map(|t| t.archived).unwrap_or(false) {
+        if s_guard
+            .tasks
+            .get(&active_id)
+            .map(|t| t.archived)
+            .unwrap_or(false)
+        {
             s_guard.active_task = None;
             mutated = true;
         }
     }
-    if mutated { let _ = save_state(&app, &s_guard); }
+    if mutated {
+        let _ = save_state(&app, &s_guard);
+    }
     Ok(s_guard.clone())
 }
 
 #[derive(Debug, Deserialize)]
-struct NewTaskPayload { name: String, target_pomodoros: u32 }
+struct NewTaskPayload {
+    name: String,
+    target_pomodoros: u32,
+}
 
 #[tauri::command]
-fn create_task(app: tauri::AppHandle, state: tauri::State<AppState>, payload: NewTaskPayload) -> Result<Task, String> {
+fn create_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    payload: NewTaskPayload,
+) -> Result<Task, String> {
     let mut s = state.0.lock().unwrap();
     let task = Task {
         id: Uuid::new_v4(),
@@ -163,7 +194,11 @@ fn create_task(app: tauri::AppHandle, state: tauri::State<AppState>, payload: Ne
 }
 
 #[tauri::command]
-fn update_settings(app: tauri::AppHandle, state: tauri::State<AppState>, settings: Settings) -> Result<Settings, String> {
+fn update_settings(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
     let mut s = state.0.lock().unwrap();
     s.settings = settings;
     save_state(&app, &s)?;
@@ -171,26 +206,46 @@ fn update_settings(app: tauri::AppHandle, state: tauri::State<AppState>, setting
 }
 
 #[derive(Deserialize)]
-struct SetActiveTaskArg { #[serde(alias="taskId")] task_id: Uuid }
+struct SetActiveTaskArg {
+    #[serde(alias = "taskId")]
+    task_id: Uuid,
+}
 
 #[tauri::command]
-fn set_active_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Option<Uuid>, payload: Option<SetActiveTaskArg>) -> Result<(), String> {
+fn set_active_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    task_id: Option<Uuid>,
+    payload: Option<SetActiveTaskArg>,
+) -> Result<(), String> {
     // Accept either direct param task_id or payload struct (robust to earlier front-end variants)
-    let id = task_id.or_else(|| payload.map(|p| p.task_id)).ok_or("Missing task id")?;
+    let id = task_id
+        .or_else(|| payload.map(|p| p.task_id))
+        .ok_or("Missing task id")?;
     let mut s = state.0.lock().unwrap();
-    if !s.tasks.contains_key(&id) { return Err("Task not found".into()); }
+    if !s.tasks.contains_key(&id) {
+        return Err("Task not found".into());
+    }
 
     if let Some(timer) = s.timer.clone() {
         if timer.kind == TimerKind::Work && timer.task_id != id {
             let now = Utc::now();
-            let total_planned = if timer.planned_secs > 0 { timer.planned_secs } else { (timer.ends_at - timer.started_at).num_seconds() };
+            let total_planned = if timer.planned_secs > 0 {
+                timer.planned_secs
+            } else {
+                (timer.ends_at - timer.started_at).num_seconds()
+            };
             let mut elapsed = if timer.paused {
                 timer.accumulated_secs
             } else {
                 timer.accumulated_secs + (now - timer.started_at).num_seconds().max(0)
             };
-            if elapsed < 0 { elapsed = 0; }
-            if elapsed > total_planned { elapsed = total_planned; }
+            if elapsed < 0 {
+                elapsed = 0;
+            }
+            if elapsed > total_planned {
+                elapsed = total_planned;
+            }
 
             if elapsed > 0 {
                 let work_secs = (s.settings.work_minutes as f32) * 60.0;
@@ -238,31 +293,71 @@ fn set_active_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id
 }
 
 #[tauri::command]
-fn start_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
+fn start_work_timer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<ActiveTimer, String> {
     let mut s = state.0.lock().unwrap();
     let task_id = s.active_task.ok_or("No active task")?;
     let mins = s.settings.work_minutes as i64;
     let now = Utc::now();
+
+    if s.current_cycle_pomodoros > 0 {
+        if let Some(last_work) = s.logs.iter().rev().find(|log| !log.was_break) {
+            let cycle_window = full_cycle_duration_secs(&s.settings);
+            if cycle_window > 0 {
+                let since_last = (now - last_work.finished_at).num_seconds();
+                if since_last >= cycle_window {
+                    s.current_cycle_pomodoros = 0;
+                }
+            }
+        }
+    }
+
     let planned_secs = mins * 60;
-    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::seconds(planned_secs), kind: TimerKind::Work, paused: false, paused_remaining_secs: 0, planned_secs, accumulated_secs: 0 };
+    let timer = ActiveTimer {
+        task_id,
+        started_at: now,
+        ends_at: now + chrono::Duration::seconds(planned_secs),
+        kind: TimerKind::Work,
+        paused: false,
+        paused_remaining_secs: 0,
+        planned_secs,
+        accumulated_secs: 0,
+    };
     s.timer = Some(timer.clone());
     save_state(&app, &s)?;
     Ok(timer)
 }
 
 #[tauri::command]
-fn complete_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<AppStateData, String> {
+fn complete_timer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<AppStateData, String> {
     let mut s = state.0.lock().unwrap();
     let timer = s.timer.clone().ok_or("No active timer")?;
     let now = Utc::now();
-    if now < timer.ends_at { return Err("Timer not finished yet".into()); }
+    if now < timer.ends_at {
+        return Err("Timer not finished yet".into());
+    }
 
     // Log
     let was_break = timer.kind != TimerKind::Work;
     // For completed timers, we treat duration as the planned length (work or break)
-    let planned_secs = if timer.planned_secs > 0 { timer.planned_secs } else { (timer.ends_at - timer.started_at).num_seconds() };
+    let planned_secs = if timer.planned_secs > 0 {
+        timer.planned_secs
+    } else {
+        (timer.ends_at - timer.started_at).num_seconds()
+    };
     let planned_secs_f = planned_secs as f32;
-    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: planned_secs_f / 60.0, finished_at: now, was_break, break_skipped: false });
+    s.logs.push(PomodoroLogEntry {
+        task_id: timer.task_id,
+        duration_minutes: planned_secs_f / 60.0,
+        finished_at: now,
+        was_break,
+        break_skipped: false,
+    });
 
     if !was_break {
         let work_secs = (s.settings.work_minutes as f32) * 60.0;
@@ -274,7 +369,9 @@ fn complete_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resul
             };
             task.completed_pomodoros += fraction;
             // Auto-extend only if user exceeded original estimate (strictly greater)
-            if task.completed_at.is_none() && task.completed_pomodoros > task.target_pomodoros as f32 {
+            if task.completed_at.is_none()
+                && task.completed_pomodoros > task.target_pomodoros as f32
+            {
                 task.target_pomodoros = task.completed_pomodoros.ceil() as u32; // raise to ceiling of actual
             }
         }
@@ -292,44 +389,93 @@ fn complete_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resul
 }
 
 #[tauri::command]
-fn start_break_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
+fn start_break_timer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<ActiveTimer, String> {
     let mut s = state.0.lock().unwrap();
     let task_id = s.active_task.ok_or("No active task")?; // tie break to active task for logging continuity
     let is_long = s.current_cycle_pomodoros >= s.settings.segment_length;
-    if is_long { s.current_cycle_pomodoros = 0; }
-    let mins = if is_long { s.settings.long_break_minutes } else { s.settings.short_break_minutes } as i64;
-    let kind = if is_long { TimerKind::LongBreak } else { TimerKind::ShortBreak };
+    if is_long {
+        s.current_cycle_pomodoros = 0;
+    }
+    let mins = if is_long {
+        s.settings.long_break_minutes
+    } else {
+        s.settings.short_break_minutes
+    } as i64;
+    let kind = if is_long {
+        TimerKind::LongBreak
+    } else {
+        TimerKind::ShortBreak
+    };
     let now = Utc::now();
     let planned_secs = mins * 60;
-    let timer = ActiveTimer { task_id, started_at: now, ends_at: now + chrono::Duration::seconds(planned_secs), kind, paused: false, paused_remaining_secs: 0, planned_secs, accumulated_secs: 0 };
+    let timer = ActiveTimer {
+        task_id,
+        started_at: now,
+        ends_at: now + chrono::Duration::seconds(planned_secs),
+        kind,
+        paused: false,
+        paused_remaining_secs: 0,
+        planned_secs,
+        accumulated_secs: 0,
+    };
     s.timer = Some(timer.clone());
     save_state(&app, &s)?;
     Ok(timer)
 }
 
 #[tauri::command]
-fn skip_break(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<AppStateData, String> {
+fn skip_break(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<AppStateData, String> {
     let mut s = state.0.lock().unwrap();
     let timer_opt = s.timer.clone();
     if let Some(timer) = timer_opt {
-        if timer.kind == TimerKind::Work { return Err("Not on a break".into()); }
-        if let Some(task) = s.tasks.get_mut(&timer.task_id) { task.break_skips += 1; }
-        s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: 0.0, finished_at: Utc::now(), was_break: true, break_skipped: true });
+        if timer.kind == TimerKind::Work {
+            return Err("Not on a break".into());
+        }
+        if let Some(task) = s.tasks.get_mut(&timer.task_id) {
+            task.break_skips += 1;
+        }
+        s.logs.push(PomodoroLogEntry {
+            task_id: timer.task_id,
+            duration_minutes: 0.0,
+            finished_at: Utc::now(),
+            was_break: true,
+            break_skipped: true,
+        });
         s.timer = None;
-    } else { return Err("No active break".into()); }
-    save_state(&app, &s)?; Ok(s.clone()) }
+    } else {
+        return Err("No active break".into());
+    }
+    save_state(&app, &s)?;
+    Ok(s.clone())
+}
 
 #[tauri::command]
-fn delete_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid) -> Result<(), String> {
+fn delete_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    task_id: Uuid,
+) -> Result<(), String> {
     let mut s = state.0.lock().unwrap();
     s.tasks.remove(&task_id).ok_or("Task not found")?;
-    if s.active_task == Some(task_id) { s.active_task = None; }
+    if s.active_task == Some(task_id) {
+        s.active_task = None;
+    }
     save_state(&app, &s)?;
     Ok(())
 }
 
 #[tauri::command]
-fn archive_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid) -> Result<Task, String> {
+fn archive_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    task_id: Uuid,
+) -> Result<Task, String> {
     let mut s = state.0.lock().unwrap();
     let mut_task_ref = s.tasks.get_mut(&task_id).ok_or("Task not found")?;
     mut_task_ref.archived = true;
@@ -347,7 +493,9 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
             let initial = load_state(&handle);
-            app.manage(AppState(Mutex::new(initial))); Ok(()) })
+            app.manage(AppState(Mutex::new(initial)));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_state,
             create_task,
@@ -371,17 +519,30 @@ pub fn run() {
 }
 
 #[tauri::command]
-fn stop_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<AppStateData, String> {
+fn stop_work_timer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<AppStateData, String> {
     let mut s = state.0.lock().unwrap();
     let timer = s.timer.clone().ok_or("No active timer")?;
-    if timer.kind != TimerKind::Work { return Err("Not a work timer".into()); }
+    if timer.kind != TimerKind::Work {
+        return Err("Not a work timer".into());
+    }
     let now = Utc::now();
     // Use planned length for denominator and accumulated + current segment for elapsed
-    let planned_secs = if timer.planned_secs > 0 { timer.planned_secs as f32 } else { (timer.ends_at - timer.started_at).num_seconds() as f32 };
+    let planned_secs = if timer.planned_secs > 0 {
+        timer.planned_secs as f32
+    } else {
+        (timer.ends_at - timer.started_at).num_seconds() as f32
+    };
     let current_segment = (now - timer.started_at).num_seconds().max(0) as f32;
     let elapsed_secs = timer.accumulated_secs as f32 + current_segment;
     let clamped_elapsed = elapsed_secs.min(planned_secs);
-    let fraction = if planned_secs > 0.0 { clamped_elapsed / planned_secs } else { 0.0 };
+    let fraction = if planned_secs > 0.0 {
+        clamped_elapsed / planned_secs
+    } else {
+        0.0
+    };
     if let Some(task) = s.tasks.get_mut(&timer.task_id) {
         task.completed_pomodoros += fraction;
         // Do NOT set completed_at automatically here; user must finalize explicitly.
@@ -390,19 +551,32 @@ fn stop_work_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
             task.target_pomodoros = task.completed_pomodoros.ceil() as u32;
         }
     }
-    s.logs.push(PomodoroLogEntry { task_id: timer.task_id, duration_minutes: clamped_elapsed / 60.0, finished_at: now, was_break: false, break_skipped: false });
+    s.logs.push(PomodoroLogEntry {
+        task_id: timer.task_id,
+        duration_minutes: clamped_elapsed / 60.0,
+        finished_at: now,
+        was_break: false,
+        break_skipped: false,
+    });
     s.timer = None;
     save_state(&app, &s)?;
     Ok(s.clone())
 }
 
 #[tauri::command]
-fn pause_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
+fn pause_timer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<ActiveTimer, String> {
     let mut s = state.0.lock().unwrap();
     let mut timer = s.timer.clone().ok_or("No active timer")?;
-    if timer.paused { return Err("Already paused".into()); }
+    if timer.paused {
+        return Err("Already paused".into());
+    }
     let now = Utc::now();
-    if now >= timer.ends_at { return Err("Timer already finished".into()); }
+    if now >= timer.ends_at {
+        return Err("Timer already finished".into());
+    }
     // Accumulate active seconds so far in this run segment
     let segment_elapsed = (now - timer.started_at).num_seconds().max(0);
     timer.accumulated_secs += segment_elapsed;
@@ -419,10 +593,15 @@ fn pause_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<A
 }
 
 #[tauri::command]
-fn resume_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<ActiveTimer, String> {
+fn resume_timer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<ActiveTimer, String> {
     let mut s = state.0.lock().unwrap();
     let mut timer = s.timer.clone().ok_or("No active timer")?;
-    if !timer.paused { return Err("Timer not paused".into()); }
+    if !timer.paused {
+        return Err("Timer not paused".into());
+    }
     let now = Utc::now();
     let new_end = now + chrono::Duration::seconds(timer.paused_remaining_secs);
     timer.paused = false;
@@ -435,7 +614,11 @@ fn resume_timer(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<
 }
 
 #[tauri::command]
-fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid) -> Result<Task, String> {
+fn finalize_task(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    task_id: Uuid,
+) -> Result<Task, String> {
     let mut s = state.0.lock().unwrap();
     if let Some(timer) = s.timer.clone() {
         if timer.task_id == task_id {
@@ -451,10 +634,14 @@ fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: 
             task_mut.completed_at = Some(Utc::now());
         }
         // Auto-archive finalized tasks so they are removed from selectable list.
-        if !task_mut.archived { task_mut.archived = true; }
+        if !task_mut.archived {
+            task_mut.archived = true;
+        }
     }
     // If the active task was just archived, clear the active selection.
-    if s.active_task == Some(task_id) { s.active_task = None; }
+    if s.active_task == Some(task_id) {
+        s.active_task = None;
+    }
     let cloned = s.tasks.get(&task_id).unwrap().clone();
     save_state(&app, &s)?;
     Ok(cloned)
@@ -462,7 +649,12 @@ fn finalize_task(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: 
 
 // Explicitly update a task's target_pomodoros (used to sync Project Manager estimate changes)
 #[tauri::command]
-fn set_task_target(app: tauri::AppHandle, state: tauri::State<AppState>, task_id: Uuid, target: u32) -> Result<Task, String> {
+fn set_task_target(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    task_id: Uuid,
+    target: u32,
+) -> Result<Task, String> {
     let mut s = state.0.lock().unwrap();
     let task = s.tasks.get_mut(&task_id).ok_or("Task not found")?;
     let new_target = target.max(1); // always at least 1
@@ -477,7 +669,10 @@ fn set_task_target(app: tauri::AppHandle, state: tauri::State<AppState>, task_id
 }
 
 #[tauri::command]
-fn reset_app_state(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<AppStateData, String> {
+fn reset_app_state(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<AppStateData, String> {
     let mut s = state.0.lock().unwrap();
     *s = AppStateData::default();
     save_state(&app, &s)?;
