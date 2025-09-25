@@ -1,17 +1,5 @@
-import React, {
-    createContext,
-    useContext,
-    useState,
-    useCallback,
-    useEffect,
-} from "react";
-import {
-    ProjectManagerState,
-    Project,
-    PMTask,
-    TaskPriority,
-    TaskStatus,
-} from "./types";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import { ProjectManagerState, Project, PMTask, TaskPriority, TaskStatus } from "./types";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -75,7 +63,7 @@ const defaultState: ProjectManagerState = buildDefaultState();
 
 interface PMContextShape {
     state: ProjectManagerState;
-    createProject: (name: string, color?: string) => void;
+    createProject: (name: string, color?: string) => Project;
     updateProject: (id: string, patch: Partial<Project>) => void;
     archiveProject: (id: string, archive?: boolean) => void;
     deleteProject: (id: string) => void;
@@ -121,25 +109,17 @@ export const ProjectManagerProvider: React.FC<{
         return defaultState;
     });
 
-    const persist = useCallback(
-        (
-            next:
-                | ProjectManagerState
-                | ((prev: ProjectManagerState) => ProjectManagerState)
-        ) => {
-            setState((prev) => {
-                const resolved =
-                    typeof next === "function" ? (next as any)(prev) : next;
-                try {
-                    localStorage.setItem(LS_KEY, JSON.stringify(resolved));
-                } catch {}
-                return resolved;
-            });
-        },
-        []
-    );
+    const persist = useCallback((next: ProjectManagerState | ((prev: ProjectManagerState) => ProjectManagerState)) => {
+        setState((prev) => {
+            const resolved = typeof next === "function" ? (next as any)(prev) : next;
+            try {
+                localStorage.setItem(LS_KEY, JSON.stringify(resolved));
+            } catch {}
+            return resolved;
+        });
+    }, []);
 
-    const createProject = (name: string, color?: string) => {
+    const createProject = (name: string, color?: string): Project => {
         const id = uuid();
         const project: Project = {
             id,
@@ -156,12 +136,10 @@ export const ProjectManagerProvider: React.FC<{
             projects: { ...prev.projects, [id]: project },
             ui: {
                 ...prev.ui,
-                selectedProjectIds:
-                    prev.ui.selectedProjectIds.length === 0
-                        ? [id]
-                        : prev.ui.selectedProjectIds,
+                selectedProjectIds: prev.ui.selectedProjectIds.length === 0 ? [id] : prev.ui.selectedProjectIds,
             },
         }));
+        return project;
     };
     const updateProject = (id: string, patch: Partial<Project>) => {
         const p = state.projects[id];
@@ -172,8 +150,7 @@ export const ProjectManagerProvider: React.FC<{
             projects: { ...prev.projects, [id]: upd },
         }));
     };
-    const archiveProject = (id: string, archive: boolean = true) =>
-        updateProject(id, { isArchived: archive });
+    const archiveProject = (id: string, archive: boolean = true) => updateProject(id, { isArchived: archive });
     const deleteProject = (id: string) => {
         persist((prev) => {
             if (!prev.projects[id]) return prev;
@@ -183,9 +160,7 @@ export const ProjectManagerProvider: React.FC<{
                 if (t.projectId === id) t.projectId = null;
             });
             // Adjust selection
-            let selected = prev.ui.selectedProjectIds.filter(
-                (pid) => pid !== id
-            );
+            let selected = prev.ui.selectedProjectIds.filter((pid) => pid !== id);
             if (selected.length === 0) {
                 const firstRemaining = Object.keys(restProjects)[0];
                 if (firstRemaining) selected = [firstRemaining];
@@ -212,9 +187,7 @@ export const ProjectManagerProvider: React.FC<{
         }
         if (!projectId) {
             // As a last resort create a General project
-            const gen = Object.values(state.projects).find(
-                (p) => p.name === "General"
-            );
+            const gen = Object.values(state.projects).find((p) => p.name === "General");
             if (gen) projectId = gen.id;
             else {
                 const tempId = uuid();
@@ -252,9 +225,7 @@ export const ProjectManagerProvider: React.FC<{
             tags: opts.tags || [],
             links: opts.links || [],
             checklist: opts.checklist || [],
-            sortOrder: Object.values(state.tasks).filter(
-                (t) => t.status === (opts.status || "Backlog")
-            ).length,
+            sortOrder: Object.values(state.tasks).filter((t) => t.status === (opts.status || "Backlog")).length,
             isArchived: false,
             createdAt: now(),
             updatedAt: now(),
@@ -284,8 +255,7 @@ export const ProjectManagerProvider: React.FC<{
             tasks: { ...prev.tasks, [id]: upd },
         }));
     };
-    const archiveTask = (id: string, archive: boolean = true) =>
-        updateTask(id, { isArchived: archive });
+    const archiveTask = (id: string, archive: boolean = true) => updateTask(id, { isArchived: archive });
     const setSelectedTask = (id: string | null) =>
         persist((prev) => ({
             ...prev,
@@ -304,18 +274,13 @@ export const ProjectManagerProvider: React.FC<{
             return { ...prev, tasks };
         });
     };
-    const moveTaskToStatus = (
-        id: string,
-        status: TaskStatus,
-        index?: number
-    ) => {
+    const moveTaskToStatus = (id: string, status: TaskStatus, index?: number) => {
         const t = state.tasks[id];
         if (!t) return;
         const siblings = Object.values(state.tasks)
             .filter((s) => s.status === status && s.id !== id)
             .sort((a, b) => a.sortOrder - b.sortOrder);
-        if (index === undefined || index < 0 || index > siblings.length)
-            index = siblings.length;
+        if (index === undefined || index < 0 || index > siblings.length) index = siblings.length;
         siblings.splice(index, 0, t);
         siblings.forEach((s, i) => (s.sortOrder = i));
         persist((prev) => ({
@@ -327,15 +292,11 @@ export const ProjectManagerProvider: React.FC<{
         }));
     };
 
-    const listProjectByName = (name: string) =>
-        Object.values(state.projects).find(
-            (p) => p.name.toLowerCase() === name.toLowerCase()
-        );
+    const listProjectByName = (name: string) => Object.values(state.projects).find((p) => p.name.toLowerCase() === name.toLowerCase());
     const ensureProjectByName = (name: string) => {
         const existing = listProjectByName(name);
         if (existing) return existing;
-        createProject(name);
-        return listProjectByName(name)!;
+        return createProject(name);
     };
 
     const quickAddParse = (input: string) => {
@@ -354,9 +315,7 @@ export const ProjectManagerProvider: React.FC<{
                 if (tag) (task.tags ||= []).push(tag);
             } else if (p.startsWith("!")) {
                 const pri = p.substring(1).toLowerCase();
-                if (pri === "low" || pri === "medium" || pri === "high")
-                    task.priority = (pri.charAt(0).toUpperCase() +
-                        pri.slice(1)) as TaskPriority;
+                if (pri === "low" || pri === "medium" || pri === "high") task.priority = (pri.charAt(0).toUpperCase() + pri.slice(1)) as TaskPriority;
             } else if (/^\d+p$/.test(p)) {
                 // e.g. 3p means 3 pomodoros estimate
                 const n = parseInt(p);
@@ -439,15 +398,6 @@ export const usePM = () => {
 };
 
 function randomColor() {
-    const colors = [
-        "#6366F1",
-        "#EC4899",
-        "#10B981",
-        "#F59E0B",
-        "#3B82F6",
-        "#8B5CF6",
-        "#EF4444",
-        "#14B8A6",
-    ];
+    const colors = ["#6366F1", "#EC4899", "#10B981", "#F59E0B", "#3B82F6", "#8B5CF6", "#EF4444", "#14B8A6"];
     return colors[Math.floor(Math.random() * colors.length)];
 }
