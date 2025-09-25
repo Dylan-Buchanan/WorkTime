@@ -7,7 +7,9 @@
         "dev": "vite",
         "build": "tsc && vite build",
         "preview": "vite preview",
-        "tauri": "tauri"
+        "tauri": "tauri",
+        "sync-version": "node scripts/sync-version.mjs",
+        "version": "npm run sync-version"
     },
     "dependencies": {
         "@dnd-kit/core": "^6.3.1",

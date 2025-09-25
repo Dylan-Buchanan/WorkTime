@@ -1,18 +1,10 @@
 # Tauri + React + Typescript
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
-
-## Recommended IDE Setup
-
--   [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
-
 ## Updating
 
--   Update version in package.json
--   Update version in Cargo.toml
--   Update version in package-lock.json
--   Update version in tauri.conf.json
--   npm install
--   npm run build
--   npm run tauri build
--   Run the new MSI file in target/release/bundle/msi
+1. Run `npm version <patch|minor|major>` to bump the app version (automatically updates `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`).
+2. Run `npm install` to make sure dependencies are up to date.
+3. Run `npm run build`.
+4. Run `npm run tauri dev` to ensure the changes worked
+5. Run `npm run tauri build`.
+6. Run the new MSI file in `target/release/bundle/msi`.
