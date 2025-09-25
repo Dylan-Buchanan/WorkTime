@@ -126,9 +126,13 @@ export const TaskPanel: React.FC = () => {
                 onSubmit={async (e) => {
                     e.preventDefault();
                     if (!name.trim()) return;
-                    await createTask(name.trim(), target);
-                    play("pressSide");
-                    setName("");
+                    try {
+                        await createTask(name.trim(), target);
+                        play("pressSide");
+                        setName("");
+                    } catch (err) {
+                        console.error("Failed to create task", err);
+                    }
                 }}
                 className="flex gap-2"
             >

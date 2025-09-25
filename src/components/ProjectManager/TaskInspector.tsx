@@ -152,16 +152,21 @@ export const TaskInspector: React.FC = () => {
                                 let appId = task.appTaskId;
                                 if (!appId) {
                                     const est = task.estimatePomos || 1;
-                                    await app.createTask(
-                                        task.title || "Untitled",
-                                        est
-                                    );
-                                    // After create, active_task points to new task
-                                    const createdId = app.state?.active_task;
-                                    if (createdId) {
+                                    try {
+                                        const created = await app.createTask(
+                                            task.title || "Untitled",
+                                            est
+                                        );
+                                        appId = created.id;
                                         updateTask(task.id, {
-                                            appTaskId: createdId,
+                                            appTaskId: created.id,
                                         });
+                                    } catch (err) {
+                                        console.error(
+                                            "Failed to create timer task",
+                                            err
+                                        );
+                                        return;
                                     }
                                 } else {
                                     await app.setActiveTask(appId);

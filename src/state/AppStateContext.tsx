@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
-import { AppStateData, Settings, TaskStatus } from "./types";
-import { usePM } from "./ProjectManagerContext";
+import { AppStateData, Settings, Task } from "./types";
 import { useSounds } from "../hooks/useSounds";
 import { invoke } from "@tauri-apps/api/core";
 // We lazy import notification functions to avoid type resolution issues if plugin not yet built
@@ -38,7 +37,7 @@ async function ensureNotification() {
 interface AppContextShape {
     state: AppStateData | null;
     refresh: () => Promise<AppStateData>;
-    createTask: (name: string, target: number) => Promise<void>;
+    createTask: (name: string, target: number) => Promise<Task>;
     setActiveTask: (id: string) => Promise<void>;
     startWork: () => Promise<void>;
     startBreak: () => Promise<void>;
@@ -154,8 +153,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 taskId: task.id,
             });
             await refresh();
+            return task;
         } catch (e: any) {
             setError(e?.message || e?.toString?.() || "Unknown error");
+            throw e;
         }
     };
 
@@ -230,182 +231,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const skipBreak = () => wrapVoid(() => invoke("skip_break"));
     const updateSettings = (s: Settings) => wrapVoid(() => invoke("update_settings", { settings: s }));
 
-    const { state: pmState, updateTask: pmUpdateTask } = (() => {
-        try {
-            return usePM();
-        } catch {
-            return { state: null, updateTask: () => {} } as any;
-        }
-    })();
-
-    // Removed auto-move to Done; tasks are only marked Done when user explicitly changes status.
-    const linkRelatedPMTasks = (_appTaskId: string) => {
-        // Removed automatic fuzzy linking to avoid accidental cross-task merges.
-    };
-
     const finalizeTask = (id: string) =>
         wrapVoid(async () => {
             await invoke("finalize_task", { task_id: id, taskId: id });
-            if (pmState) {
-                Object.values(pmState.tasks).forEach((pt: any) => {
-                    if (pt?.appTaskId === id && !pt?.isArchived && pt?.status !== "Done") {
-                        pmUpdateTask(pt.id, { status: "Done" as TaskStatus });
-                    }
-                });
-            }
-            linkRelatedPMTasks(id);
         });
-
-    // Passive sync: if backend tasks exist, attempt linking only (no status mutation)
-    useEffect(() => {
-        if (!state || !pmState) return;
-        Object.values(state.tasks).forEach((t) => linkRelatedPMTasks(t.id));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [state?.tasks, pmState]);
-
-    // Auto-create backend timer tasks for any new PM tasks without linkage so they appear in timer view.
-    useEffect(() => {
-        if (!pmState) return;
-        const unlinked = Object.values(pmState.tasks).filter((t: any) => !t.isArchived && !t.appTaskId) as any[];
-        if (unlinked.length === 0) return;
-        let cancelled = false;
-        (async () => {
-            // Capture current active to restore after silent creations
-            const activeBefore = state?.active_task;
-            for (const pmTask of unlinked) {
-                try {
-                    const created: any = await invoke("create_task", {
-                        payload: {
-                            name: (pmTask as any).title || "Untitled",
-                            target_pomodoros: (pmTask as any).estimatePomos || 1,
-                        },
-                    });
-                    if (cancelled) return;
-                    pmUpdateTask((pmTask as any).id, {
-                        appTaskId: created.id,
-                    } as any);
-                    // Restore previously active selection if it changed
-                    if (activeBefore && activeBefore !== created.id) {
-                        try {
-                            await invoke("set_active_task", {
-                                task_id: activeBefore,
-                                taskId: activeBefore,
-                            });
-                        } catch {}
-                    }
-                    await refresh();
-                } catch (e) {
-                    // Ignore individual failures
-                }
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pmState?.tasks]);
-
-    // Sync time spent & worked pomodoros to linked PM tasks
-    useEffect(() => {
-        if (!state || !pmState) return;
-        const nowMs = Date.now();
-        // Aggregate completed work minutes from logs
-        const workMinutes: Record<string, number> = {};
-        state.logs.forEach((log) => {
-            if (!log.was_break) {
-                workMinutes[log.task_id] = (workMinutes[log.task_id] || 0) + log.duration_minutes;
-            }
-        });
-        // Add live in-progress work for active timer
-        const active = state.timer;
-        if (active && active.kind === "Work" && !active.paused) {
-            const start = new Date(active.started_at).getTime();
-            const end = new Date(active.ends_at).getTime();
-            const elapsedMins = Math.max(0, Math.min(nowMs, end) - start) / 60000;
-            workMinutes[active.task_id] = (workMinutes[active.task_id] || 0) + elapsedMins;
-        }
-        Object.values(pmState.tasks).forEach((pt: any) => {
-            if (!pt.appTaskId) return;
-            const minsFromLogs = workMinutes[pt.appTaskId];
-            if (minsFromLogs === undefined) return;
-            // Cross-check with backend task's completed_pomodoros * configured work length
-            const backendTask = state.tasks[pt.appTaskId];
-            let mins = minsFromLogs;
-            if (backendTask) {
-                const expected = backendTask.completed_pomodoros * state.settings.work_minutes;
-                // If our accumulated logs under-report by more than half a minute, trust expected
-                if (expected - mins > 0.5) {
-                    mins = expected;
-                }
-            }
-            const workedPomos = +(mins / state.settings.work_minutes).toFixed(2);
-            let patch: any = {};
-            if (Math.abs((pt.timeSpentMinutes || 0) - mins) > 0.05 || Math.abs((pt.workedPomos || 0) - workedPomos) > 0.01) {
-                patch.timeSpentMinutes = +mins.toFixed(2);
-                patch.workedPomos = workedPomos;
-                patch.lastWorkedAt = new Date().toISOString();
-            }
-            // Auto-increase estimate (not status) if user exceeds it; do NOT mark Done.
-            if (typeof pt.estimatePomos === "number" && workedPomos > pt.estimatePomos + 0.0001) {
-                patch.estimatePomos = Math.ceil(workedPomos);
-            }
-            if (Object.keys(patch).length > 0) {
-                pmUpdateTask(pt.id, patch);
-            }
-        });
-    }, [state?.logs, state?.timer, tick, pmState, pmUpdateTask]);
-
-    // Propagate estimate changes from PM task -> backend timer task target_pomodoros
-    useEffect(() => {
-        if (!pmState || !state) return;
-        // Build quick lookup of backend targets
-        const backendTargets: Record<string, number> = {};
-        Object.values(state.tasks).forEach((t) => {
-            backendTargets[t.id] = t.target_pomodoros;
-        });
-        let cancelled = false;
-        (async () => {
-            for (const pt of Object.values(pmState.tasks) as any[]) {
-                if (!pt.appTaskId) continue;
-                if (typeof pt.estimatePomos !== "number") continue;
-                const current = backendTargets[pt.appTaskId];
-                if (current === undefined) continue;
-                if (pt.estimatePomos !== current) {
-                    try {
-                        await invoke("set_task_target", {
-                            task_id: pt.appTaskId,
-                            taskId: pt.appTaskId, // alias just in case
-                            target: pt.estimatePomos,
-                        });
-                        if (cancelled) return;
-                        await refresh();
-                    } catch {
-                        // ignore individual failures
-                    }
-                }
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [pmState?.tasks, state?.tasks, refresh]);
-
-    // Proactively link active app task to a single matching PM task by title (if not already linked)
-    useEffect(() => {
-        if (!state || !pmState) return;
-        const activeId = state.active_task;
-        if (!activeId) return;
-        const appTask = state.tasks[activeId];
-        if (!appTask) return;
-        const titleNorm = appTask.name.trim().toLowerCase();
-        // Find PM tasks that match title and are unlinked
-        const candidates = Object.values(pmState.tasks as any).filter((t: any) => !t.appTaskId && t.title.trim().toLowerCase() === titleNorm);
-        if (candidates.length === 1) {
-            pmUpdateTask((candidates[0] as any).id, {
-                appTaskId: activeId,
-            } as any);
-        }
-    }, [state?.active_task, state?.tasks, pmState, pmUpdateTask]);
 
     const remainingMs = () => {
         if (!state?.timer) return 0;

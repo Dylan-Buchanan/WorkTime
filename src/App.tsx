@@ -15,12 +15,14 @@ import { ProjectManagerProvider } from "./state/ProjectManagerContext";
 import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPage";
 import { AppStateProvider } from "./state/AppStateContext";
 import AnalyticsPage from "./components/AnalyticsPage";
+import StateSyncBridge from "./state/StateSyncBridge";
 
 const App: React.FC = () => {
     return (
         <BrowserRouter>
-            <ProjectManagerProvider>
-                <AppStateProvider>
+            <AppStateProvider>
+                <ProjectManagerProvider>
+                    <StateSyncBridge />
                     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
                         <TopNav />
                         <div className="flex-1 min-h-0">
@@ -37,8 +39,8 @@ const App: React.FC = () => {
                             </Routes>
                         </div>
                     </div>
-                </AppStateProvider>
-            </ProjectManagerProvider>
+                </ProjectManagerProvider>
+            </AppStateProvider>
         </BrowserRouter>
     );
 };
