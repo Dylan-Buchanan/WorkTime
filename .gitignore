@@ -27,3 +27,6 @@ dist-ssr
 *.db
 *.sql
 *.sqlite
+
+# Local development state
+dev-data/

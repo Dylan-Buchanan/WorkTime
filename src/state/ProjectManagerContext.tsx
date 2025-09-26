@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ProjectManagerState, Project, PMTask, TaskPriority, TaskStatus } from "./types";
 import { useAppState } from "./AppStateContext";
 
@@ -60,7 +61,6 @@ function buildDefaultState(): ProjectManagerState {
         meta: { initializedAt: now() },
     };
 }
-const defaultState: ProjectManagerState = buildDefaultState();
 
 interface PMContextShape {
     state: ProjectManagerState;
@@ -69,10 +69,7 @@ interface PMContextShape {
     archiveProject: (id: string, archive?: boolean) => void;
     deleteProject: (id: string) => void;
     createTask: (title: string, opts?: Partial<PMTask>) => Promise<PMTask>;
-    ensureMetadataForAppTask: (
-        appTaskId: string,
-        meta: { title: string; estimatePomos?: number }
-    ) => PMTask;
+    ensureMetadataForAppTask: (appTaskId: string, meta: { title: string; estimatePomos?: number }) => PMTask;
     updateTask: (id: string, patch: Partial<PMTask>) => void;
     archiveTask: (id: string, archive?: boolean) => void;
     setSelectedTask: (id: string | null) => void;
@@ -94,35 +91,111 @@ const PMContext = createContext<PMContextShape | undefined>(undefined);
 export const ProjectManagerProvider: React.FC<{
     children: React.ReactNode;
 }> = ({ children }) => {
-    const [state, setState] = useState<ProjectManagerState>(() => {
-        try {
-            const raw = localStorage.getItem(LS_KEY);
-            if (raw) {
-                const parsed: ProjectManagerState = JSON.parse(raw);
-                // Migrations / ensure at least one project
-                if (Object.keys(parsed.projects).length === 0) {
-                    return buildDefaultState();
-                }
-                // If no selected project, select first
-                if (parsed.ui.selectedProjectIds.length === 0) {
-                    const first = Object.keys(parsed.projects)[0];
-                    parsed.ui.selectedProjectIds = first ? [first] : [];
-                }
-                return parsed;
-            }
-        } catch {}
-        return defaultState;
-    });
     const app = useAppState();
+    const isTauri = Boolean((import.meta as any)?.env?.TAURI_PLATFORM || (typeof window !== "undefined" && (window as any).__TAURI_IPC__));
+    const hasLocalStorage = typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+    const isDevBuild = Boolean(import.meta.env.DEV);
+    const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
+    const [hydrated, setHydrated] = useState(false);
+    const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+    const persistSnapshot = useCallback(
+        (snapshot: ProjectManagerState, options?: { immediate?: boolean }) => {
+            if (isTauri) {
+                const payload = JSON.parse(JSON.stringify(snapshot)) as ProjectManagerState;
+                if (options?.immediate) {
+                    return invoke("save_pm_state", { state: payload })
+                        .then(() => undefined)
+                        .catch((err) => {
+                            console.warn("[PM] failed to persist project manager state", err);
+                        });
+                }
+                saveQueueRef.current = saveQueueRef.current
+                    .catch(() => undefined)
+                    .then(() => invoke("save_pm_state", { state: payload }))
+                    .then(
+                        () => undefined,
+                        (err) => {
+                            console.warn("[PM] failed to persist project manager state", err);
+                        }
+                    );
+                return saveQueueRef.current;
+            }
+
+            if (hasLocalStorage) {
+                try {
+                    window.localStorage.setItem(LS_KEY, JSON.stringify(snapshot));
+                } catch (err) {
+                    console.warn("[PM] failed to save project manager state to localStorage", err);
+                }
+            }
+
+            return Promise.resolve();
+        },
+        [isTauri, hasLocalStorage]
+    );
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            let snapshot: ProjectManagerState | null = null;
+
+            if (isTauri) {
+                try {
+                    const loaded = await invoke<ProjectManagerState | null>("load_pm_state");
+                    if (loaded) {
+                        snapshot = normalizeState(loaded);
+                    }
+                } catch (err) {
+                    console.warn("[PM] failed to load project manager state from filesystem", err);
+                }
+            }
+
+            if (!snapshot) {
+                if (isTauri) {
+                    if (!isDevBuild && hasLocalStorage) {
+                        try {
+                            const raw = window.localStorage.getItem(LS_KEY);
+                            if (raw) {
+                                snapshot = normalizeState(JSON.parse(raw) as ProjectManagerState);
+                            }
+                        } catch (err) {
+                            console.warn("[PM] failed to parse legacy localStorage project state", err);
+                        }
+                    }
+                } else if (hasLocalStorage) {
+                    try {
+                        const raw = window.localStorage.getItem(LS_KEY);
+                        if (raw) {
+                            snapshot = normalizeState(JSON.parse(raw) as ProjectManagerState);
+                        }
+                    } catch (err) {
+                        console.warn("[PM] failed to parse browser localStorage project state", err);
+                    }
+                }
+            }
+
+            const finalSnapshot = snapshot ?? normalizeState(buildDefaultState());
+
+            if (!cancelled) {
+                setState(finalSnapshot);
+                setHydrated(true);
+                await persistSnapshot(finalSnapshot, { immediate: true });
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [hasLocalStorage, isTauri, persistSnapshot]);
+
+    useEffect(() => {
+        if (!hydrated) return;
+        persistSnapshot(state);
+    }, [state, hydrated, persistSnapshot]);
 
     const persist = useCallback((next: ProjectManagerState | ((prev: ProjectManagerState) => ProjectManagerState)) => {
-        setState((prev) => {
-            const resolved = typeof next === "function" ? (next as any)(prev) : next;
-            try {
-                localStorage.setItem(LS_KEY, JSON.stringify(resolved));
-            } catch {}
-            return resolved;
-        });
+        setState((prev) => (typeof next === "function" ? (next as any)(prev) : next));
     }, []);
 
     const createProject = (name: string, color?: string): Project => {
@@ -180,11 +253,7 @@ export const ProjectManagerProvider: React.FC<{
         });
     };
 
-    const createTaskLocal = (
-        title: string,
-        opts: Partial<PMTask> = {},
-        options: { id?: string } = {}
-    ): PMTask => {
+    const createTaskLocal = (title: string, opts: Partial<PMTask> = {}, options: { id?: string } = {}): PMTask => {
         let projectId = opts.projectId ?? null;
         if (projectId && !state.projects[projectId]) {
             projectId = null;
@@ -219,10 +288,7 @@ export const ProjectManagerProvider: React.FC<{
                 status,
                 priority: opts.priority || "Medium",
                 dueDate: opts.dueDate,
-                estimatePomos:
-                    (opts as any).estimatePomos !== undefined
-                        ? (opts as any).estimatePomos
-                        : undefined,
+                estimatePomos: (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : undefined,
                 timeSpentMinutes: opts.timeSpentMinutes || 0,
                 workedPomos: opts.workedPomos || 0,
                 lastWorkedAt: opts.lastWorkedAt,
@@ -259,11 +325,7 @@ export const ProjectManagerProvider: React.FC<{
     const createTask = async (title: string, opts: Partial<PMTask> = {}): Promise<PMTask> => {
         const activeBefore = app.state?.active_task;
         let target = (opts as any).estimatePomos as number | undefined;
-        if (
-            target === undefined &&
-            typeof opts.timeSpentMinutes === "number" &&
-            opts.timeSpentMinutes > 0
-        ) {
+        if (target === undefined && typeof opts.timeSpentMinutes === "number" && opts.timeSpentMinutes > 0) {
             const workLength = app.state?.settings.work_minutes || 25;
             target = Math.max(1, Math.round(opts.timeSpentMinutes / workLength));
         }
@@ -278,10 +340,7 @@ export const ProjectManagerProvider: React.FC<{
         }
         return createTaskLocal(title, {
             ...opts,
-            estimatePomos:
-                (opts as any).estimatePomos !== undefined
-                    ? (opts as any).estimatePomos
-                    : created.target_pomodoros,
+            estimatePomos: (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : created.target_pomodoros,
             appTaskId: created.id,
         });
     };
@@ -294,10 +353,7 @@ export const ProjectManagerProvider: React.FC<{
             tasks: { ...prev.tasks, [id]: upd },
         }));
     };
-    const ensureMetadataForAppTask = (
-        appTaskId: string,
-        meta: { title: string; estimatePomos?: number }
-    ): PMTask => {
+    const ensureMetadataForAppTask = (appTaskId: string, meta: { title: string; estimatePomos?: number }): PMTask => {
         let existing = Object.values(state.tasks).find((t) => t.appTaskId === appTaskId);
         if (!existing) {
             return createTaskLocal(meta.title || "Untitled", {
@@ -309,10 +365,7 @@ export const ProjectManagerProvider: React.FC<{
         if (meta.title && existing.title !== meta.title) {
             patch.title = meta.title;
         }
-        if (
-            meta.estimatePomos !== undefined &&
-            meta.estimatePomos !== existing.estimatePomos
-        ) {
+        if (meta.estimatePomos !== undefined && meta.estimatePomos !== existing.estimatePomos) {
             patch.estimatePomos = meta.estimatePomos;
         }
         if (Object.keys(patch).length > 0) {
@@ -463,6 +516,125 @@ export const usePM = () => {
     if (!ctx) throw new Error("usePM must be inside provider");
     return ctx;
 };
+
+function normalizeState(input?: ProjectManagerState | null): ProjectManagerState {
+    const base = buildDefaultState();
+    const sourceProjects = input?.projects && Object.keys(input.projects).length > 0 ? input.projects : base.projects;
+
+    const projects: Record<string, Project> = {};
+    Object.entries(sourceProjects).forEach(([id, project]) => {
+        const createdAt = typeof project.createdAt === "string" && project.createdAt.length > 0 ? project.createdAt : now();
+        const updatedAt = typeof project.updatedAt === "string" && project.updatedAt.length > 0 ? project.updatedAt : createdAt;
+        projects[id] = {
+            ...project,
+            name: project.name || "Untitled",
+            color: project.color || randomColor(),
+            description: project.description ?? "",
+            isArchived: Boolean(project.isArchived),
+            sortOrder: typeof project.sortOrder === "number" && Number.isFinite(project.sortOrder) ? project.sortOrder : 0,
+            createdAt,
+            updatedAt,
+        };
+    });
+
+    const tasks: Record<string, PMTask> = {};
+    const validStatuses: TaskStatus[] = ["Backlog", "Next", "In Progress", "Blocked", "Done"];
+    const validPriorities: TaskPriority[] = ["Low", "Medium", "High"];
+    if (input?.tasks) {
+        Object.entries(input.tasks).forEach(([id, task]) => {
+            const status: TaskStatus = validStatuses.includes(task.status as TaskStatus) ? (task.status as TaskStatus) : "Backlog";
+            const priority: TaskPriority = validPriorities.includes(task.priority as TaskPriority) ? (task.priority as TaskPriority) : "Medium";
+            const projectId = task.projectId && projects[task.projectId] ? task.projectId : null;
+            const tags = Array.isArray(task.tags) ? task.tags.filter((tag): tag is string => typeof tag === "string") : [];
+            const links = Array.isArray(task.links) ? task.links.filter((link): link is string => typeof link === "string") : [];
+            const checklist = Array.isArray(task.checklist)
+                ? task.checklist.map((item) => ({
+                      id: item.id || uuid(),
+                      title: item.title || "",
+                      done: Boolean(item.done),
+                  }))
+                : [];
+            const sortOrder = typeof task.sortOrder === "number" && Number.isFinite(task.sortOrder) ? task.sortOrder : 0;
+            const timeSpentMinutes = typeof task.timeSpentMinutes === "number" && Number.isFinite(task.timeSpentMinutes) ? task.timeSpentMinutes : 0;
+            const createdAt = typeof task.createdAt === "string" && task.createdAt.length > 0 ? task.createdAt : now();
+            const updatedAt = typeof task.updatedAt === "string" && task.updatedAt.length > 0 ? task.updatedAt : createdAt;
+
+            tasks[id] = {
+                ...task,
+                projectId,
+                status,
+                priority,
+                tags,
+                links,
+                checklist,
+                sortOrder,
+                isArchived: Boolean(task.isArchived),
+                timeSpentMinutes,
+                createdAt,
+                updatedAt,
+            };
+        });
+    }
+
+    const validViews = ["list", "board"] as const;
+    const validGroupings = ["none", "project", "status", "due"] as const;
+    const validSorts = ["manual", "due", "priority", "updated"] as const;
+    const validDueFilters = ["all", "today", "thisWeek", "later", "overdue"] as const;
+
+    const uiSource: Partial<ProjectManagerState["ui"]> = input?.ui ?? {};
+    const selectedProjectIds = Array.isArray(uiSource.selectedProjectIds) ? uiSource.selectedProjectIds.filter((id): id is string => typeof id === "string" && !!projects[id]) : [];
+    const statusFilter = Array.isArray(uiSource.statusFilter) ? uiSource.statusFilter.filter((status): status is TaskStatus => validStatuses.includes(status as TaskStatus)) : [];
+    const tagFilter = Array.isArray(uiSource.tagFilter) ? uiSource.tagFilter.filter((tag): tag is string => typeof tag === "string") : [];
+    const priorityFilter = Array.isArray(uiSource.priorityFilter) ? uiSource.priorityFilter.filter((priority): priority is TaskPriority => validPriorities.includes(priority as TaskPriority)) : [];
+    const search = typeof uiSource.search === "string" ? uiSource.search : "";
+    const resolvedView: "list" | "board" = validViews.includes(uiSource.view as (typeof validViews)[number]) ? (uiSource.view as unknown as "list" | "board") : "list";
+    const resolvedGrouping: ProjectManagerState["ui"]["listGrouping"] = validGroupings.includes(uiSource.listGrouping as (typeof validGroupings)[number])
+        ? (uiSource.listGrouping as unknown as ProjectManagerState["ui"]["listGrouping"])
+        : "none";
+    const resolvedSort: ProjectManagerState["ui"]["sort"] = validSorts.includes(uiSource.sort as (typeof validSorts)[number])
+        ? (uiSource.sort as unknown as ProjectManagerState["ui"]["sort"])
+        : "manual";
+    const resolvedDueFilter: ProjectManagerState["ui"]["dueFilter"] = validDueFilters.includes(uiSource.dueFilter as (typeof validDueFilters)[number])
+        ? (uiSource.dueFilter as unknown as ProjectManagerState["ui"]["dueFilter"])
+        : "all";
+    const selectedTaskId = typeof uiSource.selectedTaskId === "string" && uiSource.selectedTaskId.length > 0 ? uiSource.selectedTaskId : null;
+
+    const ui: ProjectManagerState["ui"] = {
+        ...base.ui,
+        ...uiSource,
+        selectedProjectIds,
+        statusFilter,
+        tagFilter,
+        priorityFilter,
+        search,
+        showArchived: Boolean(uiSource.showArchived),
+        view: resolvedView,
+        listGrouping: resolvedGrouping,
+        sort: resolvedSort,
+        dueFilter: resolvedDueFilter,
+        selectedTaskId,
+    };
+
+    if (ui.selectedProjectIds.length === 0) {
+        const first = Object.keys(projects)[0];
+        if (first) {
+            ui.selectedProjectIds = [first];
+        }
+    }
+
+    const meta = {
+        ...base.meta,
+        ...(input?.meta ?? {}),
+    };
+    meta.initializedAt = typeof meta.initializedAt === "string" && meta.initializedAt.length > 0 ? meta.initializedAt : now();
+
+    return {
+        projects,
+        tasks,
+        ui,
+        meta,
+    };
+}
 
 function randomColor() {
     const colors = ["#6366F1", "#EC4899", "#10B981", "#F59E0B", "#3B82F6", "#8B5CF6", "#EF4444", "#14B8A6"];

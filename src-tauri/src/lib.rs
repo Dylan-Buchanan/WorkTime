@@ -1,9 +1,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::{env, path::Path};
 use tauri::Manager; // for path(), manage()
 use tauri_plugin_notification::NotificationExt; // Notification construction APIs vary; using extension only
 use uuid::Uuid;
@@ -109,8 +112,37 @@ impl Default for AppStateData {
 struct AppState(Mutex<AppStateData>);
 
 // Persistence helpers
+fn resolve_storage_path(app: &tauri::AppHandle, env_key: &str, default_filename: &str) -> PathBuf {
+    if let Ok(custom) = env::var(env_key) {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            let custom_path = Path::new(trimmed);
+            return if custom_path.is_relative() {
+                env::current_dir()
+                    .map(|cwd| cwd.join(custom_path))
+                    .unwrap_or_else(|_| custom_path.to_path_buf())
+            } else {
+                custom_path.to_path_buf()
+            };
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("dev-data")
+            .join(default_filename);
+    }
+
+    app.path().app_data_dir().unwrap().join(default_filename)
+}
+
 fn data_file_path(app: &tauri::AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap().join("data.json")
+    resolve_storage_path(app, "WORK_TIME_DATA_PATH", "data.json")
+}
+
+fn pm_data_file_path(app: &tauri::AppHandle) -> PathBuf {
+    resolve_storage_path(app, "WORK_TIME_PM_DATA_PATH", "pm-state.json")
 }
 
 fn load_state(app: &tauri::AppHandle) -> AppStateData {
@@ -129,6 +161,33 @@ fn save_state(app: &tauri::AppHandle, state: &AppStateData) -> Result<(), String
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let data = serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?;
+    fs::write(path, data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_pm_state(app: tauri::AppHandle) -> Result<Option<Value>, String> {
+    let path = pm_data_file_path(&app);
+    match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
+            .map(Some)
+            .map_err(|err| format!("Failed to parse project manager state: {err}")),
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                Ok(None)
+            } else {
+                Err(err.to_string())
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn save_pm_state(app: tauri::AppHandle, state: Value) -> Result<(), String> {
+    let path = pm_data_file_path(&app);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let data = serde_json::to_vec_pretty(&state).map_err(|e| e.to_string())?;
     fs::write(path, data).map_err(|e| e.to_string())
 }
 
@@ -500,6 +559,8 @@ pub fn run() {
             get_state,
             create_task,
             update_settings,
+            load_pm_state,
+            save_pm_state,
             set_active_task,
             start_work_timer,
             start_break_timer,
