@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useAppState } from "../state/AppStateContext";
 import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
 import { PMTask, TaskPriority } from "../state/types";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 export const TaskPanel: React.FC = () => {
     const { state, createTask, setActiveTask, finalizeTask } = useAppState();
@@ -11,6 +12,7 @@ export const TaskPanel: React.FC = () => {
     const [name, setName] = useState("");
     const [target, setTarget] = useState(4);
     const [sortOption, setSortOption] = useState<"default" | "project" | "priority" | "dueDate" | "estimateAsc" | "estimateDesc">("default");
+    const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
 
     const pmTasksByAppTaskId = useMemo(() => {
@@ -37,6 +39,9 @@ export const TaskPanel: React.FC = () => {
             const dueTimestamp = pmTask?.dueDate ? (Number.isNaN(Date.parse(pmTask.dueDate)) ? null : new Date(pmTask.dueDate).getTime()) : null;
             const estimate = pmTask?.estimatePomos ?? task.target_pomodoros;
             const priorityRank = pmTask?.priority ? PRIORITY_ORDER[pmTask.priority] : 3;
+            const projectId = pmTask?.projectId ?? "__no_project__";
+            const projectColor = project?.color ?? "#52525b";
+            const groupLabel = projectId === "__no_project__" ? "No project" : projectName;
 
             return {
                 task,
@@ -46,6 +51,9 @@ export const TaskPanel: React.FC = () => {
                 estimate,
                 priorityRank,
                 index,
+                projectId,
+                projectColor,
+                groupLabel,
             };
         });
     }, [tasks, pmTasksByAppTaskId, pmState.projects]);
@@ -101,6 +109,49 @@ export const TaskPanel: React.FC = () => {
         return withSort;
     }, [decoratedTasks, sortOption]);
 
+    const groupedTasks = useMemo(() => {
+        const map = new Map<
+            string,
+            {
+                key: string;
+                label: string;
+                color: string;
+                items: Array<(typeof sortedTasks)[number]>;
+            }
+        >();
+        const orderedGroups: Array<{
+            key: string;
+            label: string;
+            color: string;
+            items: Array<(typeof sortedTasks)[number]>;
+        }> = [];
+
+        sortedTasks.forEach((entry) => {
+            const key = entry.projectId;
+            let group = map.get(key);
+            if (!group) {
+                group = {
+                    key,
+                    label: entry.groupLabel,
+                    color: entry.projectColor,
+                    items: [] as Array<(typeof sortedTasks)[number]>,
+                };
+                map.set(key, group);
+                orderedGroups.push(group);
+            }
+            group.items.push(entry);
+        });
+
+        return orderedGroups;
+    }, [sortedTasks]);
+
+    const toggleGroup = useCallback((groupKey: string) => {
+        setCollapsedGroups((prev) => ({
+            ...prev,
+            [groupKey]: !prev[groupKey],
+        }));
+    }, []);
+
     return (
         <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -153,52 +204,73 @@ export const TaskPanel: React.FC = () => {
                     Add
                 </button>
             </form>
-            <ul className="space-y-1">
-                {sortedTasks.map(({ task: t, projectName, pmTask, estimate, dueTimestamp }) => {
-                    const dueLabel = dueTimestamp ? new Date(dueTimestamp).toLocaleDateString() : null;
-                    const tooltipParts: string[] = [];
-                    if (pmTask) {
-                        tooltipParts.push(`Project: ${projectName}`);
-                        if (pmTask.priority) tooltipParts.push(`Priority: ${pmTask.priority}`);
-                        if (dueLabel) tooltipParts.push(`Due: ${dueLabel}`);
-                    } else {
-                        tooltipParts.push("Project: No project");
-                    }
-                    tooltipParts.push(`Estimate: ${estimate} pomodoros`);
-                    const active = state?.active_task === t.id;
+            <div className="space-y-2">
+                {groupedTasks.map((group) => {
+                    const collapsed = collapsedGroups[group.key] ?? false;
                     return (
-                        <li
-                            key={t.id}
-                            title={tooltipParts.join("\n") || undefined}
-                            onClick={() => {
-                                setActiveTask(t.id);
-                                play("pressSide");
-                            }}
-                            className={`group flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-[11px] border border-transparent hover:border-neutral-700 hover:bg-neutral-800/50 transition ${
-                                active ? "bg-neutral-800/60 border-neutral-700" : ""
-                            }`}
-                        >
-                            <span className="flex-1 truncate">
-                                {t.name} ({Math.round(t.completed_pomodoros * 10) / 10}/{t.target_pomodoros})
-                            </span>
-                            {active && <span className="text-[9px] font-medium tracking-wide px-1.5 py-0.5 rounded bg-indigo-600 text-white">ACTIVE</span>}
-                            {active && !t.completed_at && (
-                                <button
-                                    onMouseEnter={() => play("hover")}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        finalizeTask(t.id);
-                                        play("completeTask");
-                                    }}
-                                    className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white"
-                                >
-                                    Complete
-                                </button>
+                        <div key={group.key} className="border border-neutral-800/80 rounded-md bg-neutral-900/40">
+                            <button
+                                type="button"
+                                onClick={() => toggleGroup(group.key)}
+                                className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-neutral-300 hover:bg-neutral-800/60 transition"
+                            >
+                                {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: group.color }} aria-hidden />
+                                <span className="flex-1">{group.label}</span>
+                                <span className="text-[10px] text-neutral-500">{group.items.length}</span>
+                            </button>
+                            {!collapsed && (
+                                <ul className="space-y-1 px-2 pb-2">
+                                    {group.items.map(({ task: t, projectName, pmTask, estimate, dueTimestamp }) => {
+                                        const dueLabel = dueTimestamp ? new Date(dueTimestamp).toLocaleDateString() : null;
+                                        const tooltipParts: string[] = [];
+                                        if (pmTask) {
+                                            tooltipParts.push(`Project: ${projectName}`);
+                                            if (pmTask.priority) tooltipParts.push(`Priority: ${pmTask.priority}`);
+                                            if (dueLabel) tooltipParts.push(`Due: ${dueLabel}`);
+                                        } else {
+                                            tooltipParts.push("Project: No project");
+                                        }
+                                        tooltipParts.push(`Estimate: ${estimate} pomodoros`);
+                                        const active = state?.active_task === t.id;
+                                        return (
+                                            <li
+                                                key={t.id}
+                                                title={tooltipParts.join("\n") || undefined}
+                                                onClick={() => {
+                                                    setActiveTask(t.id);
+                                                    play("pressSide");
+                                                }}
+                                                className={`group flex items-center gap-2 rounded border border-transparent px-2 py-1 text-[11px] transition hover:border-neutral-700 hover:bg-neutral-800/50 ${
+                                                    active ? "bg-neutral-800/60 border-neutral-700" : ""
+                                                }`}
+                                            >
+                                                <span className="flex-1 truncate">
+                                                    {t.name} ({Math.round(t.completed_pomodoros * 10) / 10}/{t.target_pomodoros})
+                                                </span>
+                                                {active && <span className="rounded bg-indigo-600 px-1.5 py-0.5 text-[9px] font-medium tracking-wide text-white">ACTIVE</span>}
+                                                {active && !t.completed_at && (
+                                                    <button
+                                                        onMouseEnter={() => play("hover")}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            finalizeTask(t.id);
+                                                            play("completeTask");
+                                                        }}
+                                                        className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] text-white transition hover:bg-emerald-500 active:bg-emerald-700"
+                                                    >
+                                                        Complete
+                                                    </button>
+                                                )}
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
                             )}
-                        </li>
+                        </div>
                     );
                 })}
-            </ul>
+            </div>
         </div>
     );
 };
