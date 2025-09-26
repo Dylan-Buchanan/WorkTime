@@ -147,11 +147,6 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const task: any = await invoke("create_task", {
                 payload: { name, target_pomodoros: target },
             });
-            // auto-select the newly created task
-            await invoke("set_active_task", {
-                task_id: task.id,
-                taskId: task.id,
-            });
             await refresh();
             return task;
         } catch (e: any) {
