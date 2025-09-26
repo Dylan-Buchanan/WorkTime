@@ -11,6 +11,8 @@ const columns: TaskStatus[] = ["Backlog", "Next", "In Progress", "Blocked", "Don
 export const TasksBoardView: React.FC = () => {
     const { state, moveTaskToStatus, reorderTasks, setSelectedTask } = usePM();
     const sensors = useSensors(useSensor(PointerSensor));
+    const activeProjectId = state.ui.selectedProjectIds[0] ?? null;
+    const shouldFilterByProject = !state.ui.boardShowAllTasks && Boolean(activeProjectId);
     const tasksByStatus: Record<TaskStatus, PMTask[]> = {
         Backlog: [],
         Next: [],
@@ -20,6 +22,10 @@ export const TasksBoardView: React.FC = () => {
     };
     Object.values(state.tasks)
         .filter((t) => !t.isArchived)
+        .filter((t) => {
+            if (!shouldFilterByProject) return true;
+            return t.projectId === activeProjectId;
+        })
         .forEach((t) => {
             tasksByStatus[t.status].push(t);
         });

@@ -57,6 +57,7 @@ function buildDefaultState(): ProjectManagerState {
             showArchived: false,
             sort: "manual",
             dueFilter: "all",
+            boardShowAllTasks: false,
         },
         meta: { initializedAt: now() },
     };
@@ -598,6 +599,7 @@ function normalizeState(input?: ProjectManagerState | null): ProjectManagerState
         ? (uiSource.dueFilter as unknown as ProjectManagerState["ui"]["dueFilter"])
         : "all";
     const selectedTaskId = typeof uiSource.selectedTaskId === "string" && uiSource.selectedTaskId.length > 0 ? uiSource.selectedTaskId : null;
+    const boardShowAllTasks = Boolean((uiSource as any).boardShowAllTasks);
 
     const ui: ProjectManagerState["ui"] = {
         ...base.ui,
@@ -613,6 +615,7 @@ function normalizeState(input?: ProjectManagerState | null): ProjectManagerState
         sort: resolvedSort,
         dueFilter: resolvedDueFilter,
         selectedTaskId,
+        boardShowAllTasks,
     };
 
     if (ui.selectedProjectIds.length === 0) {

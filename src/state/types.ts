@@ -10,12 +10,7 @@ export interface Task {
 }
 
 // New Project Manager domain types
-export type TaskStatus =
-    | "Backlog"
-    | "Next"
-    | "In Progress"
-    | "Blocked"
-    | "Done";
+export type TaskStatus = "Backlog" | "Next" | "In Progress" | "Blocked" | "Done";
 export type TaskPriority = "Low" | "Medium" | "High";
 
 export interface Project {
@@ -66,6 +61,7 @@ export interface ProjectManagerState {
         showArchived: boolean;
         sort: "manual" | "due" | "priority" | "updated";
         dueFilter: "all" | "today" | "thisWeek" | "later" | "overdue";
+        boardShowAllTasks: boolean;
     };
     meta: {
         initializedAt: string;

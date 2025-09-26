@@ -6,14 +6,7 @@ import { TaskInspector } from "./TaskInspector";
 import { usePM } from "../../state/ProjectManagerContext";
 
 export const ProjectManagerPage: React.FC = () => {
-    const {
-        state,
-        createTask,
-        quickAddParse,
-        ensureProjectByName,
-        setFilters,
-        setView,
-    } = usePM();
+    const { state, createTask, quickAddParse, ensureProjectByName, setFilters, setView } = usePM();
     const [quick, setQuick] = useState("");
     const activeProjectId = state.ui.selectedProjectIds[0] || null;
 
@@ -46,8 +39,7 @@ export const ProjectManagerPage: React.FC = () => {
                         <span
                             className="w-2 h-2 rounded-full"
                             style={{
-                                background:
-                                    state.projects[activeProjectId]?.color,
+                                background: state.projects[activeProjectId]?.color,
                             }}
                         />
                         {state.projects[activeProjectId]?.name}
@@ -73,10 +65,24 @@ export const ProjectManagerPage: React.FC = () => {
                     Add
                 </button>
                 <div className="ml-auto flex items-center gap-1">
-                    <ViewSwitch
-                        cur={state.ui.view}
-                        onChange={(v) => setView(v)}
-                    />
+                    {state.ui.view === "board" && (
+                        <button
+                            onClick={() =>
+                                setFilters({
+                                    boardShowAllTasks: !state.ui.boardShowAllTasks,
+                                })
+                            }
+                            className={`px-2 py-1 rounded bg-neutral-900 border border-neutral-800 text-[10px] flex items-center gap-1 transition-opacity ${
+                                state.ui.boardShowAllTasks ? "opacity-100" : "opacity-80"
+                            }`}
+                            aria-pressed={state.ui.boardShowAllTasks}
+                            title={state.ui.boardShowAllTasks ? "Showing tasks from all projects" : "Showing tasks from the selected project"}
+                        >
+                            <span className={`w-2 h-2 rounded-full ${state.ui.boardShowAllTasks ? "bg-emerald-400" : "bg-sky-400"}`} aria-hidden />
+                            {state.ui.boardShowAllTasks ? "All projects" : "Selected project"}
+                        </button>
+                    )}
+                    <ViewSwitch cur={state.ui.view} onChange={(v) => setView(v)} />
                 </div>
             </div>
             <div className="flex flex-1 min-h-0">
@@ -86,9 +92,7 @@ export const ProjectManagerPage: React.FC = () => {
                 <div className="flex-1 min-w-0 p-2 overflow-hidden">
                     {state.ui.view === "list" ? (
                         <div className="flex flex-col h-full">
-                            {activeProjectId && (
-                                <InlineAddTask projectId={activeProjectId} />
-                            )}
+                            {activeProjectId && <InlineAddTask projectId={activeProjectId} />}
                             <div className="flex-1 overflow-auto">
                                 <TasksListView />
                             </div>
@@ -115,9 +119,7 @@ const DebugInfo: React.FC = () => {
         <div className="px-2 py-1 text-[10px] text-neutral-500 flex gap-3 border-t border-neutral-800">
             <span>Projects: {projectCount}</span>
             <span>Tasks: {taskCount}</span>
-            <span>
-                SelectedProj: {state.ui.selectedProjectIds.join(",") || "none"}
-            </span>
+            <span>SelectedProj: {state.ui.selectedProjectIds.join(",") || "none"}</span>
         </div>
     );
 };
@@ -128,13 +130,7 @@ const ViewSwitch: React.FC<{
 }> = ({ cur, onChange }) => (
     <div className="inline-flex bg-neutral-900 rounded overflow-hidden">
         {(["list", "board"] as const).map((v) => (
-            <button
-                key={v}
-                onClick={() => onChange(v)}
-                className={`px-2 py-1 text-[10px] ${
-                    cur === v ? "bg-neutral-700" : ""
-                }`}
-            >
+            <button key={v} onClick={() => onChange(v)} className={`px-2 py-1 text-[10px] ${cur === v ? "bg-neutral-700" : ""}`}>
                 {v === "list" ? "List" : "Board"}
             </button>
         ))}
