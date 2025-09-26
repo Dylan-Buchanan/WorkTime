@@ -65,57 +65,63 @@ export const StateSyncBridge: React.FC = () => {
     // Sync time spent & worked pomodoros to PM metadata.
     useEffect(() => {
         if (!appState || !pmState) return;
-        const nowMs = Date.now();
-        const workMinutes: Record<string, number> = {};
-        appState.logs.forEach((log) => {
-            if (!log.was_break) {
-                workMinutes[log.task_id] =
-                    (workMinutes[log.task_id] || 0) + log.duration_minutes;
-            }
-        });
+        const workMinutesSetting = appState.settings.work_minutes;
         const active = appState.timer;
-        if (active && active.kind === "Work" && !active.paused) {
+        let activeExtraPomos = 0;
+        let activeTaskId: string | null = null;
+        if (
+            active &&
+            active.kind === "Work" &&
+            !active.paused &&
+            workMinutesSetting > 0
+        ) {
             const start = new Date(active.started_at).getTime();
             const end = new Date(active.ends_at).getTime();
-            const elapsedMins = Math.max(0, Math.min(nowMs, end) - start) / 60000;
-            workMinutes[active.task_id] =
-                (workMinutes[active.task_id] || 0) + elapsedMins;
+            const now = Date.now();
+            const elapsedMs = Math.max(0, Math.min(now, end) - start);
+            activeExtraPomos = elapsedMs / 60000 / workMinutesSetting;
+            activeTaskId = active.task_id;
         }
+
         Object.values(pmState.tasks).forEach((pmTask) => {
             if (!pmTask.appTaskId) return;
-            const minsFromLogs = workMinutes[pmTask.appTaskId];
-            if (minsFromLogs === undefined) return;
             const backendTask = appState.tasks[pmTask.appTaskId];
-            let mins = minsFromLogs;
-            if (backendTask) {
-                const expected =
-                    backendTask.completed_pomodoros *
-                    appState.settings.work_minutes;
-                if (expected - mins > 0.5) {
-                    mins = expected;
-                }
+            if (!backendTask) return;
+            let worked = backendTask.completed_pomodoros || 0;
+            if (pmTask.appTaskId === activeTaskId && activeExtraPomos > 0) {
+                worked += Math.min(1, activeExtraPomos);
             }
-            const workedPomos = +(mins / appState.settings.work_minutes).toFixed(2);
+            const workedRounded = +worked.toFixed(2);
+            const minutes = +(
+                workedRounded * Math.max(workMinutesSetting, 0)
+            ).toFixed(2);
             const patch: Partial<PMTask> = {};
-            if (
-                Math.abs((pmTask.timeSpentMinutes || 0) - mins) > 0.05 ||
-                Math.abs((pmTask.workedPomos || 0) - workedPomos) > 0.01
-            ) {
-                patch.timeSpentMinutes = +mins.toFixed(2);
-                patch.workedPomos = workedPomos;
-                patch.lastWorkedAt = new Date().toISOString();
+            let touchedProgress = false;
+            if (Math.abs((pmTask.workedPomos || 0) - workedRounded) > 0.01) {
+                patch.workedPomos = workedRounded;
+                touchedProgress = true;
             }
-            if (
-                typeof pmTask.estimatePomos === "number" &&
-                workedPomos > pmTask.estimatePomos + 0.0001
-            ) {
-                patch.estimatePomos = Math.ceil(workedPomos);
+            if (Math.abs((pmTask.timeSpentMinutes || 0) - minutes) > 0.05) {
+                patch.timeSpentMinutes = minutes;
+                touchedProgress = true;
+            }
+            if (pmTask.estimatePomos !== backendTask.target_pomodoros) {
+                patch.estimatePomos = backendTask.target_pomodoros;
+            }
+            if (touchedProgress) {
+                patch.lastWorkedAt = new Date().toISOString();
             }
             if (Object.keys(patch).length > 0) {
                 updateTask(pmTask.id, patch);
             }
         });
-    }, [appState?.logs, appState?.timer, appState?.settings, pmState?.tasks, updateTask]);
+    }, [
+        appState?.tasks,
+        appState?.timer,
+        appState?.settings.work_minutes,
+        pmState?.tasks,
+        updateTask,
+    ]);
 
     // Propagate estimate changes from PM -> backend targets.
     useEffect(() => {
