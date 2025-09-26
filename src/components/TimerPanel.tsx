@@ -83,6 +83,10 @@ export const TimerPanel: React.FC = () => {
     const timer = state?.timer;
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
+    const workMinutesSetting = state?.settings?.work_minutes ?? 0;
+    const activeWorkPlannedSecs = timer?.kind === "Work" ? timer.planned_secs || workMinutesSetting * 60 : 0;
+    const activeRemainingSecs = timer?.kind === "Work" ? ms / 1000 : 0;
+    const activeFractionComplete = timer?.kind === "Work" && activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, 1 - activeRemainingSecs / activeWorkPlannedSecs)) : 0;
 
     // Planned total (stable) from backend; fallback to computed if missing
     const plannedSecs = timer?.planned_secs || (timer ? (new Date(timer.ends_at).getTime() - new Date(timer.started_at).getTime()) / 1000 : 0);
@@ -225,9 +229,6 @@ export const TimerPanel: React.FC = () => {
         const segmentLength = Math.max(1, settings.segment_length || 1);
 
         const activeTimer = timer;
-        const activeWorkPlannedSecs = activeTimer && activeTimer.kind === "Work" ? activeTimer.planned_secs || workMinutes * 60 : 0;
-        const activeRemainingSecs = activeTimer && activeTimer.kind === "Work" ? ms / 1000 : 0;
-        const activeFractionComplete = activeTimer && activeTimer.kind === "Work" && activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, 1 - activeRemainingSecs / activeWorkPlannedSecs)) : 0;
 
         let totalRemaining = 0;
         let dueTodayRemaining = 0;
@@ -343,7 +344,37 @@ export const TimerPanel: React.FC = () => {
             workMinutes: workMinutesTotal,
             breakMinutes: breakMinutesTotal,
         };
-    }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, timer, ms, tick]);
+    }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, timer, ms, tick, activeWorkPlannedSecs, activeRemainingSecs, activeFractionComplete, activeAppTaskId]);
+
+    const activePomodoroSummary = useMemo(() => {
+        if (!activeAppTaskId) return null;
+        const backend = activeAppTask ?? (activeAppTaskId && state?.tasks ? state.tasks[activeAppTaskId] : null);
+        const pmLinked = linkedTask && linkedTask.appTaskId === activeAppTaskId ? linkedTask : null;
+
+        const target = (() => {
+            if (pmLinked && typeof pmLinked.estimatePomos === "number") {
+                return pmLinked.estimatePomos;
+            }
+            if (backend) return backend.target_pomodoros;
+            return 0;
+        })();
+
+        if (!Number.isFinite(target) || target <= EPSILON) return null;
+
+        let completed = backend?.completed_pomodoros ?? 0;
+        if (pmLinked && typeof pmLinked.workedPomos === "number") {
+            completed = Math.max(completed, pmLinked.workedPomos);
+        }
+
+        const withActive = Math.min(target, Math.max(0, completed + activeFractionComplete));
+        const remaining = Math.max(0, target - withActive);
+
+        return {
+            target,
+            completed: withActive,
+            remaining,
+        };
+    }, [activeAppTaskId, activeAppTask, state?.tasks, linkedTask, activeFractionComplete]);
 
     return (
         <div className="w-full h-full flex">
@@ -467,6 +498,13 @@ export const TimerPanel: React.FC = () => {
                             </button>
                         )}
                     </div>
+                    {timer && activePomodoroSummary && (
+                        <div className="w-full text-[11px] text-neutral-400 bg-neutral-900/50 border border-neutral-800 rounded-md px-3 py-2">
+                            Focus progress: <span className="text-neutral-200 font-medium">{formatPomodoroCount(activePomodoroSummary.completed)}</span> done ·
+                            <span className="text-neutral-200 font-medium"> {formatPomodoroCount(activePomodoroSummary.remaining)}</span> left
+                            <span className="text-neutral-600"> (goal {formatPomodoroCount(activePomodoroSummary.target)})</span>
+                        </div>
+                    )}
                     {finishProjection && (
                         <div className="w-full">
                             {finishProjection.hasWork ? (
