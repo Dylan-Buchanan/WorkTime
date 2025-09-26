@@ -6,7 +6,7 @@ import { TaskInspector } from "./TaskInspector";
 import { usePM } from "../../state/ProjectManagerContext";
 
 export const ProjectManagerPage: React.FC = () => {
-    const { state, createTask, quickAddParse, ensureProjectByName, setFilters, setView } = usePM();
+    const { state, createTask, quickAddParse, setFilters, setView } = usePM();
     const [quick, setQuick] = useState("");
     const activeProjectId = state.ui.selectedProjectIds[0] || null;
 
@@ -14,17 +14,27 @@ export const ProjectManagerPage: React.FC = () => {
         const raw = quick.trim();
         if (!raw) return;
         const { task, projectName } = quickAddParse(raw);
+        const parsedTitle = task.title?.trim();
+        const title = parsedTitle && parsedTitle.length > 0 ? parsedTitle : "Untitled";
+
         let projectId: string | null = null;
         if (projectName) {
-            projectId = ensureProjectByName(projectName).id;
+            const match = Object.values(state.projects).find((p) => p.name.toLowerCase() === projectName.toLowerCase());
+            if (!match) {
+                alert(`"${projectName}" is not a valid project`);
+                return;
+            }
+            projectId = match.id;
         } else if (activeProjectId) {
             projectId = activeProjectId;
         } else {
             alert("Select a project first");
             return;
         }
-        const created = await createTask(task.title || "Untitled", {
-            ...task,
+
+        const { title: _omit, ...taskPayload } = task;
+        const created = await createTask(title, {
+            ...taskPayload,
             projectId,
         });
         setFilters({ selectedTaskId: created.id });

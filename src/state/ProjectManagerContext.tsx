@@ -420,31 +420,71 @@ export const ProjectManagerProvider: React.FC<{
     };
 
     const quickAddParse = (input: string) => {
-        const parts = input.trim().split(/\s+/);
+        const parts = input.trim().split(/\s+/).filter(Boolean);
         const task: Partial<PMTask> = { tags: [] };
-        let titleParts: string[] = [];
+        const titleParts: string[] = [];
         let projectName: string | undefined;
-        parts.forEach((p) => {
-            if (p.startsWith("@")) {
-                projectName = p.substring(1);
-            } else if (p.startsWith("^")) {
-                const d = p.substring(1);
-                if (/\d{4}-\d{2}-\d{2}/.test(d)) task.dueDate = d;
-            } else if (p.startsWith("#")) {
-                const tag = p.substring(1);
-                if (tag) (task.tags ||= []).push(tag);
-            } else if (p.startsWith("!")) {
-                const pri = p.substring(1).toLowerCase();
-                if (pri === "low" || pri === "medium" || pri === "high") task.priority = (pri.charAt(0).toUpperCase() + pri.slice(1)) as TaskPriority;
-            } else if (/^\d+p$/.test(p)) {
-                // e.g. 3p means 3 pomodoros estimate
-                const n = parseInt(p);
-                if (!isNaN(n)) (task as any).estimatePomos = n;
-            } else {
-                titleParts.push(p);
+
+        const isCommandToken = (token: string) => {
+            if (!token) return false;
+            return token.startsWith("@") || token.startsWith("^") || token.startsWith("#") || token.startsWith("!") || /^\d+p$/i.test(token);
+        };
+
+        for (let i = 0; i < parts.length; i++) {
+            const token = parts[i];
+            if (!token) continue;
+
+            if (token.startsWith("@")) {
+                const initial = token.substring(1);
+                const collected: string[] = [];
+                if (initial) collected.push(initial);
+                while (i + 1 < parts.length && !isCommandToken(parts[i + 1])) {
+                    collected.push(parts[i + 1]);
+                    i += 1;
+                }
+                const candidate = collected.join(" ").trim();
+                if (candidate.length > 0) {
+                    projectName = candidate;
+                }
+                continue;
             }
-        });
-        task.title = titleParts.join(" ");
+
+            if (token.startsWith("^")) {
+                const d = token.substring(1);
+                if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                    task.dueDate = d;
+                }
+                continue;
+            }
+
+            if (token.startsWith("#")) {
+                const tag = token.substring(1);
+                if (tag) {
+                    (task.tags ||= []).push(tag);
+                }
+                continue;
+            }
+
+            if (token.startsWith("!")) {
+                const pri = token.substring(1).toLowerCase();
+                if (pri === "low" || pri === "medium" || pri === "high") {
+                    task.priority = (pri.charAt(0).toUpperCase() + pri.slice(1)) as TaskPriority;
+                }
+                continue;
+            }
+
+            if (/^(\d+)(p)$/i.test(token)) {
+                const n = parseInt(token, 10);
+                if (!Number.isNaN(n)) {
+                    (task as any).estimatePomos = n;
+                }
+                continue;
+            }
+
+            titleParts.push(token);
+        }
+
+        task.title = titleParts.join(" ").trim();
         return { task, projectName };
     };
 
