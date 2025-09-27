@@ -137,12 +137,25 @@ export const StateSyncBridge: React.FC = () => {
                 if (typeof pmTask.estimatePomos !== "number") continue;
                 const current = backendTargets[pmTask.appTaskId];
                 if (current === undefined) continue;
-                if (pmTask.estimatePomos !== current) {
+                const backendTask = appState.tasks[pmTask.appTaskId];
+                const completed = backendTask?.completed_pomodoros ?? 0;
+                const minTarget = Math.max(1, Math.ceil(completed));
+                let desired = Math.round(pmTask.estimatePomos);
+                if (!Number.isFinite(desired)) {
+                    desired = minTarget;
+                }
+                if (desired < minTarget) {
+                    desired = minTarget;
+                }
+                if (desired !== pmTask.estimatePomos) {
+                    updateTask(pmTask.id, { estimatePomos: desired });
+                }
+                if (desired !== current) {
                     try {
                         await invoke("set_task_target", {
                             task_id: pmTask.appTaskId,
                             taskId: pmTask.appTaskId,
-                            target: pmTask.estimatePomos,
+                            target: desired,
                         });
                         if (cancelled) return;
                         await refresh();
@@ -155,7 +168,7 @@ export const StateSyncBridge: React.FC = () => {
         return () => {
             cancelled = true;
         };
-    }, [pmState?.tasks, appState?.tasks, refresh]);
+    }, [pmState?.tasks, appState?.tasks, refresh, updateTask]);
 
     // Mark PM tasks done when backend tasks complete.
     useEffect(() => {

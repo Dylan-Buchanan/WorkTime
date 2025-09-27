@@ -255,25 +255,36 @@ export const ProjectManagerProvider: React.FC<{
     };
 
     const createTaskLocal = (title: string, opts: Partial<PMTask> = {}, options: { id?: string } = {}): PMTask => {
-        let projectId = opts.projectId ?? null;
-        if (projectId && !state.projects[projectId]) {
-            projectId = null;
-        }
-        if (!projectId && state.ui.selectedProjectIds.length === 1) {
-            const selected = state.ui.selectedProjectIds[0];
-            if (selected && state.projects[selected]) {
-                projectId = selected;
+        const projectIdProvided = Object.prototype.hasOwnProperty.call(opts, "projectId");
+        let projectId: string | null = null;
+        if (projectIdProvided) {
+            const requested = (opts as any).projectId as string | null | undefined;
+            if (requested && state.projects[requested]) {
+                projectId = requested;
+            } else {
+                projectId = null;
             }
-        }
-        if (!projectId) {
-            const first = Object.keys(state.projects)[0];
-            if (first) projectId = first;
-        }
-        if (!projectId) {
-            const gen = Object.values(state.projects).find((p) => p.name === "General");
-            if (gen) projectId = gen.id;
-            else {
-                projectId = createProject("General").id;
+        } else {
+            const requested = opts.projectId ?? null;
+            if (requested && state.projects[requested]) {
+                projectId = requested;
+            }
+            if (!projectId && state.ui.selectedProjectIds.length === 1) {
+                const selected = state.ui.selectedProjectIds[0];
+                if (selected && state.projects[selected]) {
+                    projectId = selected;
+                }
+            }
+            if (!projectId) {
+                const first = Object.keys(state.projects)[0];
+                if (first) projectId = first;
+            }
+            if (!projectId) {
+                const gen = Object.values(state.projects).find((p) => p.name === "General");
+                if (gen) projectId = gen.id;
+                else {
+                    projectId = createProject("General").id;
+                }
             }
         }
 
@@ -339,6 +350,50 @@ export const ProjectManagerProvider: React.FC<{
                 await app.setActiveTask(activeBefore);
             } catch {}
         }
+        const existing = Object.values(state.tasks).find((t) => t.appTaskId === created.id);
+        if (existing) {
+            const patch: Partial<PMTask> = {
+                title,
+                estimatePomos:
+                    (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : created.target_pomodoros,
+                appTaskId: created.id,
+            };
+            if (Object.prototype.hasOwnProperty.call(opts, "projectId")) {
+                (patch as any).projectId = (opts as any).projectId ?? null;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "priority")) {
+                patch.priority = opts.priority;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "status")) {
+                patch.status = opts.status;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "dueDate")) {
+                patch.dueDate = opts.dueDate;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "tags")) {
+                patch.tags = opts.tags;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "links")) {
+                patch.links = opts.links;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "checklist")) {
+                patch.checklist = opts.checklist;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "description")) {
+                patch.description = opts.description;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "timeSpentMinutes")) {
+                patch.timeSpentMinutes = opts.timeSpentMinutes;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "workedPomos")) {
+                patch.workedPomos = opts.workedPomos;
+            }
+            if (Object.prototype.hasOwnProperty.call(opts, "lastWorkedAt")) {
+                patch.lastWorkedAt = opts.lastWorkedAt;
+            }
+            updateTask(existing.id, patch);
+            return { ...existing, ...patch } as PMTask;
+        }
         return createTaskLocal(title, {
             ...opts,
             estimatePomos: (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : created.target_pomodoros,
@@ -360,6 +415,7 @@ export const ProjectManagerProvider: React.FC<{
             return createTaskLocal(meta.title || "Untitled", {
                 estimatePomos: meta.estimatePomos,
                 appTaskId,
+                projectId: null,
             });
         }
         const patch: Partial<PMTask> = {};
