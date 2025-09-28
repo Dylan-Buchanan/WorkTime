@@ -99,28 +99,46 @@ export const ProjectManagerProvider: React.FC<{
     const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
     const [hydrated, setHydrated] = useState(false);
     const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const pendingSnapshotRef = useRef<ProjectManagerState | null>(null);
+    const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const flushPendingSnapshot = useCallback(
+        (snapshot?: ProjectManagerState | null) => {
+            if (!isTauri) return Promise.resolve();
+            const snap = snapshot ?? pendingSnapshotRef.current;
+            if (!snap) return Promise.resolve();
+            pendingSnapshotRef.current = null;
+            const payload = JSON.parse(JSON.stringify(snap)) as ProjectManagerState;
+            saveQueueRef.current = saveQueueRef.current
+                .catch(() => undefined)
+                .then(() => invoke("save_pm_state", { state: payload }))
+                .then(
+                    () => undefined,
+                    (err) => {
+                        console.warn("[PM] failed to persist project manager state", err);
+                    }
+                );
+            return saveQueueRef.current;
+        },
+        [isTauri]
+    );
 
     const persistSnapshot = useCallback(
         (snapshot: ProjectManagerState, options?: { immediate?: boolean }) => {
             if (isTauri) {
-                const payload = JSON.parse(JSON.stringify(snapshot)) as ProjectManagerState;
-                if (options?.immediate) {
-                    return invoke("save_pm_state", { state: payload })
-                        .then(() => undefined)
-                        .catch((err) => {
-                            console.warn("[PM] failed to persist project manager state", err);
-                        });
+                pendingSnapshotRef.current = snapshot;
+                if (flushTimeoutRef.current) {
+                    clearTimeout(flushTimeoutRef.current);
+                    flushTimeoutRef.current = null;
                 }
-                saveQueueRef.current = saveQueueRef.current
-                    .catch(() => undefined)
-                    .then(() => invoke("save_pm_state", { state: payload }))
-                    .then(
-                        () => undefined,
-                        (err) => {
-                            console.warn("[PM] failed to persist project manager state", err);
-                        }
-                    );
-                return saveQueueRef.current;
+                if (options?.immediate) {
+                    return flushPendingSnapshot(snapshot);
+                }
+                flushTimeoutRef.current = setTimeout(() => {
+                    flushTimeoutRef.current = null;
+                    flushPendingSnapshot();
+                }, 750);
+                return Promise.resolve();
             }
 
             if (hasLocalStorage) {
@@ -133,8 +151,18 @@ export const ProjectManagerProvider: React.FC<{
 
             return Promise.resolve();
         },
-        [isTauri, hasLocalStorage]
+        [isTauri, hasLocalStorage, flushPendingSnapshot]
     );
+
+    useEffect(() => {
+        return () => {
+            if (flushTimeoutRef.current) {
+                clearTimeout(flushTimeoutRef.current);
+                flushTimeoutRef.current = null;
+            }
+            flushPendingSnapshot();
+        };
+    }, [flushPendingSnapshot]);
 
     useEffect(() => {
         let cancelled = false;
