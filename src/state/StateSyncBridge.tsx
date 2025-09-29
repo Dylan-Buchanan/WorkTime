@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "./AppStateContext";
 import { usePM } from "./ProjectManagerContext";
@@ -16,6 +16,8 @@ export const StateSyncBridge: React.FC = () => {
         updateTask,
         ensureMetadataForAppTask,
     } = usePM();
+
+    const pendingTargetsRef = useRef<Record<string, number>>({});
 
     // Ensure every backend task has corresponding PM metadata entry.
     useEffect(() => {
@@ -105,7 +107,23 @@ export const StateSyncBridge: React.FC = () => {
                 patch.timeSpentMinutes = minutes;
                 touchedProgress = true;
             }
-            if (pmTask.estimatePomos !== backendTask.target_pomodoros) {
+            const pendingTarget = pmTask.appTaskId
+                ? pendingTargetsRef.current[pmTask.appTaskId]
+                : undefined;
+            const shouldSkipEstimateUpdate =
+                pendingTarget !== undefined &&
+                backendTask.target_pomodoros !== pendingTarget;
+            if (
+                pendingTarget !== undefined &&
+                backendTask.target_pomodoros === pendingTarget &&
+                pmTask.appTaskId
+            ) {
+                delete pendingTargetsRef.current[pmTask.appTaskId];
+            }
+            if (
+                !shouldSkipEstimateUpdate &&
+                pmTask.estimatePomos !== backendTask.target_pomodoros
+            ) {
                 patch.estimatePomos = backendTask.target_pomodoros;
             }
             if (touchedProgress) {
@@ -151,6 +169,9 @@ export const StateSyncBridge: React.FC = () => {
                     updateTask(pmTask.id, { estimatePomos: desired });
                 }
                 if (desired !== current) {
+                    if (pmTask.appTaskId) {
+                        pendingTargetsRef.current[pmTask.appTaskId] = desired;
+                    }
                     try {
                         await invoke("set_task_target", {
                             task_id: pmTask.appTaskId,
@@ -161,6 +182,13 @@ export const StateSyncBridge: React.FC = () => {
                         await refresh();
                     } catch (err) {
                         console.warn("Failed to push estimate to backend", err);
+                        if (pmTask.appTaskId) {
+                            const pendingTarget =
+                                pendingTargetsRef.current[pmTask.appTaskId];
+                            if (pendingTarget === desired) {
+                                delete pendingTargetsRef.current[pmTask.appTaskId];
+                            }
+                        }
                     }
                 }
             }
