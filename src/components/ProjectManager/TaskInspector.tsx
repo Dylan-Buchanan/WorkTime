@@ -19,6 +19,11 @@ export const TaskInspector: React.FC = () => {
         );
     const minEstimate = Math.max(1, Math.ceil(task.workedPomos || 0));
 
+    const [estimateDraft, setEstimateDraft] = React.useState<string>(() => String(task.estimatePomos ?? minEstimate));
+    React.useEffect(() => {
+        setEstimateDraft(String(task.estimatePomos ?? minEstimate));
+    }, [task.id, task.estimatePomos, minEstimate]);
+
     return (
         <div className="flex flex-col h-full text-xs">
             <div className="p-3 border-b border-neutral-800 space-y-2">
@@ -133,13 +138,11 @@ export const TaskInspector: React.FC = () => {
                                 type="number"
                                 min={minEstimate}
                                 step={1}
-                                value={task.estimatePomos ?? minEstimate}
+                                value={estimateDraft}
                                 onChange={(e) => {
                                     const raw = e.target.value;
-                                    if (!raw) {
-                                        if (task.estimatePomos !== minEstimate) {
-                                            updateTask(task.id, { estimatePomos: minEstimate });
-                                        }
+                                    setEstimateDraft(raw);
+                                    if (!raw.trim()) {
                                         return;
                                     }
                                     const parsed = Number(raw);
@@ -150,6 +153,38 @@ export const TaskInspector: React.FC = () => {
                                     }
                                     if (next !== task.estimatePomos) {
                                         updateTask(task.id, { estimatePomos: next });
+                                    }
+                                }}
+                                onBlur={() => {
+                                    const raw = estimateDraft.trim();
+                                    if (!raw) {
+                                        const fallback = String(minEstimate);
+                                        setEstimateDraft(fallback);
+                                        if ((task.estimatePomos ?? minEstimate) !== minEstimate) {
+                                            updateTask(task.id, { estimatePomos: minEstimate });
+                                        }
+                                        return;
+                                    }
+                                    const parsed = Number(raw);
+                                    if (!Number.isFinite(parsed)) {
+                                        setEstimateDraft(String(task.estimatePomos ?? minEstimate));
+                                        return;
+                                    }
+                                    let next = Math.round(parsed);
+                                    if (next < minEstimate) {
+                                        next = minEstimate;
+                                    }
+                                    const nextString = String(next);
+                                    if (estimateDraft !== nextString) {
+                                        setEstimateDraft(nextString);
+                                    }
+                                    if (next !== task.estimatePomos) {
+                                        updateTask(task.id, { estimatePomos: next });
+                                    }
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                        e.currentTarget.blur();
                                     }
                                 }}
                                 className="w-16 bg-neutral-900"
