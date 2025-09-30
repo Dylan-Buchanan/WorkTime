@@ -11,22 +11,22 @@ export const TaskInspector: React.FC = () => {
     const navigate = useNavigate();
     const id = state.ui.selectedTaskId;
     const task = id ? state.tasks[id] : null;
-    if (!task)
-        return (
-            <div className="h-full flex items-center justify-center text-xs opacity-60">
-                Select a task
-            </div>
-        );
-    const minEstimate = Math.max(1, Math.ceil(task.workedPomos || 0));
-
-    const [estimateDraft, setEstimateDraft] = React.useState<string>(() =>
-        String(task.estimatePomos ?? minEstimate)
+    const minEstimate = React.useMemo(
+        () => Math.max(1, Math.ceil(task?.workedPomos || 0)),
+        [task?.workedPomos]
     );
+
+    const [estimateDraft, setEstimateDraft] = React.useState<string>("");
     React.useEffect(() => {
+        if (!task) {
+            setEstimateDraft("");
+            return;
+        }
         setEstimateDraft(String(task.estimatePomos ?? minEstimate));
-    }, [task.id, task.estimatePomos, minEstimate]);
+    }, [task?.id, task?.estimatePomos, minEstimate, task]);
 
     const commitEstimateDraft = React.useCallback(() => {
+        if (!task) return;
         const raw = estimateDraft.trim();
         if (!raw) {
             const fallback = String(minEstimate);
@@ -54,7 +54,14 @@ export const TaskInspector: React.FC = () => {
         if (next !== task.estimatePomos) {
             updateTask(task.id, { estimatePomos: next });
         }
-    }, [estimateDraft, minEstimate, task.id, task.estimatePomos, updateTask]);
+    }, [estimateDraft, minEstimate, task, updateTask]);
+
+    if (!task)
+        return (
+            <div className="h-full flex items-center justify-center text-xs opacity-60">
+                Select a task
+            </div>
+        );
 
     const formatMetaDate = React.useCallback((value?: string) => {
         if (!value) return "Unknown";
