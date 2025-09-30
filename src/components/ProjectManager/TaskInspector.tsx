@@ -19,10 +19,54 @@ export const TaskInspector: React.FC = () => {
         );
     const minEstimate = Math.max(1, Math.ceil(task.workedPomos || 0));
 
-    const [estimateDraft, setEstimateDraft] = React.useState<string>(() => String(task.estimatePomos ?? minEstimate));
+    const [estimateDraft, setEstimateDraft] = React.useState<string>(() =>
+        String(task.estimatePomos ?? minEstimate)
+    );
     React.useEffect(() => {
         setEstimateDraft(String(task.estimatePomos ?? minEstimate));
     }, [task.id, task.estimatePomos, minEstimate]);
+
+    const commitEstimateDraft = React.useCallback(() => {
+        const raw = estimateDraft.trim();
+        if (!raw) {
+            const fallback = String(minEstimate);
+            setEstimateDraft(fallback);
+            if ((task.estimatePomos ?? minEstimate) !== minEstimate) {
+                updateTask(task.id, { estimatePomos: minEstimate });
+            }
+            return;
+        }
+
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) {
+            setEstimateDraft(String(task.estimatePomos ?? minEstimate));
+            return;
+        }
+
+        let next = Math.round(parsed);
+        if (next < minEstimate) {
+            next = minEstimate;
+        }
+        const nextString = String(next);
+        if (estimateDraft !== nextString) {
+            setEstimateDraft(nextString);
+        }
+        if (next !== task.estimatePomos) {
+            updateTask(task.id, { estimatePomos: next });
+        }
+    }, [estimateDraft, minEstimate, task.id, task.estimatePomos, updateTask]);
+
+    const formatMetaDate = React.useCallback((value?: string) => {
+        if (!value) return "Unknown";
+        if (value.length >= 10) {
+            return value.slice(0, 10);
+        }
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+            return "Unknown";
+        }
+        return parsed.toISOString().slice(0, 10);
+    }, []);
 
     return (
         <div className="flex flex-col h-full text-xs">
@@ -140,50 +184,15 @@ export const TaskInspector: React.FC = () => {
                                 step={1}
                                 value={estimateDraft}
                                 onChange={(e) => {
-                                    const raw = e.target.value;
-                                    setEstimateDraft(raw);
-                                    if (!raw.trim()) {
-                                        return;
-                                    }
-                                    const parsed = Number(raw);
-                                    if (!Number.isFinite(parsed)) return;
-                                    let next = Math.round(parsed);
-                                    if (next < minEstimate) {
-                                        next = minEstimate;
-                                    }
-                                    if (next !== task.estimatePomos) {
-                                        updateTask(task.id, { estimatePomos: next });
-                                    }
+                                    setEstimateDraft(e.target.value);
                                 }}
                                 onBlur={() => {
-                                    const raw = estimateDraft.trim();
-                                    if (!raw) {
-                                        const fallback = String(minEstimate);
-                                        setEstimateDraft(fallback);
-                                        if ((task.estimatePomos ?? minEstimate) !== minEstimate) {
-                                            updateTask(task.id, { estimatePomos: minEstimate });
-                                        }
-                                        return;
-                                    }
-                                    const parsed = Number(raw);
-                                    if (!Number.isFinite(parsed)) {
-                                        setEstimateDraft(String(task.estimatePomos ?? minEstimate));
-                                        return;
-                                    }
-                                    let next = Math.round(parsed);
-                                    if (next < minEstimate) {
-                                        next = minEstimate;
-                                    }
-                                    const nextString = String(next);
-                                    if (estimateDraft !== nextString) {
-                                        setEstimateDraft(nextString);
-                                    }
-                                    if (next !== task.estimatePomos) {
-                                        updateTask(task.id, { estimatePomos: next });
-                                    }
+                                    commitEstimateDraft();
                                 }}
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        commitEstimateDraft();
                                         e.currentTarget.blur();
                                     }
                                 }}
@@ -274,10 +283,10 @@ export const TaskInspector: React.FC = () => {
             </div>
             <div className="p-3 border-t border-neutral-800 text-[10px] flex flex-wrap gap-2 items-center">
                 <div className="opacity-60">
-                    Created {task.createdAt.slice(0, 10)}
+                    Created {formatMetaDate(task.createdAt)}
                 </div>
                 <div className="opacity-60">
-                    Updated {task.updatedAt.slice(0, 10)}
+                    Updated {formatMetaDate(task.updatedAt)}
                 </div>
                 <button
                     onClick={() =>
