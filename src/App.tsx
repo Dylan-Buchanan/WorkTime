@@ -3,19 +3,14 @@ import "./App.css";
 import { TaskPanel } from "./components/TaskPanel";
 import { TimerPanel } from "./components/TimerPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
-import {
-    BrowserRouter,
-    Routes,
-    Route,
-    Link,
-    useLocation,
-} from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import { useSounds } from "./hooks/useSounds";
 import { ProjectManagerProvider } from "./state/ProjectManagerContext";
 import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPage";
 import { AppStateProvider } from "./state/AppStateContext";
 import AnalyticsPage from "./components/AnalyticsPage";
 import StateSyncBridge from "./state/StateSyncBridge";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 const App: React.FC = () => {
     return (
@@ -30,12 +25,13 @@ const App: React.FC = () => {
                                 <Route path="/" element={<MainLayout />} />
                                 <Route
                                     path="/projects"
-                                    element={<ProjectManagerPage />}
+                                    element={
+                                        <ErrorBoundary>
+                                            <ProjectManagerPage />
+                                        </ErrorBoundary>
+                                    }
                                 />
-                                <Route
-                                    path="/analytics"
-                                    element={<AnalyticsPage />}
-                                />
+                                <Route path="/analytics" element={<AnalyticsPage />} />
                             </Routes>
                         </div>
                     </div>
@@ -49,39 +45,19 @@ const TopNav: React.FC = () => {
     const { play } = useSounds();
     const loc = useLocation();
     const base = "px-2 py-1 rounded transition-colors";
-    const linkClass = (active: boolean) =>
-        `${base} ${
-            active
-                ? "bg-neutral-800 text-neutral-100"
-                : "hover:bg-neutral-800/60"
-        }`;
+    const linkClass = (active: boolean) => `${base} ${active ? "bg-neutral-800 text-neutral-100" : "hover:bg-neutral-800/60"}`;
     const handleClick = (to: string) => {
         if (loc.pathname !== to) play("pressSide");
     };
     return (
         <div className="flex gap-2 px-3 py-2 border-b border-neutral-800 text-[11px] bg-neutral-950/70 backdrop-blur">
-            <Link
-                to="/"
-                onClick={() => handleClick("/")}
-                onMouseEnter={() => play("hover")}
-                className={linkClass(loc.pathname === "/")}
-            >
+            <Link to="/" onClick={() => handleClick("/")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname === "/")}>
                 Timer
             </Link>
-            <Link
-                to="/projects"
-                onClick={() => handleClick("/projects")}
-                onMouseEnter={() => play("hover")}
-                className={linkClass(loc.pathname.startsWith("/projects"))}
-            >
+            <Link to="/projects" onClick={() => handleClick("/projects")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/projects"))}>
                 Projects
             </Link>
-            <Link
-                to="/analytics"
-                onClick={() => handleClick("/analytics")}
-                onMouseEnter={() => play("hover")}
-                className={linkClass(loc.pathname.startsWith("/analytics"))}
-            >
+            <Link to="/analytics" onClick={() => handleClick("/analytics")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/analytics"))}>
                 Analytics
             </Link>
         </div>

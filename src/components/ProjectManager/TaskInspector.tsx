@@ -11,10 +11,12 @@ export const TaskInspector: React.FC = () => {
     const navigate = useNavigate();
     const id = state.ui.selectedTaskId;
     const task = id ? state.tasks[id] : null;
-    const minEstimate = React.useMemo(
-        () => Math.max(1, Math.ceil(task?.workedPomos || 0)),
-        [task?.workedPomos]
-    );
+    const minEstimate = React.useMemo(() => {
+        const worked = Number(task?.workedPomos);
+        const safeWorked = Number.isFinite(worked) && worked >= 0 ? worked : 0;
+        const min = Math.max(1, Math.ceil(safeWorked));
+        return Number.isFinite(min) ? min : 1;
+    }, [task?.workedPomos]);
 
     const [estimateDraft, setEstimateDraft] = React.useState<string>("");
     React.useEffect(() => {
@@ -22,7 +24,10 @@ export const TaskInspector: React.FC = () => {
             setEstimateDraft("");
             return;
         }
-        setEstimateDraft(String(task.estimatePomos ?? minEstimate));
+        const estRaw = (task as any).estimatePomos;
+        const estNum = Number(estRaw);
+        const estValid = Number.isFinite(estNum) && estNum > 0;
+        setEstimateDraft(String(estValid ? estNum : minEstimate));
     }, [task?.id, task?.estimatePomos, minEstimate, task]);
 
     const commitEstimateDraft = React.useCallback(() => {
@@ -56,12 +61,7 @@ export const TaskInspector: React.FC = () => {
         }
     }, [estimateDraft, minEstimate, task, updateTask]);
 
-    if (!task)
-        return (
-            <div className="h-full flex items-center justify-center text-xs opacity-60">
-                Select a task
-            </div>
-        );
+    if (!task) return <div className="h-full flex items-center justify-center text-xs opacity-60">Select a task</div>;
 
     const formatMetaDate = React.useCallback((value?: string) => {
         if (!value) return "Unknown";
@@ -78,18 +78,9 @@ export const TaskInspector: React.FC = () => {
     return (
         <div className="flex flex-col h-full text-xs">
             <div className="p-3 border-b border-neutral-800 space-y-2">
-                <InlineEditable
-                    value={task.title}
-                    onChange={(v) => updateTask(task.id, { title: v })}
-                    className="text-sm font-medium"
-                />
+                <InlineEditable value={task.title} onChange={(v) => updateTask(task.id, { title: v })} className="text-sm font-medium" />
                 <div className="flex items-center gap-2 flex-wrap">
-                    <Select
-                        value={task.projectId || ""}
-                        onValueChange={(v) =>
-                            updateTask(task.id, { projectId: v || null })
-                        }
-                    >
+                    <Select value={task.projectId || ""} onValueChange={(v) => updateTask(task.id, { projectId: v || null })}>
                         <option value="">No Project</option>
                         {Object.values(state.projects)
                             .filter((p) => !p.isArchived)
@@ -99,28 +90,12 @@ export const TaskInspector: React.FC = () => {
                                 </option>
                             ))}
                     </Select>
-                    <Select
-                        value={task.status}
-                        onValueChange={(v) =>
-                            updateTask(task.id, { status: v as TaskStatus })
-                        }
-                    >
-                        {[
-                            "Backlog",
-                            "Next",
-                            "In Progress",
-                            "Blocked",
-                            "Done",
-                        ].map((s) => (
+                    <Select value={task.status} onValueChange={(v) => updateTask(task.id, { status: v as TaskStatus })}>
+                        {["Backlog", "Next", "In Progress", "Blocked", "Done"].map((s) => (
                             <option key={s}>{s}</option>
                         ))}
                     </Select>
-                    <Select
-                        value={task.priority}
-                        onValueChange={(v) =>
-                            updateTask(task.id, { priority: v as TaskPriority })
-                        }
-                    >
+                    <Select value={task.priority} onValueChange={(v) => updateTask(task.id, { priority: v as TaskPriority })}>
                         {["Low", "Medium", "High"].map((s) => (
                             <option key={s}>{s}</option>
                         ))}
@@ -147,9 +122,7 @@ export const TaskInspector: React.FC = () => {
                             className="text-[10px] underline"
                             onClick={() =>
                                 updateTask(task.id, {
-                                    dueDate: new Date()
-                                        .toISOString()
-                                        .slice(0, 10),
+                                    dueDate: new Date().toISOString().slice(0, 10),
                                 })
                             }
                         >
@@ -187,7 +160,7 @@ export const TaskInspector: React.FC = () => {
                             Est{" "}
                             <input
                                 type="number"
-                                min={minEstimate}
+                                min={Number.isFinite(minEstimate) ? minEstimate : 1}
                                 step={1}
                                 value={estimateDraft}
                                 onChange={(e) => {
@@ -207,9 +180,7 @@ export const TaskInspector: React.FC = () => {
                             />
                             p
                         </label>
-                        <div className="opacity-70">
-                            Spent {task.timeSpentMinutes}m
-                        </div>
+                        <div className="opacity-70">Spent {task.timeSpentMinutes}m</div>
                         <button
                             className="text-[10px] px-2 py-1 rounded bg-neutral-800"
                             onClick={async () => {
@@ -218,19 +189,13 @@ export const TaskInspector: React.FC = () => {
                                 if (!appId) {
                                     const est = task.estimatePomos || 1;
                                     try {
-                                        const created = await app.createTask(
-                                            task.title || "Untitled",
-                                            est
-                                        );
+                                        const created = await app.createTask(task.title || "Untitled", est);
                                         appId = created.id;
                                         updateTask(task.id, {
                                             appTaskId: created.id,
                                         });
                                     } catch (err) {
-                                        console.error(
-                                            "Failed to create timer task",
-                                            err
-                                        );
+                                        console.error("Failed to create timer task", err);
                                         return;
                                     }
                                 } else {
@@ -243,21 +208,18 @@ export const TaskInspector: React.FC = () => {
                             Start
                         </button>
                     </div>
-                    {task.estimatePomos && (
+                    {Number.isFinite(Number(task.estimatePomos)) && (
                         <div className="h-1 bg-neutral-800 rounded overflow-hidden mt-1">
                             <div
                                 className="h-full bg-neutral-400"
                                 style={{
-                                    width:
-                                        Math.min(
-                                            100,
-                                            Math.round(
-                                                (task.timeSpentMinutes /
-                                                    ((task.estimatePomos || 1) *
-                                                        25)) *
-                                                    100
-                                            )
-                                        ) + "%",
+                                    width: (() => {
+                                        const spent = Number(task.timeSpentMinutes) || 0;
+                                        const est = Number(task.estimatePomos);
+                                        const estSafe = Number.isFinite(est) && est > 0 ? est : 1;
+                                        const pct = Math.round((spent / (estSafe * 25)) * 100);
+                                        return Math.min(100, Math.max(0, pct)) + "%";
+                                    })(),
                                 }}
                             />
                         </div>
@@ -266,41 +228,21 @@ export const TaskInspector: React.FC = () => {
                 <Section title="Details">
                     <textarea
                         value={task.description || ""}
-                        onChange={(e) =>
-                            updateTask(task.id, { description: e.target.value })
-                        }
+                        onChange={(e) => updateTask(task.id, { description: e.target.value })}
                         placeholder="Markdown notes"
                         className="w-full h-28 bg-neutral-900 rounded p-2 text-xs"
                     />
-                    <TagEditor
-                        tags={task.tags}
-                        onChange={(tags) => updateTask(task.id, { tags })}
-                    />
-                    <LinksEditor
-                        links={task.links}
-                        onChange={(links) => updateTask(task.id, { links })}
-                    />
+                    <TagEditor tags={task.tags} onChange={(tags) => updateTask(task.id, { tags })} />
+                    <LinksEditor links={task.links} onChange={(links) => updateTask(task.id, { links })} />
                 </Section>
                 <Section title="Checklist">
-                    <Checklist
-                        task={task}
-                        update={(patch) => updateTask(task.id, patch)}
-                    />
+                    <Checklist task={task} update={(patch) => updateTask(task.id, patch)} />
                 </Section>
             </div>
             <div className="p-3 border-t border-neutral-800 text-[10px] flex flex-wrap gap-2 items-center">
-                <div className="opacity-60">
-                    Created {formatMetaDate(task.createdAt)}
-                </div>
-                <div className="opacity-60">
-                    Updated {formatMetaDate(task.updatedAt)}
-                </div>
-                <button
-                    onClick={() =>
-                        updateTask(task.id, { isArchived: !task.isArchived })
-                    }
-                    className="ml-auto underline"
-                >
+                <div className="opacity-60">Created {formatMetaDate(task.createdAt)}</div>
+                <div className="opacity-60">Updated {formatMetaDate(task.updatedAt)}</div>
+                <button onClick={() => updateTask(task.id, { isArchived: !task.isArchived })} className="ml-auto underline">
                     {task.isArchived ? "Unarchive" : "Archive"} Task
                 </button>
             </div>
@@ -308,30 +250,18 @@ export const TaskInspector: React.FC = () => {
     );
 };
 
-const Section: React.FC<{ title: string; children: React.ReactNode }> = ({
-    title,
-    children,
-}) => (
+const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
     <div className="space-y-2">
-        <div className="text-[10px] uppercase tracking-wide opacity-60">
-            {title}
-        </div>
+        <div className="text-[10px] uppercase tracking-wide opacity-60">{title}</div>
         {children}
     </div>
 );
 
-interface MiniSelectProps
-    extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "onChange"> {
+interface MiniSelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "onChange"> {
     onValueChange?: (v: string) => void;
 }
 const Select: React.FC<MiniSelectProps> = ({ onValueChange, ...rest }) => (
-    <select
-        {...rest}
-        onChange={(e) => onValueChange?.(e.target.value)}
-        className={`bg-neutral-900 rounded px-2 py-1 text-[10px] outline-none ${
-            rest.className || ""
-        }`}
-    >
+    <select {...rest} onChange={(e) => onValueChange?.(e.target.value)} className={`bg-neutral-900 rounded px-2 py-1 text-[10px] outline-none ${rest.className || ""}`}>
         {rest.children}
     </select>
 );
@@ -354,9 +284,7 @@ const InlineEditable: React.FC<{
                 }}
                 value={local}
                 onChange={(e) => setLocal(e.target.value)}
-                className={`bg-neutral-900 rounded px-2 py-1 text-xs w-full ${
-                    className || ""
-                }`}
+                className={`bg-neutral-900 rounded px-2 py-1 text-xs w-full ${className || ""}`}
             />
         );
     return (
@@ -380,18 +308,8 @@ const TagEditor: React.FC<{
         <div className="space-y-1">
             <div className="flex flex-wrap gap-1">
                 {tags.map((t) => (
-                    <span
-                        key={t}
-                        className="px-2 py-0.5 bg-neutral-800 rounded-full text-[10px]"
-                    >
-                        {t}{" "}
-                        <button
-                            onClick={() =>
-                                onChange(tags.filter((x) => x !== t))
-                            }
-                        >
-                            ×
-                        </button>
+                    <span key={t} className="px-2 py-0.5 bg-neutral-800 rounded-full text-[10px]">
+                        {t} <button onClick={() => onChange(tags.filter((x) => x !== t))}>×</button>
                     </span>
                 ))}
             </div>
@@ -408,10 +326,7 @@ const TagEditor: React.FC<{
                         }
                     }}
                 />
-                <button
-                    onClick={add}
-                    className="text-[10px] px-2 py-1 rounded bg-neutral-800"
-                >
+                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
                     Add
                 </button>
             </div>
@@ -433,25 +348,11 @@ const LinksEditor: React.FC<{
         <div className="space-y-1">
             <div className="space-y-1">
                 {links.map((l, i) => (
-                    <div
-                        key={i}
-                        className="flex items-center gap-2 text-[10px] bg-neutral-900 px-2 py-1 rounded"
-                    >
-                        <a
-                            href={l}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline truncate flex-1"
-                        >
+                    <div key={i} className="flex items-center gap-2 text-[10px] bg-neutral-900 px-2 py-1 rounded">
+                        <a href={l} target="_blank" rel="noreferrer" className="underline truncate flex-1">
                             {l}
                         </a>
-                        <button
-                            onClick={() =>
-                                onChange(links.filter((x) => x !== l))
-                            }
-                        >
-                            ×
-                        </button>
+                        <button onClick={() => onChange(links.filter((x) => x !== l))}>×</button>
                     </div>
                 ))}
             </div>
@@ -468,10 +369,7 @@ const LinksEditor: React.FC<{
                         }
                     }}
                 />
-                <button
-                    onClick={add}
-                    className="text-[10px] px-2 py-1 rounded bg-neutral-800"
-                >
+                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
                     Add
                 </button>
             </div>
@@ -487,47 +385,28 @@ const Checklist: React.FC<{
         const title = prompt("Subtask title");
         if (!title) return;
         update({
-            checklist: [
-                ...task.checklist,
-                { id: crypto.randomUUID(), title, done: false },
-            ],
+            checklist: [...task.checklist, { id: crypto.randomUUID(), title, done: false }],
         });
     };
     return (
         <div className="space-y-2">
             <div className="space-y-1">
                 {task.checklist.map((item) => (
-                    <label
-                        key={item.id}
-                        className="flex items-center gap-2 text-[11px] bg-neutral-900 px-2 py-1 rounded"
-                    >
+                    <label key={item.id} className="flex items-center gap-2 text-[11px] bg-neutral-900 px-2 py-1 rounded">
                         <input
                             type="checkbox"
                             checked={item.done}
                             onChange={() =>
                                 update({
-                                    checklist: task.checklist.map((c) =>
-                                        c.id === item.id
-                                            ? { ...c, done: !c.done }
-                                            : c
-                                    ),
+                                    checklist: task.checklist.map((c) => (c.id === item.id ? { ...c, done: !c.done } : c)),
                                 })
                             }
                         />
-                        <span
-                            className={
-                                item.done ? "line-through opacity-60" : ""
-                            }
-                        >
-                            {item.title}
-                        </span>
+                        <span className={item.done ? "line-through opacity-60" : ""}>{item.title}</span>
                     </label>
                 ))}
             </div>
-            <button
-                onClick={add}
-                className="text-[10px] px-2 py-1 rounded bg-neutral-800"
-            >
+            <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
                 Add Item
             </button>
         </div>

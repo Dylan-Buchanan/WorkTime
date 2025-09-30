@@ -4,9 +4,7 @@ import { PMTask } from "../../state/types";
 // import { TaskRowSkeleton } from "./Skeletons";
 import { EmptyState } from "./EmptyState";
 
-export const TasksListView: React.FC<{ filter?: string }> = ({
-    filter = "",
-}) => {
+export const TasksListView: React.FC<{ filter?: string }> = ({ filter = "" }) => {
     const { state, updateTask, setSelectedTask } = usePM();
     const tasks = Object.values(state.tasks).filter((t) => !t.isArchived);
     const search = state.ui.search.toLowerCase();
@@ -15,9 +13,7 @@ export const TasksListView: React.FC<{ filter?: string }> = ({
         (t) =>
             (!search || t.title.toLowerCase().includes(search)) &&
             (!fLower || t.title.toLowerCase().includes(fLower)) &&
-            (state.ui.selectedProjectIds.length === 0 ||
-                (t.projectId &&
-                    state.ui.selectedProjectIds.includes(t.projectId)))
+            (state.ui.selectedProjectIds.length === 0 || (t.projectId && state.ui.selectedProjectIds.includes(t.projectId)))
     );
     if (filtered.length === 0)
         return (
@@ -41,13 +37,7 @@ export const TasksListView: React.FC<{ filter?: string }> = ({
     return (
         <div className="text-xs divide-y divide-neutral-800">
             {sorted.map((t) => (
-                <TaskRow
-                    key={t.id}
-                    task={t}
-                    onClick={() => setSelectedTask(t.id)}
-                    onUpdate={(p) => updateTask(t.id, p)}
-                    selected={state.ui.selectedTaskId === t.id}
-                />
+                <TaskRow key={t.id} task={t} onClick={() => setSelectedTask(t.id)} onUpdate={(p) => updateTask(t.id, p)} selected={state.ui.selectedTaskId === t.id} />
             ))}
         </div>
     );
@@ -63,50 +53,27 @@ const TaskRow: React.FC<{
     return (
         <div
             onClick={onClick}
-            className={`px-3 py-2 grid items-center gap-2 cursor-pointer hover:bg-neutral-800 ${
-                selected ? "bg-neutral-800" : ""
-            }`}
+            className={`px-3 py-2 grid items-center gap-2 cursor-pointer hover:bg-neutral-800 ${selected ? "bg-neutral-800" : ""}`}
             style={{ gridTemplateColumns: "16px 1fr auto auto auto auto" }}
         >
             <input
                 type="checkbox"
                 className="w-4 h-4"
                 checked={task.status === "Done"}
-                onChange={(e) =>
-                    onUpdate({ status: e.target.checked ? "Done" : "Backlog" })
-                }
+                onChange={(e) => onUpdate({ status: e.target.checked ? "Done" : "Backlog" })}
                 onClick={(e) => e.stopPropagation()}
             />
-            <InlineEditable
-                value={task.title}
-                onChange={(v) => onUpdate({ title: v })}
-                className="truncate pr-2"
-            />
-            <StatusChip
-                status={task.status}
-                onChange={(s) => onUpdate({ status: s })}
-            />
-            <PriorityChip
-                priority={task.priority}
-                onChange={(p) => onUpdate({ priority: p })}
-            />
-            <div
-                className={`text-[10px] px-2 py-0.5 rounded ${
-                    overdue
-                        ? "bg-red-600/30 text-red-300"
-                        : "bg-neutral-700/40 text-neutral-400"
-                }`}
-            >
-                {task.dueDate?.slice(5) || "--"}
-            </div>
+            <InlineEditable value={task.title} onChange={(v) => onUpdate({ title: v })} className="truncate pr-2" />
+            <StatusChip status={task.status} onChange={(s) => onUpdate({ status: s })} />
+            <PriorityChip priority={task.priority} onChange={(p) => onUpdate({ priority: p })} />
+            <div className={`text-[10px] px-2 py-0.5 rounded ${overdue ? "bg-red-600/30 text-red-300" : "bg-neutral-700/40 text-neutral-400"}`}>{task.dueDate?.slice(5) || "--"}</div>
             <div className="text-[10px] text-neutral-500 flex flex-col items-end leading-tight">
                 <span>
-                    {(task.timeSpentMinutes || 0).toFixed(1)}m
-                    {task.estimatePomos && (
+                    {Number(task.timeSpentMinutes || 0).toFixed(1)}m
+                    {Number.isFinite(Number(task.estimatePomos)) && (
                         <>
                             {" "}
-                            · {(task.workedPomos || 0).toFixed(1)}p
-                            {"/" + task.estimatePomos + "p"}
+                            · {Number(task.workedPomos || 0).toFixed(1)}p{"/" + Number(task.estimatePomos) + "p"}
                         </>
                     )}
                 </span>
@@ -115,13 +82,7 @@ const TaskRow: React.FC<{
     );
 };
 
-const statuses: PMTask["status"][] = [
-    "Backlog",
-    "Next",
-    "In Progress",
-    "Blocked",
-    "Done",
-];
+const statuses: PMTask["status"][] = ["Backlog", "Next", "In Progress", "Blocked", "Done"];
 const priorities: PMTask["priority"][] = ["Low", "Medium", "High"];
 
 const StatusChip: React.FC<{
@@ -129,11 +90,7 @@ const StatusChip: React.FC<{
     onChange: (s: PMTask["status"]) => void;
 }> = ({ status, onChange }) => {
     return (
-        <select
-            value={status}
-            onChange={(e) => onChange(e.target.value as PMTask["status"])}
-            className="bg-neutral-900 text-[10px] rounded px-2 py-1 outline-none"
-        >
+        <select value={status} onChange={(e) => onChange(e.target.value as PMTask["status"])} className="bg-neutral-900 text-[10px] rounded px-2 py-1 outline-none">
             {statuses.map((s) => (
                 <option key={s}>{s}</option>
             ))}
@@ -145,11 +102,7 @@ const PriorityChip: React.FC<{
     onChange: (p: PMTask["priority"]) => void;
 }> = ({ priority, onChange }) => {
     return (
-        <select
-            value={priority}
-            onChange={(e) => onChange(e.target.value as PMTask["priority"])}
-            className="bg-neutral-900 text-[10px] rounded px-2 py-1 outline-none"
-        >
+        <select value={priority} onChange={(e) => onChange(e.target.value as PMTask["priority"])} className="bg-neutral-900 text-[10px] rounded px-2 py-1 outline-none">
             {priorities.map((s) => (
                 <option key={s}>{s}</option>
             ))}
@@ -175,9 +128,7 @@ const InlineEditable: React.FC<{
                 }}
                 value={local}
                 onChange={(e) => setLocal(e.target.value)}
-                className={`bg-neutral-900 rounded px-1 py-0.5 text-xs w-full ${
-                    className || ""
-                }`}
+                className={`bg-neutral-900 rounded px-1 py-0.5 text-xs w-full ${className || ""}`}
             />
         );
     return (

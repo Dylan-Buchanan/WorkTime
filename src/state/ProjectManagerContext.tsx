@@ -382,8 +382,7 @@ export const ProjectManagerProvider: React.FC<{
         if (existing) {
             const patch: Partial<PMTask> = {
                 title,
-                estimatePomos:
-                    (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : created.target_pomodoros,
+                estimatePomos: (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : created.target_pomodoros,
                 appTaskId: created.id,
             };
             if (Object.prototype.hasOwnProperty.call(opts, "projectId")) {
@@ -679,8 +678,16 @@ function normalizeState(input?: ProjectManagerState | null): ProjectManagerState
                       done: Boolean(item.done),
                   }))
                 : [];
-            const sortOrder = typeof task.sortOrder === "number" && Number.isFinite(task.sortOrder) ? task.sortOrder : 0;
-            const timeSpentMinutes = typeof task.timeSpentMinutes === "number" && Number.isFinite(task.timeSpentMinutes) ? task.timeSpentMinutes : 0;
+            const sortOrder = Number.isFinite(Number((task as any).sortOrder)) ? Number((task as any).sortOrder) : 0;
+            const timeSpentMinutes = Number.isFinite(Number((task as any).timeSpentMinutes)) ? Number((task as any).timeSpentMinutes) : 0;
+            const workedPomos = Number.isFinite(Number((task as any).workedPomos)) ? Number((task as any).workedPomos) : 0;
+            const estimatePomos = ((): number | undefined => {
+                const raw = (task as any).estimatePomos;
+                const n = Number(raw);
+                if (!Number.isFinite(n)) return undefined;
+                const v = Math.max(1, Math.round(n));
+                return v;
+            })();
             const createdAt = typeof task.createdAt === "string" && task.createdAt.length > 0 ? task.createdAt : now();
             const updatedAt = typeof task.updatedAt === "string" && task.updatedAt.length > 0 ? task.updatedAt : createdAt;
 
@@ -695,6 +702,8 @@ function normalizeState(input?: ProjectManagerState | null): ProjectManagerState
                 sortOrder,
                 isArchived: Boolean(task.isArchived),
                 timeSpentMinutes,
+                workedPomos,
+                estimatePomos,
                 createdAt,
                 updatedAt,
             };

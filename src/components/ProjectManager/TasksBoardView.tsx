@@ -151,9 +151,9 @@ const TaskCard: React.FC<{
                         </div>
                     )}
                     <div className="mt-1 text-[10px] opacity-60 flex items-center gap-2">
-                        <span>{(task.timeSpentMinutes || 0).toFixed(1)}m</span>
+                        <span>{Number(task.timeSpentMinutes || 0).toFixed(1)}m</span>
                         <span>
-                            {(task.workedPomos || 0).toFixed(1)}p{task.estimatePomos && " / " + task.estimatePomos + "p"}
+                            {Number(task.workedPomos || 0).toFixed(1)}p{Number.isFinite(Number(task.estimatePomos)) && " / " + Number(task.estimatePomos) + "p"}
                         </span>
                     </div>
                 </div>
