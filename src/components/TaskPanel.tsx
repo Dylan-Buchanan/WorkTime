@@ -10,7 +10,7 @@ export const TaskPanel: React.FC = () => {
     const { state: pmState } = usePM();
     const { play } = useSounds();
     const [name, setName] = useState("");
-    const [target, setTarget] = useState(4);
+    const [targetInput, setTargetInput] = useState("4");
     const [sortOption, setSortOption] = useState<"default" | "project" | "priority" | "dueDate" | "estimateAsc" | "estimateDesc">("default");
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
@@ -152,6 +152,27 @@ export const TaskPanel: React.FC = () => {
         }));
     }, []);
 
+    const sanitizeTarget = (raw: string): number => {
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) {
+            return 1;
+        }
+        const rounded = Math.round(parsed);
+        return Math.max(1, rounded);
+    };
+
+    const commitTargetInput = (rawValue?: string) => {
+        const source = rawValue ?? targetInput;
+        const normalized = sanitizeTarget(source);
+        const normalizedString = String(normalized);
+        if (source !== normalizedString) {
+            setTargetInput(normalizedString);
+        } else if (rawValue !== undefined && rawValue !== targetInput) {
+            setTargetInput(rawValue);
+        }
+        return normalized;
+    };
+
     return (
         <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -178,9 +199,11 @@ export const TaskPanel: React.FC = () => {
                     e.preventDefault();
                     if (!name.trim()) return;
                     try {
-                        await createTask(name.trim(), target);
+                        const normalizedTarget = commitTargetInput(targetInput);
+                        await createTask(name.trim(), normalizedTarget);
                         play("pressSide");
                         setName("");
+                        setTargetInput(String(normalizedTarget));
                     } catch (err) {
                         console.error("Failed to create task", err);
                     }
@@ -196,8 +219,11 @@ export const TaskPanel: React.FC = () => {
                 <input
                     type="number"
                     min={1}
-                    value={target}
-                    onChange={(e) => setTarget(Number(e.target.value))}
+                    value={targetInput}
+                    onChange={(e) => setTargetInput(e.target.value)}
+                    onBlur={(e) => {
+                        commitTargetInput(e.target.value);
+                    }}
                     className="w-14 bg-neutral-800/60 border border-neutral-700 rounded px-1 py-1 text-[11px] text-center focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
                 <button type="submit" onMouseEnter={() => play("hover")} className="px-2 py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
