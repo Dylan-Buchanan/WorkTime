@@ -25,6 +25,31 @@ export const TaskPanel: React.FC = () => {
         return map;
     }, [pmState.tasks]);
 
+    // Fallback mapping by normalized title for unlinked tasks,
+    // so the panel reflects PM estimates even before linkage exists
+    const pmTasksByTitle = useMemo(() => {
+        const map: Record<string, PMTask> = {};
+        Object.values(pmState.tasks || {})
+            .filter((pm) => !pm.isArchived)
+            .forEach((pm) => {
+                const key = pm.title?.trim().toLowerCase();
+                if (!key) return;
+                // Prefer tasks with appTaskId linkage if duplicates exist; otherwise keep the first seen
+                const existing = map[key];
+                if (!existing) {
+                    map[key] = pm;
+                } else if (!existing.appTaskId && pm.appTaskId) {
+                    map[key] = pm;
+                } else if (!existing.appTaskId && !pm.appTaskId) {
+                    // If both unlinked, prefer the most recently updated
+                    const a = new Date(existing.updatedAt).getTime();
+                    const b = new Date(pm.updatedAt).getTime();
+                    if (b > a) map[key] = pm;
+                }
+            });
+        return map;
+    }, [pmState.tasks]);
+
     const PRIORITY_ORDER: Record<TaskPriority, number> = {
         High: 0,
         Medium: 1,
@@ -33,7 +58,7 @@ export const TaskPanel: React.FC = () => {
 
     const decoratedTasks = useMemo(() => {
         return tasks.map((task, index) => {
-            const pmTask = pmTasksByAppTaskId[task.id];
+            const pmTask = pmTasksByAppTaskId[task.id] || pmTasksByTitle[task.name?.trim().toLowerCase()];
             const project = pmTask?.projectId ? pmState.projects[pmTask.projectId] : undefined;
             const projectName = pmTask ? (pmTask.projectId ? project?.name || "Unknown project" : "No project") : "No project";
             const dueTimestamp = pmTask?.dueDate ? (Number.isNaN(Date.parse(pmTask.dueDate)) ? null : new Date(pmTask.dueDate).getTime()) : null;
@@ -56,7 +81,7 @@ export const TaskPanel: React.FC = () => {
                 groupLabel,
             };
         });
-    }, [tasks, pmTasksByAppTaskId, pmState.projects]);
+    }, [tasks, pmTasksByAppTaskId, pmTasksByTitle, pmState.projects]);
 
     const sortedTasks = useMemo(() => {
         if (sortOption === "default") return decoratedTasks;
@@ -259,9 +284,10 @@ export const TaskPanel: React.FC = () => {
                                         }
                                         tooltipParts.push(`Estimate: ${estimate} pomodoros`);
                                         const active = state?.active_task === t.id;
+                                        const renderKey = `${t.id}:${pmTask?.estimatePomos ?? ""}:${pmTask?.priority ?? ""}:${pmTask?.projectId ?? ""}:${pmTask?.dueDate ?? ""}`;
                                         return (
                                             <li
-                                                key={t.id}
+                                                key={renderKey}
                                                 title={tooltipParts.join("\n") || undefined}
                                                 onClick={() => {
                                                     setActiveTask(t.id);
@@ -272,7 +298,7 @@ export const TaskPanel: React.FC = () => {
                                                 }`}
                                             >
                                                 <span className="flex-1 truncate">
-                                                    {t.name} ({Math.round(t.completed_pomodoros * 10) / 10}/{t.target_pomodoros})
+                                                    {t.name} ({Math.round(t.completed_pomodoros * 10) / 10}/{pmTask?.estimatePomos ?? t.target_pomodoros})
                                                 </span>
                                                 {active && <span className="rounded bg-indigo-600 px-1.5 py-0.5 text-[9px] font-medium tracking-wide text-white">ACTIVE</span>}
                                                 {active && !t.completed_at && (

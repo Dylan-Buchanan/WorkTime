@@ -5,49 +5,43 @@ import { usePM } from "./ProjectManagerContext";
 import { TaskStatus, PMTask } from "./types";
 
 export const StateSyncBridge: React.FC = () => {
-    const {
-        state: appState,
-        refresh,
-        createTask: createAppTask,
-        setActiveTask,
-    } = useAppState();
-    const {
-        state: pmState,
-        updateTask,
-        ensureMetadataForAppTask,
-    } = usePM();
+    const { state: appState, refresh, createTask: createAppTask, setActiveTask } = useAppState();
+    const { state: pmState, updateTask, ensureMetadataForAppTask } = usePM();
+
+    // Keep a stable reference to updateTask for effects that should only react to app state changes.
+    const updateTaskRef = useRef(updateTask);
+    useEffect(() => {
+        updateTaskRef.current = updateTask;
+    }, [updateTask]);
 
     const pendingTargetsRef = useRef<Record<string, number>>({});
 
     // Ensure every backend task has corresponding PM metadata entry.
     useEffect(() => {
-        if (!appState || !pmState) return;
+        if (!appState) return;
         Object.values(appState.tasks).forEach((task) => {
+            const pending = pendingTargetsRef.current[task.id];
+            const includeEstimate = pending === undefined || pending === task.target_pomodoros;
             ensureMetadataForAppTask(task.id, {
                 title: task.name,
-                estimatePomos: task.target_pomodoros,
+                ...(includeEstimate ? { estimatePomos: task.target_pomodoros } : {}),
             });
         });
-    }, [appState, pmState, ensureMetadataForAppTask]);
+    }, [appState?.tasks, ensureMetadataForAppTask]);
 
     // Auto-create backend tasks for PM entries missing linkage (legacy data).
     useEffect(() => {
         if (!pmState || !appState) return;
-        const unlinked = Object.values(pmState.tasks).filter(
-            (t) => !t.isArchived && !t.appTaskId
-        );
+        const unlinked = Object.values(pmState.tasks).filter((t) => !t.isArchived && !t.appTaskId);
         if (unlinked.length === 0) return;
         let cancelled = false;
         (async () => {
             const activeBefore = appState.active_task;
             for (const pmTask of unlinked) {
                 try {
-                    const created = await createAppTask(
-                        pmTask.title || "Untitled",
-                        Math.max(1, pmTask.estimatePomos || 1)
-                    );
+                    const created = await createAppTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
                     if (cancelled) return;
-                    updateTask(pmTask.id, { appTaskId: created.id });
+                    updateTaskRef.current(pmTask.id, { appTaskId: created.id });
                     if (activeBefore && activeBefore !== created.id) {
                         try {
                             await setActiveTask(activeBefore);
@@ -71,12 +65,7 @@ export const StateSyncBridge: React.FC = () => {
         const active = appState.timer;
         let activeExtraPomos = 0;
         let activeTaskId: string | null = null;
-        if (
-            active &&
-            active.kind === "Work" &&
-            !active.paused &&
-            workMinutesSetting > 0
-        ) {
+        if (active && active.kind === "Work" && !active.paused && workMinutesSetting > 0) {
             const start = new Date(active.started_at).getTime();
             const end = new Date(active.ends_at).getTime();
             const now = Date.now();
@@ -94,9 +83,7 @@ export const StateSyncBridge: React.FC = () => {
                 worked += Math.min(1, activeExtraPomos);
             }
             const workedRounded = +worked.toFixed(2);
-            const minutes = +(
-                workedRounded * Math.max(workMinutesSetting, 0)
-            ).toFixed(2);
+            const minutes = +(workedRounded * Math.max(workMinutesSetting, 0)).toFixed(2);
             const patch: Partial<PMTask> = {};
             let touchedProgress = false;
             if (Math.abs((pmTask.workedPomos || 0) - workedRounded) > 0.01) {
@@ -107,39 +94,22 @@ export const StateSyncBridge: React.FC = () => {
                 patch.timeSpentMinutes = minutes;
                 touchedProgress = true;
             }
-            const pendingTarget = pmTask.appTaskId
-                ? pendingTargetsRef.current[pmTask.appTaskId]
-                : undefined;
-            const shouldSkipEstimateUpdate =
-                pendingTarget !== undefined &&
-                backendTask.target_pomodoros !== pendingTarget;
-            if (
-                pendingTarget !== undefined &&
-                backendTask.target_pomodoros === pendingTarget &&
-                pmTask.appTaskId
-            ) {
+            const pendingTarget = pmTask.appTaskId ? pendingTargetsRef.current[pmTask.appTaskId] : undefined;
+            const shouldSkipEstimateUpdate = pendingTarget !== undefined && backendTask.target_pomodoros !== pendingTarget;
+            if (pendingTarget !== undefined && backendTask.target_pomodoros === pendingTarget && pmTask.appTaskId) {
                 delete pendingTargetsRef.current[pmTask.appTaskId];
             }
-            if (
-                !shouldSkipEstimateUpdate &&
-                pmTask.estimatePomos !== backendTask.target_pomodoros
-            ) {
+            if (!shouldSkipEstimateUpdate && pmTask.estimatePomos !== backendTask.target_pomodoros) {
                 patch.estimatePomos = backendTask.target_pomodoros;
             }
             if (touchedProgress) {
                 patch.lastWorkedAt = new Date().toISOString();
             }
             if (Object.keys(patch).length > 0) {
-                updateTask(pmTask.id, patch);
+                updateTaskRef.current(pmTask.id, patch);
             }
         });
-    }, [
-        appState?.tasks,
-        appState?.timer,
-        appState?.settings.work_minutes,
-        pmState?.tasks,
-        updateTask,
-    ]);
+    }, [appState?.tasks, appState?.timer, appState?.settings.work_minutes]);
 
     // Propagate estimate changes from PM -> backend targets.
     useEffect(() => {
@@ -165,8 +135,9 @@ export const StateSyncBridge: React.FC = () => {
                 if (desired < minTarget) {
                     desired = minTarget;
                 }
-                if (desired !== pmTask.estimatePomos) {
-                    updateTask(pmTask.id, { estimatePomos: desired });
+                // Only normalize locally if the value actually violates constraints; otherwise leave user input intact
+                if (desired !== pmTask.estimatePomos && (pmTask.estimatePomos < minTarget || !Number.isFinite(pmTask.estimatePomos))) {
+                    updateTaskRef.current(pmTask.id, { estimatePomos: desired });
                 }
                 if (desired !== current) {
                     if (pmTask.appTaskId) {
@@ -183,8 +154,7 @@ export const StateSyncBridge: React.FC = () => {
                     } catch (err) {
                         console.warn("Failed to push estimate to backend", err);
                         if (pmTask.appTaskId) {
-                            const pendingTarget =
-                                pendingTargetsRef.current[pmTask.appTaskId];
+                            const pendingTarget = pendingTargetsRef.current[pmTask.appTaskId];
                             if (pendingTarget === desired) {
                                 delete pendingTargetsRef.current[pmTask.appTaskId];
                             }
@@ -206,7 +176,7 @@ export const StateSyncBridge: React.FC = () => {
             const backend = appState.tasks[pmTask.appTaskId];
             if (!backend) return;
             if (backend.completed_at && pmTask.status !== "Done") {
-                updateTask(pmTask.id, { status: "Done" as TaskStatus });
+                updateTaskRef.current(pmTask.id, { status: "Done" as TaskStatus });
             }
         });
     }, [pmState?.tasks, appState?.tasks, updateTask]);
@@ -219,11 +189,9 @@ export const StateSyncBridge: React.FC = () => {
         const appTask = appState.tasks[activeId];
         if (!appTask) return;
         const titleNorm = appTask.name.trim().toLowerCase();
-        const candidates = Object.values(pmState.tasks).filter(
-            (pmTask) => !pmTask.appTaskId && pmTask.title.trim().toLowerCase() === titleNorm
-        );
+        const candidates = Object.values(pmState.tasks).filter((pmTask) => !pmTask.appTaskId && pmTask.title.trim().toLowerCase() === titleNorm);
         if (candidates.length === 1) {
-            updateTask(candidates[0].id, { appTaskId: activeId });
+            updateTaskRef.current(candidates[0].id, { appTaskId: activeId });
         }
     }, [appState?.active_task, appState?.tasks, pmState?.tasks, updateTask]);
 

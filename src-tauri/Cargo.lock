@@ -5030,7 +5030,7 @@ checksum = "052283831dbae3d879dc7f51f3d92703a316ca49f91540417d38591826127814"
 
 [[package]]
 name = "work-time"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "chrono",
  "serde",

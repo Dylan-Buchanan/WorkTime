@@ -19,16 +19,18 @@ export const TaskInspector: React.FC = () => {
     }, [task?.workedPomos]);
 
     const [estimateDraft, setEstimateDraft] = React.useState<string>("");
+    const committingRef = React.useRef(false);
     React.useEffect(() => {
         if (!task) {
             setEstimateDraft("");
             return;
         }
-        const estRaw = (task as any).estimatePomos;
+        const estRaw = task.estimatePomos;
         const estNum = Number(estRaw);
         const estValid = Number.isFinite(estNum) && estNum > 0;
-        setEstimateDraft(String(estValid ? estNum : minEstimate));
-    }, [task?.id, task?.estimatePomos, minEstimate, task]);
+        const next = String(estValid ? estNum : minEstimate);
+        setEstimateDraft(next);
+    }, [task?.id]);
 
     const commitEstimateDraft = React.useCallback(() => {
         if (!task) return;
@@ -48,6 +50,7 @@ export const TaskInspector: React.FC = () => {
             return;
         }
 
+        committingRef.current = true;
         let next = Math.round(parsed);
         if (next < minEstimate) {
             next = minEstimate;
@@ -57,11 +60,14 @@ export const TaskInspector: React.FC = () => {
             setEstimateDraft(nextString);
         }
         if (next !== task.estimatePomos) {
+            // Update PM state; bridge will propagate to backend and protect against overwrite using pendingTargetsRef
             updateTask(task.id, { estimatePomos: next });
         }
+        // Release flag on next tick, after state updates have propagated
+        setTimeout(() => {
+            committingRef.current = false;
+        }, 0);
     }, [estimateDraft, minEstimate, task, updateTask]);
-
-    if (!task) return <div className="h-full flex items-center justify-center text-xs opacity-60">Select a task</div>;
 
     const formatMetaDate = React.useCallback((value?: string) => {
         if (!value) return "Unknown";
@@ -74,6 +80,8 @@ export const TaskInspector: React.FC = () => {
         }
         return parsed.toISOString().slice(0, 10);
     }, []);
+
+    if (!task) return <div className="h-full flex items-center justify-center text-xs opacity-60">Select a task</div>;
 
     return (
         <div className="flex flex-col h-full text-xs">
