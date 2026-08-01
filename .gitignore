@@ -26,7 +26,12 @@ dist-ssr
 # Database files
 *.db
 *.sql
+!supabase/migrations/*.sql
 *.sqlite
+
+# Supabase local state and server-only environment
+supabase/.temp/
+supabase/.env.local
 
 # Local development state
 dev-data/
@@ -35,3 +40,8 @@ dev-data/
 test-results/
 playwright-report/
 coverage/
+
+# Environment files (keep the checked-in template)
+.env
+.env.*
+!.env.example
