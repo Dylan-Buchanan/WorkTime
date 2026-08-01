@@ -1,1 +1,0 @@
-Read this task implementation file and check it for accuracy and any potential issues. Ensure that the task implementation file properly covers the requirements in the task requirements file. Be very critical. Use the #agent tool for any codebase research needed to validate the implementation.

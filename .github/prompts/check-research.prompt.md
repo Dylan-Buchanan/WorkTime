@@ -1,1 +1,0 @@
-Check the research in this document. Use the #agent tool to verify any implementation details, file references, or technical explanations as needed. Ensure that all information is accurate and corresponds to the current state of the codebase.

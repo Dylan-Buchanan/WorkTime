@@ -1,1 +1,0 @@
-I have already created a plan for this task. Your job is to analyze this plan and look for any potential issues, knowledge gaps, and improvements. Use the #agent tool as much as possible for codebase research and anaylsis to allow you to focus on completing the task efficiently and effectively.
