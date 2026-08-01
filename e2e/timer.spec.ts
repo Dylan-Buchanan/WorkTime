@@ -1,10 +1,11 @@
-import { test, expect, BrowserContext, Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { baseState, backendState, openApp, taskFixture } from "./helpers";
 
 test.describe("Timer workflows", () => {
     test("create a task and run a full focus/stop cycle", async ({ browser }) => {
-        const context: BrowserContext = await openApp(browser);
-        const page = await context.newPage();
+        const app = await openApp(browser);
+        const page = app.page;
+        try {
         await page.goto("/");
 
         // Quick-add a task via the sidebar panel.
@@ -29,16 +30,18 @@ test.describe("Timer workflows", () => {
         await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
 
         // Stop early, then verify a partial log was recorded.
+        await page.waitForTimeout(1100);
         await page.getByRole("button", { name: "Stop Early" }).click();
         await expect(page.getByRole("button", { name: "Start Focus" })).toBeVisible();
 
-        const state = await backendState(page);
+        const state = await backendState(app);
         expect(state.timer).toBeNull();
         const workLog = state.logs.find((l: any) => !l.was_break);
         expect(workLog).toBeTruthy();
         const task = Object.values(state.tasks)[0] as any;
         expect(task.name).toBe("Write the report");
         expect(task.completed_pomodoros).toBeGreaterThan(0);
+        } finally { await app.cleanup(); }
     });
 
     test("auto-progresses an expired work timer into a break", async ({ browser }) => {
@@ -59,16 +62,18 @@ test.describe("Timer workflows", () => {
             },
         });
 
-        const context = await openApp(browser, seed);
-        const page = await context.newPage();
+        const app = await openApp(browser, seed);
+        const page = app.page;
+        try {
         await page.goto("/");
 
         // When the seeded timer ends, the app auto-completes it and starts a break.
         await expect(page.getByText("SHORTBREAK")).toBeVisible({ timeout: 15000 });
 
-        const state = await backendState(page);
+        const state = await backendState(app);
         expect(state.logs.some((l: any) => !l.was_break)).toBe(true);
         expect(state.timer?.kind).toBe("ShortBreak");
         expect(state.current_cycle_pomodoros).toBe(1);
+        } finally { await app.cleanup(); }
     });
 });

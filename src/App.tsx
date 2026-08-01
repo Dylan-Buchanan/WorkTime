@@ -11,32 +11,36 @@ import { AppStateProvider } from "./state/AppStateContext";
 import AnalyticsPage from "./components/AnalyticsPage";
 import StateSyncBridge from "./state/StateSyncBridge";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { DataProvider } from "./state/DataContext";
+import { defaultDataAccess } from "./lib/data/defaultDataAccess";
 
 const App: React.FC = () => {
     return (
         <BrowserRouter>
-            <AppStateProvider>
-                <ProjectManagerProvider>
-                    <StateSyncBridge />
-                    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
-                        <TopNav />
-                        <div className="flex-1 min-h-0">
-                            <Routes>
-                                <Route path="/" element={<MainLayout />} />
-                                <Route
-                                    path="/projects"
-                                    element={
-                                        <ErrorBoundary>
-                                            <ProjectManagerPage />
-                                        </ErrorBoundary>
-                                    }
-                                />
-                                <Route path="/analytics" element={<AnalyticsPage />} />
-                            </Routes>
+            <DataProvider dataAccess={defaultDataAccess}>
+                <AppStateProvider>
+                    <ProjectManagerProvider>
+                        <StateSyncBridge />
+                        <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
+                            <TopNav />
+                            <div className="flex-1 min-h-0">
+                                <Routes>
+                                    <Route path="/" element={<MainLayout />} />
+                                    <Route
+                                        path="/projects"
+                                        element={
+                                            <ErrorBoundary>
+                                                <ProjectManagerPage />
+                                            </ErrorBoundary>
+                                        }
+                                    />
+                                    <Route path="/analytics" element={<AnalyticsPage />} />
+                                </Routes>
+                            </div>
                         </div>
-                    </div>
-                </ProjectManagerProvider>
-            </AppStateProvider>
+                    </ProjectManagerProvider>
+                </AppStateProvider>
+            </DataProvider>
         </BrowserRouter>
     );
 };

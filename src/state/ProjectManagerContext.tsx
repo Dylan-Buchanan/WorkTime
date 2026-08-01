@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ProjectManagerState, Project, PMTask, TaskPriority, TaskStatus } from "./types";
 import { useAppState } from "./AppStateContext";
+import { useData } from "./DataContext";
+import type { SyncedPMState } from "../lib/data/DataAccess";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -166,25 +167,42 @@ export const ProjectManagerProvider: React.FC<{
     children: React.ReactNode;
 }> = ({ children }) => {
     const app = useAppState();
-    const isTauri = Boolean((import.meta as any)?.env?.TAURI_PLATFORM || (typeof window !== "undefined" && (window as any).__TAURI_IPC__));
-    const hasLocalStorage = typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-    const isDevBuild = Boolean(import.meta.env.DEV);
+    const data = useData();
+    const hasLocalStorage = (() => {
+        try { return typeof window !== "undefined" && typeof window.localStorage !== "undefined"; } catch { return false; }
+    })();
     const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
     const [hydrated, setHydrated] = useState(false);
     const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-    const pendingSnapshotRef = useRef<ProjectManagerState | null>(null);
+    const pendingSnapshotRef = useRef<SyncedPMState | null>(null);
     const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastServerSerializedRef = useRef<string | null>(null);
+    const suppressServerSaveRef = useRef(false);
+
+    const serverSlice = useCallback((input: ProjectManagerState | SyncedPMState): SyncedPMState => JSON.parse(JSON.stringify({ projects: input.projects, tasks: input.tasks, meta: input.meta })) as SyncedPMState, []);
+    const applyServerState = useCallback((remote: SyncedPMState | null, localUI: ProjectManagerState["ui"]): ProjectManagerState => {
+        const normalized = normalizeState(remote ? { ...remote, ui: buildDefaultState().ui } : null);
+        // Keep device-local UI preferences but drop project references that no
+        // longer exist in the freshly loaded server snapshot; otherwise a project
+        // deleted on another device leaves an empty list/board. If every selection
+        // is gone, fall back to the first valid project (or empty when none exist).
+        let selectedProjectIds = localUI.selectedProjectIds.filter((id) => !!normalized.projects[id]);
+        if (selectedProjectIds.length === 0) {
+            const first = Object.keys(normalized.projects)[0];
+            if (first) selectedProjectIds = [first];
+        }
+        return { projects: normalized.projects, tasks: normalized.tasks, meta: normalized.meta, ui: { ...localUI, selectedProjectIds, statusFilter: [...localUI.statusFilter], tagFilter: [...localUI.tagFilter], priorityFilter: [...localUI.priorityFilter] } };
+    }, []);
 
     const flushPendingSnapshot = useCallback(
-        (snapshot?: ProjectManagerState | null) => {
-            if (!isTauri) return Promise.resolve();
+        (snapshot?: SyncedPMState | null) => {
             const snap = snapshot ?? pendingSnapshotRef.current;
-            if (!snap) return Promise.resolve();
+            if (!snap) return saveQueueRef.current;
             pendingSnapshotRef.current = null;
-            const payload = JSON.parse(JSON.stringify(snap)) as ProjectManagerState;
+            const payload = serverSlice(snap);
             saveQueueRef.current = saveQueueRef.current
                 .catch(() => undefined)
-                .then(() => invoke("save_pm_state", { state: payload }))
+                .then(() => data.savePMState(payload))
                 .then(
                     () => undefined,
                     (err) => {
@@ -193,108 +211,107 @@ export const ProjectManagerProvider: React.FC<{
                 );
             return saveQueueRef.current;
         },
-        [isTauri]
+        [data, serverSlice]
     );
 
     const persistSnapshot = useCallback(
-        (snapshot: ProjectManagerState, options?: { immediate?: boolean }) => {
-            if (isTauri) {
-                pendingSnapshotRef.current = snapshot;
-                if (flushTimeoutRef.current) {
-                    clearTimeout(flushTimeoutRef.current);
-                    flushTimeoutRef.current = null;
-                }
-                if (options?.immediate) {
-                    return flushPendingSnapshot(snapshot);
-                }
-                flushTimeoutRef.current = setTimeout(() => {
-                    flushTimeoutRef.current = null;
-                    flushPendingSnapshot();
-                }, 750);
-                return Promise.resolve();
-            }
-
-            if (hasLocalStorage) {
-                try {
-                    window.localStorage.setItem(LS_KEY, JSON.stringify(snapshot));
-                } catch (err) {
-                    console.warn("[PM] failed to save project manager state to localStorage", err);
-                }
-            }
-
-            return Promise.resolve();
-        },
-        [isTauri, hasLocalStorage, flushPendingSnapshot]
-    );
-
-    useEffect(() => {
-        return () => {
+        (snapshot: SyncedPMState, options?: { immediate?: boolean }) => {
+            pendingSnapshotRef.current = serverSlice(snapshot);
             if (flushTimeoutRef.current) {
                 clearTimeout(flushTimeoutRef.current);
                 flushTimeoutRef.current = null;
             }
-            flushPendingSnapshot();
+            if (options?.immediate) return flushPendingSnapshot();
+            flushTimeoutRef.current = setTimeout(() => {
+                flushTimeoutRef.current = null;
+                void flushPendingSnapshot();
+            }, 750);
+            return Promise.resolve();
+        },
+        [flushPendingSnapshot, hasLocalStorage, serverSlice]
+    );
+
+    const readLocalUI = useCallback((): ProjectManagerState["ui"] => {
+        if (!hasLocalStorage) return normalizeLocalUI(undefined);
+        try {
+            const raw = window.localStorage.getItem(LS_KEY);
+            return normalizeLocalUI(raw ? JSON.parse(raw) : undefined);
+        } catch (err) {
+            console.warn("[PM] failed to parse local UI state", err);
+            return normalizeLocalUI(undefined);
+        }
+    }, [hasLocalStorage]);
+
+    useEffect(() => {
+        return () => {
+            if (flushTimeoutRef.current) clearTimeout(flushTimeoutRef.current);
+            void flushPendingSnapshot();
         };
     }, [flushPendingSnapshot]);
 
     useEffect(() => {
         let cancelled = false;
         (async () => {
-            let snapshot: ProjectManagerState | null = null;
-
-            if (isTauri) {
-                try {
-                    const loaded = await invoke<ProjectManagerState | null>("load_pm_state");
-                    if (loaded) {
-                        snapshot = normalizeState(loaded);
-                    }
-                } catch (err) {
-                    console.warn("[PM] failed to load project manager state from filesystem", err);
-                }
+            const localUI = readLocalUI();
+            let remote: SyncedPMState | null = null;
+            try {
+                remote = await data.loadPMState();
+            } catch (err) {
+                console.warn("[PM] failed to load project manager state", err);
             }
-
-            if (!snapshot) {
-                if (isTauri) {
-                    if (!isDevBuild && hasLocalStorage) {
-                        try {
-                            const raw = window.localStorage.getItem(LS_KEY);
-                            if (raw) {
-                                snapshot = normalizeState(JSON.parse(raw) as ProjectManagerState);
-                            }
-                        } catch (err) {
-                            console.warn("[PM] failed to parse legacy localStorage project state", err);
-                        }
-                    }
-                } else if (hasLocalStorage) {
-                    try {
-                        const raw = window.localStorage.getItem(LS_KEY);
-                        if (raw) {
-                            snapshot = normalizeState(JSON.parse(raw) as ProjectManagerState);
-                        }
-                    } catch (err) {
-                        console.warn("[PM] failed to parse browser localStorage project state", err);
-                    }
-                }
-            }
-
-            const finalSnapshot = snapshot ?? normalizeState(buildDefaultState());
-
-            if (!cancelled) {
-                setState(finalSnapshot);
-                setHydrated(true);
-                await persistSnapshot(finalSnapshot, { immediate: true });
+            if (cancelled) return;
+            const finalState = applyServerState(remote, localUI);
+            setState(finalState);
+            setHydrated(true);
+            const synced = serverSlice(finalState);
+            lastServerSerializedRef.current = JSON.stringify(synced);
+            suppressServerSaveRef.current = true;
+            if (!remote) await persistSnapshot(synced, { immediate: true });
+            if (hasLocalStorage) {
+                try { window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: localUI })); } catch { /* local UI is best effort */ }
             }
         })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [hasLocalStorage, isTauri, persistSnapshot]);
+        return () => { cancelled = true; };
+    }, [applyServerState, data, hasLocalStorage, persistSnapshot, readLocalUI, serverSlice]);
 
     useEffect(() => {
         if (!hydrated) return;
-        persistSnapshot(state);
-    }, [state, hydrated, persistSnapshot]);
+        const synced = serverSlice(state);
+        const serialized = JSON.stringify(synced);
+        if (suppressServerSaveRef.current && serialized === lastServerSerializedRef.current) {
+            suppressServerSaveRef.current = false;
+            return;
+        }
+        if (serialized === lastServerSerializedRef.current) return;
+        lastServerSerializedRef.current = serialized;
+        persistSnapshot(synced);
+    }, [state, hydrated, persistSnapshot, serverSlice]);
+
+    useEffect(() => {
+        if (!hydrated || !hasLocalStorage) return;
+        try { window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: state.ui })); } catch (err) { console.warn("[PM] failed to save local UI state", err); }
+    }, [state.ui, hydrated, hasLocalStorage]);
+
+    const refreshPM = useCallback(async () => {
+        if (flushTimeoutRef.current) {
+            clearTimeout(flushTimeoutRef.current);
+            flushTimeoutRef.current = null;
+        }
+        await flushPendingSnapshot();
+        const remote = await data.loadPMState();
+        const next = applyServerState(remote, state.ui);
+        lastServerSerializedRef.current = JSON.stringify(serverSlice(next));
+        suppressServerSaveRef.current = true;
+        setState(next);
+    }, [applyServerState, data, flushPendingSnapshot, serverSlice, state.ui]);
+
+    useEffect(() => {
+        const refresh = () => { void refreshPM().catch((err) => console.warn("[PM] failed to refresh project manager state", err)); };
+        const onVisibility = () => { if (document.visibilityState === "visible") refresh(); };
+        window.addEventListener("focus", refresh);
+        document.addEventListener("visibilitychange", onVisibility);
+        return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", onVisibility); };
+    }, [refreshPM]);
 
     const persist = useCallback((next: ProjectManagerState | ((prev: ProjectManagerState) => ProjectManagerState)) => {
         setState((prev) => (typeof next === "function" ? (next as any)(prev) : next));
@@ -646,12 +663,44 @@ export const usePM = () => {
     return ctx;
 };
 
-export function normalizeState(input?: ProjectManagerState | null): ProjectManagerState {
+function record(input: unknown): Record<string, any> | null {
+    return input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, any> : null;
+}
+
+export function normalizeLocalUI(input: unknown): ProjectManagerState["ui"] {
+    const base = buildDefaultState().ui;
+    const source = record(record(input)?.ui) ?? record(input) ?? {};
+    const statuses: TaskStatus[] = ["Backlog", "Next", "In Progress", "Blocked", "Done"];
+    const priorities: TaskPriority[] = ["Low", "Medium", "High"];
+    const views = ["list", "board"] as const;
+    const groupings = ["none", "project", "status", "due"] as const;
+    const sorts = ["manual", "due", "priority", "updated"] as const;
+    const dueFilters = ["all", "today", "thisWeek", "later", "overdue"] as const;
+    return {
+        ...base,
+        selectedProjectIds: Array.isArray(source.selectedProjectIds) ? source.selectedProjectIds.filter((id): id is string => typeof id === "string") : [],
+        selectedTaskId: typeof source.selectedTaskId === "string" && source.selectedTaskId.length > 0 ? source.selectedTaskId : null,
+        view: views.includes(source.view) ? source.view : "list",
+        listGrouping: groupings.includes(source.listGrouping) ? source.listGrouping : "none",
+        statusFilter: Array.isArray(source.statusFilter) ? source.statusFilter.filter((value): value is TaskStatus => statuses.includes(value)) : [],
+        tagFilter: Array.isArray(source.tagFilter) ? source.tagFilter.filter((value): value is string => typeof value === "string") : [],
+        priorityFilter: Array.isArray(source.priorityFilter) ? source.priorityFilter.filter((value): value is TaskPriority => priorities.includes(value)) : [],
+        search: typeof source.search === "string" ? source.search : "",
+        showArchived: Boolean(source.showArchived),
+        sort: sorts.includes(source.sort) ? source.sort : "manual",
+        dueFilter: dueFilters.includes(source.dueFilter) ? source.dueFilter : "all",
+        boardShowAllTasks: Boolean(source.boardShowAllTasks),
+    };
+}
+
+export function normalizeState(input?: unknown): ProjectManagerState {
     const base = buildDefaultState();
-    const sourceProjects = input?.projects && Object.keys(input.projects).length > 0 ? input.projects : base.projects;
+    const source = record(input) ?? {};
+    const sourceProjects = record(source?.projects) && Object.keys(source.projects).length > 0 ? source.projects : base.projects;
 
     const projects: Record<string, Project> = {};
-    Object.entries(sourceProjects).forEach(([id, project]) => {
+    Object.entries(sourceProjects as Record<string, any>).forEach(([id, project]) => {
+        project = record(project) ?? {};
         const createdAt = typeof project.createdAt === "string" && project.createdAt.length > 0 ? project.createdAt : now();
         const updatedAt = typeof project.updatedAt === "string" && project.updatedAt.length > 0 ? project.updatedAt : createdAt;
         projects[id] = {
@@ -669,19 +718,19 @@ export function normalizeState(input?: ProjectManagerState | null): ProjectManag
     const tasks: Record<string, PMTask> = {};
     const validStatuses: TaskStatus[] = ["Backlog", "Next", "In Progress", "Blocked", "Done"];
     const validPriorities: TaskPriority[] = ["Low", "Medium", "High"];
-    if (input?.tasks) {
-        Object.entries(input.tasks).forEach(([id, task]) => {
+    if (record(source?.tasks)) {
+        Object.entries(source.tasks as Record<string, any>).forEach(([id, task]) => {
+            task = record(task) ?? {};
             const status: TaskStatus = validStatuses.includes(task.status as TaskStatus) ? (task.status as TaskStatus) : "Backlog";
             const priority: TaskPriority = validPriorities.includes(task.priority as TaskPriority) ? (task.priority as TaskPriority) : "Medium";
             const projectId = task.projectId && projects[task.projectId] ? task.projectId : null;
-            const tags = Array.isArray(task.tags) ? task.tags.filter((tag): tag is string => typeof tag === "string") : [];
-            const links = Array.isArray(task.links) ? task.links.filter((link): link is string => typeof link === "string") : [];
+            const tags = Array.isArray(task.tags) ? task.tags.filter((tag: unknown): tag is string => typeof tag === "string") : [];
+            const links = Array.isArray(task.links) ? task.links.filter((link: unknown): link is string => typeof link === "string") : [];
             const checklist = Array.isArray(task.checklist)
-                ? task.checklist.map((item) => ({
-                      id: item.id || uuid(),
-                      title: item.title || "",
-                      done: Boolean(item.done),
-                  }))
+                ? task.checklist.map((item: any) => {
+                      const entry = record(item) ?? {};
+                      return { id: typeof entry.id === "string" && entry.id ? entry.id : uuid(), title: typeof entry.title === "string" ? entry.title : "", done: Boolean(entry.done) };
+                  })
                 : [];
             const sortOrder = Number.isFinite(Number((task as any).sortOrder)) ? Number((task as any).sortOrder) : 0;
             const timeSpentMinutes = Number.isFinite(Number((task as any).timeSpentMinutes)) ? Number((task as any).timeSpentMinutes) : 0;
@@ -711,6 +760,7 @@ export function normalizeState(input?: ProjectManagerState | null): ProjectManag
                 estimatePomos,
                 createdAt,
                 updatedAt,
+                relatedTo: Array.isArray(task.relatedTo) ? task.relatedTo.filter((value: unknown): value is string => typeof value === "string") : [],
             };
         });
     }
@@ -720,7 +770,7 @@ export function normalizeState(input?: ProjectManagerState | null): ProjectManag
     const validSorts = ["manual", "due", "priority", "updated"] as const;
     const validDueFilters = ["all", "today", "thisWeek", "later", "overdue"] as const;
 
-    const uiSource: Partial<ProjectManagerState["ui"]> = input?.ui ?? {};
+    const uiSource: Partial<ProjectManagerState["ui"]> = record(source?.ui) as Partial<ProjectManagerState["ui"]> ?? {};
     const selectedProjectIds = Array.isArray(uiSource.selectedProjectIds) ? uiSource.selectedProjectIds.filter((id): id is string => typeof id === "string" && !!projects[id]) : [];
     const statusFilter = Array.isArray(uiSource.statusFilter) ? uiSource.statusFilter.filter((status): status is TaskStatus => validStatuses.includes(status as TaskStatus)) : [];
     const tagFilter = Array.isArray(uiSource.tagFilter) ? uiSource.tagFilter.filter((tag): tag is string => typeof tag === "string") : [];
@@ -765,7 +815,7 @@ export function normalizeState(input?: ProjectManagerState | null): ProjectManag
 
     const meta = {
         ...base.meta,
-        ...(input?.meta ?? {}),
+        ...(record(source?.meta) ?? {}),
     };
     meta.initializedAt = typeof meta.initializedAt === "string" && meta.initializedAt.length > 0 ? meta.initializedAt : now();
 

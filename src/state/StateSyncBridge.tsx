@@ -1,12 +1,13 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "./AppStateContext";
 import { usePM } from "./ProjectManagerContext";
 import { TaskStatus, PMTask } from "./types";
+import { useData } from "./DataContext";
 
 export const StateSyncBridge: React.FC = () => {
     const { state: appState, refresh, createTask: createAppTask, setActiveTask } = useAppState();
     const { state: pmState, updateTask, ensureMetadataForAppTask } = usePM();
+    const data = useData();
 
     // Keep a stable reference to updateTask for effects that should only react to app state changes.
     const updateTaskRef = useRef(updateTask);
@@ -144,11 +145,7 @@ export const StateSyncBridge: React.FC = () => {
                         pendingTargetsRef.current[pmTask.appTaskId] = desired;
                     }
                     try {
-                        await invoke("set_task_target", {
-                            task_id: pmTask.appTaskId,
-                            taskId: pmTask.appTaskId,
-                            target: desired,
-                        });
+                        await data.setTaskTarget(pmTask.appTaskId, desired);
                         if (cancelled) return;
                         await refresh();
                     } catch (err) {
@@ -166,7 +163,7 @@ export const StateSyncBridge: React.FC = () => {
         return () => {
             cancelled = true;
         };
-    }, [pmState?.tasks, appState?.tasks, refresh, updateTask]);
+    }, [pmState?.tasks, appState?.tasks, refresh, updateTask, data]);
 
     // Mark PM tasks done when backend tasks complete.
     useEffect(() => {

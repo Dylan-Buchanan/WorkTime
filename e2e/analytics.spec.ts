@@ -37,8 +37,9 @@ test.describe("Analytics", () => {
             ],
         });
 
-        const context = await openApp(browser, seed);
-        const page = await context.newPage();
+        const app = await openApp(browser, seed);
+        const page = app.page;
+        try {
         await page.goto("/analytics");
 
         // Overview cards: two work sessions in the current week, all completed.
@@ -50,5 +51,6 @@ test.describe("Analytics", () => {
         await expect(page.getByText("Weekly Trend")).toBeVisible();
         await expect(page.getByText("Quality & Planning")).toBeVisible();
         await expect(page.getByText("Break Discipline")).toBeVisible();
+        } finally { await app.cleanup(); }
     });
 });

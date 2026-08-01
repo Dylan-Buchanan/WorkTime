@@ -1,10 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { openApp } from "./helpers";
+import { backendPMState, openApp } from "./helpers";
 
 test.describe("Project Manager", () => {
     test("create a project and add a task via quick add", async ({ browser }) => {
-        const context = await openApp(browser);
-        const page = await context.newPage();
+        const app = await openApp(browser);
+        const page = app.page;
+        try {
         await page.goto("/projects");
 
         // Create a project.
@@ -27,22 +28,24 @@ test.describe("Project Manager", () => {
         // PM state is persisted to the mock backend (debounced, so poll for it).
         await expect
             .poll(async () => {
-                const pm = await page.evaluate(() => window.__TEST_BACKEND__!.getPMState());
+                const pm = await backendPMState(app);
                 return pm ? Object.keys(pm.tasks).length : 0;
             }, { timeout: 5000 })
             .toBe(1);
 
-        const pm = await page.evaluate(() => window.__TEST_BACKEND__!.getPMState());
+        const pm = await backendPMState(app);
         const pmTask = Object.values(pm.tasks)[0] as any;
         expect(pmTask.title).toBe("Add auth flow");
         expect(pmTask.tags).toEqual(["security"]);
         expect(pmTask.priority).toBe("High");
         expect(pmTask.estimatePomos).toBe(3);
+        } finally { await app.cleanup(); }
     });
 
     test("quick add to a missing project warns instead of creating", async ({ browser }) => {
-        const context = await openApp(browser);
-        const page = await context.newPage();
+        const app = await openApp(browser);
+        const page = app.page;
+        try {
         page.on("dialog", (d) => d.accept());
         await page.goto("/projects");
 
@@ -52,5 +55,6 @@ test.describe("Project Manager", () => {
 
         // No task was created.
         await expect(page.getByText("Tasks: 0")).toBeVisible();
+        } finally { await app.cleanup(); }
     });
 });
