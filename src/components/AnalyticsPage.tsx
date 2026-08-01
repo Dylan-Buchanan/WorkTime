@@ -4,10 +4,8 @@ import { usePM } from "../state/ProjectManagerContext";
 import {
     format,
     subWeeks,
-    startOfDay,
     parseISO,
     eachDayOfInterval,
-    startOfWeek,
 } from "date-fns";
 import {
     BarChart,
@@ -19,18 +17,7 @@ import {
     CartesianGrid,
     Legend,
 } from "recharts";
-
-// Lightweight utility types for computed metrics
-interface Filters {
-    from: Date;
-    to: Date;
-    projectIds: string[]; // PM project filter, maps via task.appTaskId => task.projectId
-    includeBreaks: boolean;
-    workHoursOnly: boolean; // 8-18 local
-    deepOnly: boolean; // sequences >=2 consecutive focus sessions
-    tags: string[];
-    statuses: string[];
-}
+import { AnalyticsFilters, filterLogs, computeDeepWorkSessions, computeMetrics } from "../lib/analytics";
 
 export const AnalyticsPage: React.FC = () => {
     const { state: app } = useAppState();
@@ -48,7 +35,7 @@ export const AnalyticsPage: React.FC = () => {
     const [tagFilter, setTagFilter] = useState<string[]>([]);
     const [statusFilter, setStatusFilter] = useState<string[]>([]);
 
-    const filters: Filters = {
+    const filters: AnalyticsFilters = {
         from: range.from,
         to: range.to,
         projectIds: selectedProjects,
@@ -86,69 +73,16 @@ export const AnalyticsPage: React.FC = () => {
         return map;
     }, [pm.tasks]);
 
-    const focusLogs = useMemo(() => {
-        if (!app) return [] as any[];
-        return app.logs.filter((l) => {
-            const finished = parseISO(l.finished_at as any);
-            if (finished < filters.from || finished > filters.to) return false;
-            if (!filters.includeBreaks && l.was_break) return false;
-            if (filters.workHoursOnly) {
-                const h = finished.getHours();
-                if (h < 8 || h > 18) return false;
-            }
-            if (filters.projectIds.length > 0) {
-                const proj = projectByAppTask[l.task_id];
-                if (proj && !filters.projectIds.includes(proj)) return false;
-            }
-            if (filters.tags.length > 0 || filters.statuses.length > 0) {
-                const meta = taskMetaByAppTask[l.task_id];
-                if (meta) {
-                    if (
-                        filters.tags.length > 0 &&
-                        !meta.tags.some((t) => filters.tags.includes(t))
-                    )
-                        return false;
-                    if (
-                        filters.statuses.length > 0 &&
-                        !filters.statuses.includes(meta.status)
-                    )
-                        return false;
-                }
-            }
-            return true;
-        });
-    }, [app, filters, projectByAppTask, taskMetaByAppTask]);
+    const focusLogs = useMemo(
+        () => filterLogs(app?.logs, filters, projectByAppTask, taskMetaByAppTask),
+        [app, filters, projectByAppTask, taskMetaByAppTask]
+    );
 
     // Derive sequences for deep work: consecutive non-break sessions with <=10m gap
-    const deepSessionIds = useMemo(() => {
-        if (!filters.deepOnly) return new Set<string>();
-        const workSessions = focusLogs
-            .filter((l: any) => !l.was_break)
-            .sort((a: any, b: any) =>
-                a.finished_at.localeCompare(b.finished_at)
-            );
-        const deepSet = new Set<string>();
-        let run: any[] = [];
-        for (const s of workSessions) {
-            if (run.length === 0) {
-                run.push(s);
-                continue;
-            }
-            const prev = run[run.length - 1];
-            const prevEnd = parseISO(prev.finished_at as any).getTime();
-            const curEnd = parseISO(s.finished_at as any).getTime();
-            const gap = (curEnd - prevEnd) / 60000; // minutes
-            if (gap <= 10) {
-                run.push(s);
-            } else {
-                if (run.length >= 2)
-                    run.forEach((r) => deepSet.add(r.finished_at));
-                run = [s];
-            }
-        }
-        if (run.length >= 2) run.forEach((r) => deepSet.add(r.finished_at));
-        return deepSet;
-    }, [focusLogs, filters.deepOnly]);
+    const deepSessionIds = useMemo(
+        () => (filters.deepOnly ? computeDeepWorkSessions(focusLogs.filter((l: any) => !l.was_break)) : new Set<string>()),
+        [focusLogs, filters.deepOnly]
+    );
 
     const filtered = useMemo(() => {
         if (!filters.deepOnly) return focusLogs;
@@ -158,115 +92,11 @@ export const AnalyticsPage: React.FC = () => {
     }, [focusLogs, filters.deepOnly, deepSessionIds]);
 
     // Metrics
-    const metrics = useMemo(() => {
-        const now = new Date();
-        const todayStr = format(now, "yyyy-MM-dd");
-        const startOfWeekDate = startOfWeek(now, { weekStartsOn: 1 });
-        let todayCount = 0,
-            weekCount = 0;
-        let todayMinutes = 0,
-            weekMinutes = 0;
-        const workSessions = filtered.filter((l: any) => !l.was_break);
-        workSessions.forEach((l: any) => {
-            const d = parseISO(l.finished_at as any);
-            const dStr = format(d, "yyyy-MM-dd");
-            if (dStr === todayStr) {
-                todayCount++;
-                todayMinutes += l.duration_minutes;
-            }
-            if (d >= startOfWeekDate) {
-                weekCount++;
-                weekMinutes += l.duration_minutes;
-            }
-        });
-        // Derive completed vs aborted heuristically using planned work length (>=95% planned considered completed)
-        const planned = app?.settings.work_minutes || 25;
-        const completedSessions = workSessions.filter(
-            (s: any) => s.duration_minutes >= planned * 0.95
-        );
-        const abortedSessions = workSessions.filter(
-            (s: any) => s.duration_minutes < planned * 0.95
-        );
-        const completed = completedSessions.length;
-        const aborted = abortedSessions.length;
-        const completionRate =
-            completed + aborted === 0 ? 0 : completed / (completed + aborted);
-        const interruptionRate =
-            completed === 0 ? 0 : aborted / (completed + aborted); // proxy
-        const avgFocusLength = workSessions.length
-            ? workSessions.reduce(
-                  (a: any, b: any) => a + b.duration_minutes,
-                  0
-              ) / workSessions.length
-            : 0;
-        // Streak: consecutive days with >=4 sessions
-        const byDay: Record<string, number> = {};
-        workSessions.forEach((l: any) => {
-            const d = format(parseISO(l.finished_at as any), "yyyy-MM-dd");
-            byDay[d] = (byDay[d] || 0) + 1;
-        });
-        let streak = 0;
-        let cursor = startOfDay(now);
-        while (true) {
-            const key = format(cursor, "yyyy-MM-dd");
-            if ((byDay[key] || 0) >= 4) {
-                streak++;
-                cursor = new Date(cursor.getTime() - 86400000);
-            } else break;
-        }
-        // Peak hour
-        const hours: Record<number, number> = {};
-        workSessions.forEach((l: any) => {
-            const d = parseISO(l.finished_at as any);
-            hours[d.getHours()] = (hours[d.getHours()] || 0) + 1;
-        });
-        const peakHour =
-            Object.entries(hours).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "-";
-        // Overrun ratio (rare with current backend) average actual/planned for completed
-        const overrunRatio = completedSessions.length
-            ? completedSessions.reduce(
-                  (a: number, s: any) => a + s.duration_minutes / planned,
-                  0
-              ) / completedSessions.length
-            : 0;
-        // Break discipline: focus session followed immediately by a break matching expected type & length tolerance ±20%
-        const logsSorted = [...filtered].sort((a: any, b: any) =>
-            a.finished_at.localeCompare(b.finished_at)
-        );
-        let goodBreaks = 0;
-        let focusCount = 0;
-        const tol = 0.2;
-        for (let i = 0; i < logsSorted.length; i++) {
-            const cur = logsSorted[i];
-            if (cur.was_break) continue;
-            focusCount++;
-            const next = logsSorted[i + 1];
-            if (!next) continue;
-            if (!next.was_break || next.break_skipped) continue;
-            const mins = next.duration_minutes;
-            const short = app?.settings.short_break_minutes || 5;
-            const long = app?.settings.long_break_minutes || 15;
-            const isShort = Math.abs(mins - short) <= short * tol;
-            const isLong = Math.abs(mins - long) <= long * tol;
-            if (isShort || isLong) goodBreaks++;
-        }
-        const breakDiscipline = focusCount ? goodBreaks / focusCount : 0;
-        return {
-            todayCount,
-            weekCount,
-            todayMinutes,
-            weekMinutes,
-            completionRate,
-            interruptionRate,
-            avgFocusLength,
-            streak,
-            peakHour,
-            completed,
-            aborted,
-            overrunRatio,
-            breakDiscipline,
-        };
-    }, [filtered, app]);
+    const metrics = useMemo(
+        () =>
+            computeMetrics(filtered, app?.settings ?? { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 15 }, new Date()),
+        [filtered, app]
+    );
 
     // Weekly trend (8 weeks)
     const trendData = useMemo(() => {

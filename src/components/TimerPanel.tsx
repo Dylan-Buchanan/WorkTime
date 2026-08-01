@@ -3,17 +3,15 @@ import { useAppState } from "../state/AppStateContext";
 import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
 import { TaskInspector } from "./ProjectManager/TaskInspector";
-
-function format(ms: number) {
-    const total = Math.floor(ms / 1000);
-    const m = Math.floor(total / 60)
-        .toString()
-        .padStart(2, "0");
-    const s = (total % 60).toString().padStart(2, "0");
-    return `${m}:${s}`;
-}
-
-const EPSILON = 1e-3;
+import {
+    EPSILON,
+    computeElapsedSecs,
+    formatDurationMinutes,
+    formatMs,
+    formatPomodoroCount,
+    parseDueDateKey,
+    toLocalDateKey,
+} from "../lib/timer";
 
 type FinishProjection =
     | {
@@ -36,41 +34,6 @@ type FinishProjection =
           unscheduledPomodoros: number;
       };
 
-function toLocalDateKey(date: Date) {
-    const offset = date.getTimezoneOffset();
-    const adjusted = new Date(date.getTime() - offset * 60000);
-    return adjusted.toISOString().slice(0, 10);
-}
-
-function parseDueDateKey(raw?: string | null) {
-    if (!raw) return null;
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-    const parsed = new Date(trimmed);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return toLocalDateKey(parsed);
-}
-
-function formatPomodoroCount(value: number) {
-    if (!Number.isFinite(value) || value <= EPSILON) return "0p";
-    if (Math.abs(value - Math.round(value)) < 0.05) {
-        return `${Math.round(value)}p`;
-    }
-    return `${value.toFixed(1)}p`;
-}
-
-function formatDurationMinutes(totalMinutes: number) {
-    if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return "0m";
-    const rounded = Math.max(1, Math.round(totalMinutes));
-    const hours = Math.floor(rounded / 60);
-    const minutes = rounded % 60;
-    if (hours > 0) {
-        return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-    }
-    return `${minutes}m`;
-}
-
 export const TimerPanel: React.FC = () => {
     const app = useAppState();
     const { state, startWork, skipBreak, remainingMs, error, pauseTimer, resumeTimer, isPaused, tick } = app;
@@ -92,16 +55,10 @@ export const TimerPanel: React.FC = () => {
     const plannedSecs = timer?.planned_secs || (timer ? (new Date(timer.ends_at).getTime() - new Date(timer.started_at).getTime()) / 1000 : 0);
 
     // Elapsed seconds including accumulated (if paused/resumed) + current run segment
-    const elapsedSecs = useMemo(() => {
-        if (!timer) return 0;
-        const accumulated = timer.accumulated_secs || 0;
-        if (timer.paused) {
-            return accumulated; // when paused, current segment not running
-        }
-        const start = new Date(timer.started_at).getTime();
-        const now = Date.now();
-        return Math.min(plannedSecs, accumulated + Math.max(0, now - start) / 1000);
-    }, [timer, plannedSecs, timer?.paused, timer?.accumulated_secs, timer?.started_at, tick]);
+    const elapsedSecs = useMemo(
+        () => computeElapsedSecs(timer, Date.now(), plannedSecs),
+        [timer, plannedSecs, tick]
+    );
 
     const pct = plannedSecs > 0 ? Math.min(1, Math.max(0, elapsedSecs / plannedSecs)) : 0;
 
@@ -392,7 +349,7 @@ export const TimerPanel: React.FC = () => {
                                 aria-hidden
                             />
                             <div className="absolute inset-[6px] rounded-full bg-neutral-950 border border-neutral-800 flex items-center justify-center">
-                                <span className="text-6xl font-semibold tabular-nums tracking-tight">{timer ? format(ms) : "READY"}</span>
+                                <span className="text-6xl font-semibold tabular-nums tracking-tight">{timer ? formatMs(ms) : "READY"}</span>
                             </div>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap justify-center">

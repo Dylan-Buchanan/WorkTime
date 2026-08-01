@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { AppStateData, Settings, Task } from "./types";
 import { useSounds } from "../hooks/useSounds";
+import { computeRemainingMs } from "../lib/timer";
 import { invoke } from "@tauri-apps/api/core";
 // We lazy import notification functions to avoid type resolution issues if plugin not yet built
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
@@ -231,14 +232,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             await invoke("finalize_task", { task_id: id, taskId: id });
         });
 
-    const remainingMs = () => {
-        if (!state?.timer) return 0;
-        if (state.timer.paused) {
-            return (state.timer.paused_remaining_secs || 0) * 1000;
-        }
-        const end = new Date(state.timer.ends_at).getTime();
-        return Math.max(0, end - Date.now());
-    };
+    const remainingMs = () => computeRemainingMs(state?.timer, Date.now());
     const pauseTimer = () => {
         if (!state?.timer || state.timer.paused) return;
         wrapVoid(() => invoke("pause_timer"));

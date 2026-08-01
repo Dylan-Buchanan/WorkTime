@@ -30,3 +30,8 @@ dist-ssr
 
 # Local development state
 dev-data/
+
+# Test output
+test-results/
+playwright-report/
+coverage/

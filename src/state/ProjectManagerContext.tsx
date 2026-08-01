@@ -89,6 +89,79 @@ interface PMContextShape {
 
 const PMContext = createContext<PMContextShape | undefined>(undefined);
 
+/**
+ * Parse a "quick add" input line into a partial PM task and optional project name.
+ * Syntax: `title @project ^2024-01-01 #tag !high 3p`
+ */
+export function quickAddParse(input: string): { task: Partial<PMTask>; projectName?: string } {
+    const parts = input.trim().split(/\s+/).filter(Boolean);
+    const task: Partial<PMTask> = { tags: [] };
+    const titleParts: string[] = [];
+    let projectName: string | undefined;
+
+    const isCommandToken = (token: string) => {
+        if (!token) return false;
+        return token.startsWith("@") || token.startsWith("^") || token.startsWith("#") || token.startsWith("!") || /^\d+p$/i.test(token);
+    };
+
+    for (let i = 0; i < parts.length; i++) {
+        const token = parts[i];
+        if (!token) continue;
+
+        if (token.startsWith("@")) {
+            const initial = token.substring(1);
+            const collected: string[] = [];
+            if (initial) collected.push(initial);
+            while (i + 1 < parts.length && !isCommandToken(parts[i + 1])) {
+                collected.push(parts[i + 1]);
+                i += 1;
+            }
+            const candidate = collected.join(" ").trim();
+            if (candidate.length > 0) {
+                projectName = candidate;
+            }
+            continue;
+        }
+
+        if (token.startsWith("^")) {
+            const d = token.substring(1);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                task.dueDate = d;
+            }
+            continue;
+        }
+
+        if (token.startsWith("#")) {
+            const tag = token.substring(1);
+            if (tag) {
+                (task.tags ||= []).push(tag);
+            }
+            continue;
+        }
+
+        if (token.startsWith("!")) {
+            const pri = token.substring(1).toLowerCase();
+            if (pri === "low" || pri === "medium" || pri === "high") {
+                task.priority = (pri.charAt(0).toUpperCase() + pri.slice(1)) as TaskPriority;
+            }
+            continue;
+        }
+
+        if (/^(\d+)(p)$/i.test(token)) {
+            const n = parseInt(token, 10);
+            if (!Number.isNaN(n)) {
+                (task as any).estimatePomos = n;
+            }
+            continue;
+        }
+
+        titleParts.push(token);
+    }
+
+    task.title = titleParts.join(" ").trim();
+    return { task, projectName };
+}
+
 export const ProjectManagerProvider: React.FC<{
     children: React.ReactNode;
 }> = ({ children }) => {
@@ -341,6 +414,7 @@ export const ProjectManagerProvider: React.FC<{
                 createdAt: now(),
                 updatedAt: now(),
                 appTaskId: (opts as any).appTaskId,
+                relatedTo: (opts as any).relatedTo || [],
             };
             created = task;
             const next = {
@@ -502,75 +576,6 @@ export const ProjectManagerProvider: React.FC<{
         return createProject(name);
     };
 
-    const quickAddParse = (input: string) => {
-        const parts = input.trim().split(/\s+/).filter(Boolean);
-        const task: Partial<PMTask> = { tags: [] };
-        const titleParts: string[] = [];
-        let projectName: string | undefined;
-
-        const isCommandToken = (token: string) => {
-            if (!token) return false;
-            return token.startsWith("@") || token.startsWith("^") || token.startsWith("#") || token.startsWith("!") || /^\d+p$/i.test(token);
-        };
-
-        for (let i = 0; i < parts.length; i++) {
-            const token = parts[i];
-            if (!token) continue;
-
-            if (token.startsWith("@")) {
-                const initial = token.substring(1);
-                const collected: string[] = [];
-                if (initial) collected.push(initial);
-                while (i + 1 < parts.length && !isCommandToken(parts[i + 1])) {
-                    collected.push(parts[i + 1]);
-                    i += 1;
-                }
-                const candidate = collected.join(" ").trim();
-                if (candidate.length > 0) {
-                    projectName = candidate;
-                }
-                continue;
-            }
-
-            if (token.startsWith("^")) {
-                const d = token.substring(1);
-                if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-                    task.dueDate = d;
-                }
-                continue;
-            }
-
-            if (token.startsWith("#")) {
-                const tag = token.substring(1);
-                if (tag) {
-                    (task.tags ||= []).push(tag);
-                }
-                continue;
-            }
-
-            if (token.startsWith("!")) {
-                const pri = token.substring(1).toLowerCase();
-                if (pri === "low" || pri === "medium" || pri === "high") {
-                    task.priority = (pri.charAt(0).toUpperCase() + pri.slice(1)) as TaskPriority;
-                }
-                continue;
-            }
-
-            if (/^(\d+)(p)$/i.test(token)) {
-                const n = parseInt(token, 10);
-                if (!Number.isNaN(n)) {
-                    (task as any).estimatePomos = n;
-                }
-                continue;
-            }
-
-            titleParts.push(token);
-        }
-
-        task.title = titleParts.join(" ").trim();
-        return { task, projectName };
-    };
-
     const setView = (v: "list" | "board") =>
         persist((prev) => ({
             ...prev,
@@ -641,7 +646,7 @@ export const usePM = () => {
     return ctx;
 };
 
-function normalizeState(input?: ProjectManagerState | null): ProjectManagerState {
+export function normalizeState(input?: ProjectManagerState | null): ProjectManagerState {
     const base = buildDefaultState();
     const sourceProjects = input?.projects && Object.keys(input.projects).length > 0 ? input.projects : base.projects;
 
