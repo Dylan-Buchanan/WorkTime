@@ -44,6 +44,7 @@ export interface PMTask {
     createdAt: string;
     updatedAt: string;
     appTaskId?: string; // linked timer task id
+    relatedTo: string[]; // array of task IDs that must be done before this task
 }
 
 export interface ProjectManagerState {

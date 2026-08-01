@@ -1,0 +1,1 @@
+Read and ensure that the task is fully implemented. Use the analysis to determine what has and hasn't been done. Use the #agent tool for any code research or testing so you can just focus on implementation.
