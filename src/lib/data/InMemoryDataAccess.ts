@@ -51,6 +51,7 @@ export interface InMemoryDataStore {
 export interface InMemoryDataAccessOptions {
     now?: () => Date;
     createTaskId?: () => string;
+    createLogId?: () => string;
     beforeCompletionCommit?: () => void | Promise<void>;
 }
 
@@ -58,6 +59,7 @@ export class InMemoryDataAccess implements DataAccess {
     readonly store: InMemoryDataStore;
     private readonly now: () => Date;
     private readonly createTaskId: () => string;
+    private readonly createLogId: () => string;
     private readonly beforeCompletionCommit?: () => void | Promise<void>;
 
     constructor(initial?: Partial<AppStateData> | InMemoryDataStore, options: InMemoryDataAccessOptions = {}) {
@@ -79,6 +81,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.pmState = this.store.pmState ? clone(this.store.pmState) : null;
         this.now = options.now ?? (() => new Date());
         this.createTaskId = options.createTaskId ?? randomId;
+        this.createLogId = options.createLogId ?? randomId;
         this.beforeCompletionCommit = options.beforeCompletionCommit;
     }
 
@@ -112,7 +115,7 @@ export class InMemoryDataAccess implements DataAccess {
     }
 
     async setActiveTask(taskId: string) {
-        return this.result(setActiveTask(this.store.state, taskId, this.now()));
+        return this.result(setActiveTask(this.store.state, taskId, this.now(), this.createLogId()));
     }
 
     async startWorkTimer() {
@@ -135,7 +138,7 @@ export class InMemoryDataAccess implements DataAccess {
         if (this.store.completed) {
             return { ...this.current(cloneAppState(this.store.state)), applied: false };
         }
-        const result = engineCompleteTimer(this.store.state, this.now());
+        const result = engineCompleteTimer(this.store.state, this.now(), this.createLogId());
         await this.beforeCompletionCommit?.();
         if (this.store.completed || !equal(this.store.state.timer, captured)) {
             return { ...this.current(cloneAppState(this.store.state)), applied: false };
@@ -145,10 +148,10 @@ export class InMemoryDataAccess implements DataAccess {
         return { state: cloneAppState(this.store.state), value: cloneAppState(this.store.state), applied: true };
     }
 
-    async stopWorkTimer() { return this.result(stopWorkTimer(this.store.state, this.now())); }
+    async stopWorkTimer() { return this.result(stopWorkTimer(this.store.state, this.now(), this.createLogId())); }
     async pauseTimer() { return this.result(pauseTimer(this.store.state, this.now())); }
     async resumeTimer() { return this.result(resumeTimer(this.store.state, this.now())); }
-    async skipBreak() { return this.result(skipBreak(this.store.state, this.now())); }
+    async skipBreak() { return this.result(skipBreak(this.store.state, this.now(), this.createLogId())); }
     async updateSettings(settings: Settings) { return this.result(updateSettings(this.store.state, settings)); }
     async finalizeTask(taskId: string) { return this.result(finalizeTask(this.store.state, taskId, this.now())); }
     async setTaskTarget(taskId: string, target: number) { return this.result(setTaskTarget(this.store.state, taskId, target)); }

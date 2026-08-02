@@ -52,12 +52,14 @@ interface Hydrated {
 export interface SupabaseDataAccessOptions {
     now?: () => Date;
     createTaskId?: () => string;
+    createLogId?: () => string;
 }
 
 export class SupabaseDataAccess implements DataAccess {
     private readonly client: SupabaseClient;
     private readonly now: () => Date;
     private readonly createTaskId: () => string;
+    private readonly createLogId: () => string;
 
     constructor(client: SupabaseClient, options: SupabaseDataAccessOptions = {}) {
         this.client = client;
@@ -65,6 +67,7 @@ export class SupabaseDataAccess implements DataAccess {
         this.createTaskId = options.createTaskId ?? (() => {
             try { return globalThis.crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
         });
+        this.createLogId = options.createLogId ?? this.createTaskId;
     }
 
     private fail(table: string, error: unknown): never {
@@ -127,8 +130,8 @@ export class SupabaseDataAccess implements DataAccess {
         const tasks: Record<string, Task> = {};
         for (const row of taskRows) tasks[row.id] = this.validateTask(row);
         const logs: PomodoroLogEntry[] = logRows.map((row) => {
-            if (!row || typeof row.task_id !== "string" || typeof row.finished_at !== "string") this.fail("pomodoro_logs", new Error(`invalid log row for ${row?.id ?? "unknown"}`));
-            return { task_id: row.task_id, duration_minutes: Number(row.duration_minutes), finished_at: row.finished_at, was_break: Boolean(row.was_break), break_skipped: Boolean(row.break_skipped) };
+            if (!row || typeof row.id !== "string" || typeof row.task_id !== "string" || typeof row.finished_at !== "string") this.fail("pomodoro_logs", new Error(`invalid log row for ${row?.id ?? "unknown"}`));
+            return { id: row.id, task_id: row.task_id, duration_minutes: Number(row.duration_minutes), finished_at: row.finished_at, was_break: Boolean(row.was_break), break_skipped: Boolean(row.break_skipped) };
         });
 
         const settingsResponse = await this.client.from("settings").select("data").eq("owner_id", ownerId).maybeSingle();
@@ -194,13 +197,13 @@ export class SupabaseDataAccess implements DataAccess {
     }
 
     async createTask(name: string, targetPomodoros: number) { const owner = await this.ownerId(); return this.transition(owner, (s) => createTask(s, name, targetPomodoros, this.now(), this.createTaskId())); }
-    async setActiveTask(taskId: string) { const owner = await this.ownerId(); return this.transition(owner, (s) => setActiveTask(s, taskId, this.now())); }
+    async setActiveTask(taskId: string) { const owner = await this.ownerId(); return this.transition(owner, (s) => setActiveTask(s, taskId, this.now(), this.createLogId())); }
     async startWorkTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => startWorkTimer(s, this.now()), true); }
     async startBreakTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => startBreakTimer(s, this.now()), true); }
-    async stopWorkTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => stopWorkTimer(s, this.now())); }
+    async stopWorkTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => stopWorkTimer(s, this.now(), this.createLogId())); }
     async pauseTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => pauseTimer(s, this.now())); }
     async resumeTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => resumeTimer(s, this.now())); }
-    async skipBreak() { const owner = await this.ownerId(); return this.transition(owner, (s) => skipBreak(s, this.now())); }
+    async skipBreak() { const owner = await this.ownerId(); return this.transition(owner, (s) => skipBreak(s, this.now(), this.createLogId())); }
     async updateSettings(settings: Settings) { const owner = await this.ownerId(); return this.transition(owner, (s) => updateSettings(s, settings)); }
     async finalizeTask(taskId: string) { const owner = await this.ownerId(); return this.transition(owner, (s) => finalizeTask(s, taskId, this.now())); }
     async setTaskTarget(taskId: string, target: number) { const owner = await this.ownerId(); return this.transition(owner, (s) => setTaskTarget(s, taskId, target)); }
@@ -208,7 +211,7 @@ export class SupabaseDataAccess implements DataAccess {
     private async completeHydrated(ownerId: string, loaded: Hydrated, expectedTimer?: ActiveTimer): Promise<CompleteTimerResult> {
         if (expectedTimer && !equal(expectedTimer, loaded.state.timer)) return { state: cloneAppState(loaded.state), value: cloneAppState(loaded.state), applied: false };
         if (loaded.completed) return { state: cloneAppState(loaded.state), value: cloneAppState(loaded.state), applied: false };
-        const result = engineCompleteTimer(loaded.state, this.now());
+        const result = engineCompleteTimer(loaded.state, this.now(), this.createLogId());
         const newLogs = result.state.logs.slice(loaded.state.logs.length);
         let changedTask: Task | null = null;
         for (const task of Object.values(result.state.tasks)) {

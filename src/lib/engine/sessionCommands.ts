@@ -40,7 +40,7 @@ export function resumeTimer(state: AppStateData, now: Date): EngineResult<Active
 }
 
 /** Rust: skip_break */
-export function skipBreak(state: AppStateData, now: Date): EngineResult<AppStateData> {
+export function skipBreak(state: AppStateData, now: Date, logId: string): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
     if (!timer) throw new EngineError("No active break");
@@ -48,7 +48,7 @@ export function skipBreak(state: AppStateData, now: Date): EngineResult<AppState
 
     const task = next.tasks[timer.task_id];
     if (task) task.break_skips += 1;
-    appendLog(next, timer.task_id, 0, now, true, true);
+    appendLog(next, timer.task_id, 0, now, true, logId, true);
     next.timer = null;
     return { state: next, value: cloneAppState(next) };
 }

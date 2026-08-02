@@ -85,9 +85,11 @@ export function appendLog(
     durationMinutes: number,
     finishedAt: Date,
     wasBreak: boolean,
+    logId: string,
     breakSkipped = false,
 ): void {
     state.logs.push({
+        id: logId,
         task_id: taskId,
         duration_minutes: durationMinutes,
         finished_at: finishedAt.toISOString(),

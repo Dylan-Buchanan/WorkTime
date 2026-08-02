@@ -62,7 +62,7 @@ export function startBreakTimer(state: AppStateData, now: Date): EngineResult<Ac
 }
 
 /** Rust: complete_timer */
-export function completeTimer(state: AppStateData, now: Date): EngineResult<AppStateData> {
+export function completeTimer(state: AppStateData, now: Date, logId: string): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
     if (!timer) throw new EngineError("No active timer");
@@ -70,7 +70,7 @@ export function completeTimer(state: AppStateData, now: Date): EngineResult<AppS
 
     const planned = plannedTimerSecs(timer);
     const wasBreak = timer.kind !== "Work";
-    appendLog(next, timer.task_id, planned / 60, now, wasBreak);
+    appendLog(next, timer.task_id, planned / 60, now, wasBreak, logId);
 
     if (!wasBreak) {
         const task = next.tasks[timer.task_id];
@@ -89,7 +89,7 @@ export function completeTimer(state: AppStateData, now: Date): EngineResult<AppS
 }
 
 /** Rust: stop_work_timer */
-export function stopWorkTimer(state: AppStateData, now: Date): EngineResult<AppStateData> {
+export function stopWorkTimer(state: AppStateData, now: Date, logId: string): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
     if (!timer) throw new EngineError("No active timer");
@@ -106,7 +106,7 @@ export function stopWorkTimer(state: AppStateData, now: Date): EngineResult<AppS
             task.target_pomodoros = Math.ceil(task.completed_pomodoros);
         }
     }
-    appendLog(next, timer.task_id, elapsed / 60, now, false);
+    appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
     next.timer = null;
     return { state: next, value: cloneAppState(next) };
 }

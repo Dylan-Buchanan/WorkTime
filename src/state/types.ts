@@ -70,6 +70,7 @@ export interface ProjectManagerState {
 }
 
 export interface PomodoroLogEntry {
+    id: string;
     task_id: string;
     duration_minutes: number;
     finished_at: string;

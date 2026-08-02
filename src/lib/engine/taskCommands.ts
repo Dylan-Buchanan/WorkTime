@@ -12,7 +12,7 @@ import {
 } from "./core";
 
 /** Rust: set_active_task */
-export function setActiveTask(state: AppStateData, taskId: string, now: Date): EngineResult<void> {
+export function setActiveTask(state: AppStateData, taskId: string, now: Date, logId: string): EngineResult<void> {
     const next = cloneAppState(state);
     taskOrThrow(next, taskId);
 
@@ -30,7 +30,7 @@ export function setActiveTask(state: AppStateData, taskId: string, now: Date): E
                     oldTask.target_pomodoros = Math.ceil(oldTask.completed_pomodoros);
                 }
             }
-            appendLog(next, timer.task_id, elapsed / 60, now, false);
+            appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
         }
 
         const remaining = planned - elapsed;

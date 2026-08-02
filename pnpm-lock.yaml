@@ -24,8 +24,8 @@ importers:
         specifier: ^2.111.0
         version: 2.111.0
       '@tauri-apps/api':
-        specifier: ^2
-        version: 2.11.1
+        specifier: 2.8.0
+        version: 2.8.0
       '@tauri-apps/plugin-notification':
         specifier: ^2
         version: 2.3.3
@@ -1132,8 +1132,8 @@ packages:
     resolution: {integrity: sha512-9q0/AULthQnWeiDh1vGyjoJZbSY04bu6qHcWit70pqEYn5Kv/dkCPY62Ja1123jEnJbB9Vd2pjY7Kvk/lK3peA==}
     engines: {node: '>=22.0.0'}
 
-  '@tauri-apps/api@2.11.1':
-    resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
+  '@tauri-apps/api@2.8.0':
+    resolution: {integrity: sha512-ga7zdhbS2GXOMTIZRT0mYjKJtR9fivsXzsyq5U3vjDL0s6DTMwYRm0UHNjzTY5dh4+LSC68Sm/7WEiimbQNYlw==}
 
   '@tauri-apps/cli-darwin-arm64@2.11.4':
     resolution: {integrity: sha512-1ryOF3ZhpZ/nemHV5zVwBQBz9jDGKmKPvWPADOhc83ig0P4bMc2iER4NbC6r9sjeIZ6RVQ4g3RZIYvezhcl4TQ==}
@@ -3945,7 +3945,7 @@ snapshots:
       '@supabase/realtime-js': 2.111.0
       '@supabase/storage-js': 2.111.0
 
-  '@tauri-apps/api@2.11.1': {}
+  '@tauri-apps/api@2.8.0': {}
 
   '@tauri-apps/cli-darwin-arm64@2.11.4':
     optional: true
@@ -3996,7 +3996,7 @@ snapshots:
 
   '@tauri-apps/plugin-notification@2.3.3':
     dependencies:
-      '@tauri-apps/api': 2.11.1
+      '@tauri-apps/api': 2.8.0
 
   '@testing-library/dom@10.4.1':
     dependencies:

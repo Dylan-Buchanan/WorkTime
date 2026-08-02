@@ -1,7 +1,7 @@
 {
     "name": "work-time",
     "private": true,
-    "version": "0.2.7",
+    "version": "0.2.9",
     "type": "module",
     "scripts": {
         "dev": "vite",
@@ -14,7 +14,7 @@
         "test:unit": "vitest run",
         "test:unit:watch": "vitest",
         "test:e2e": "playwright test",
-        "test:integration": "vitest run --config vitest.integration.config.ts",
+        "test:integration": "node scripts/verify-local-first-migration.mjs && vitest run --config vitest.integration.config.ts",
         "test:pwa": "npm run build && node scripts/verify-pwa-build.mjs",
         "test:platform": "node scripts/verify-platform-cleanup.mjs",
         "test:all": "npm run test:unit && npm run test:pwa && npm run test:platform && npm run test:integration && npm run test:e2e",
@@ -31,7 +31,7 @@
         "@dnd-kit/sortable": "^8.0.0",
         "@dnd-kit/utilities": "^3.2.2",
         "@supabase/supabase-js": "^2.111.0",
-        "@tauri-apps/api": "^2",
+        "@tauri-apps/api": "2.8.0",
         "@tauri-apps/plugin-notification": "^2",
         "date-fns": "^3.6.0",
         "lucide-react": "^0.468.0",

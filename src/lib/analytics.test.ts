@@ -14,6 +14,7 @@ function log(
     overrides: Partial<PomodoroLogEntry> = {}
 ): PomodoroLogEntry {
     return {
+        id: `log-${finishedAt}`,
         task_id: "t1",
         duration_minutes: 25,
         finished_at: finishedAt,
