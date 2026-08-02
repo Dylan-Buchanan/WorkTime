@@ -1,0 +1,71 @@
+name: Deploy Supabase Migrations
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**"
+      - ".github/workflows/supabase-migrations.yml"
+
+jobs:
+  deploy-migrations:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Verify Supabase configuration
+        run: |
+          if [ -z "${{ secrets.SUPABASE_PROJECT_ID_PRODUCTION }}" ]; then
+            echo "SUPABASE_PROJECT_ID_PRODUCTION is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.SUPABASE_DB_PASSWORD_PRODUCTION }}" ]; then
+            echo "SUPABASE_DB_PASSWORD_PRODUCTION is not set"
+            exit 1
+          fi
+          echo "Secrets are set"
+          echo "Migrations directory exists: $([ -d supabase/migrations ] && echo 'yes' || echo 'no')"
+          ls -la supabase/migrations/ || echo "No migrations found"
+
+      - name: Run Supabase migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD_PRODUCTION }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID_PRODUCTION }}
+        run: |
+          # Use link to ensure the correct host is resolved for the project ref
+          supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
+          # Push migrations using the linked project
+          supabase db push --debug
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "Migrations successfully deployed"
+          else
+            echo "Migration deployment failed"
+            exit 1
+          fi

@@ -21,7 +21,9 @@
         "supabase:start": "npx supabase start",
         "supabase:stop": "npx supabase stop",
         "supabase:reset": "npx supabase db reset",
-        "supabase:status": "npx supabase status"
+        "supabase:status": "npx supabase status",
+        "supabase:serve": "npx supabase functions serve invite-signup --no-verify-jwt --env-file supabase/.env.local",
+        "supabase:fullstart": "npm run supabase:start && npm run supabase:serve"
     },
     "dependencies": {
         "@dnd-kit/core": "^6.3.1",

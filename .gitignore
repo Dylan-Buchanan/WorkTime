@@ -27,6 +27,7 @@ dist-ssr
 *.db
 *.sql
 !supabase/migrations/*.sql
+!supabase/seed.sql
 *.sqlite
 
 # Supabase local state and server-only environment

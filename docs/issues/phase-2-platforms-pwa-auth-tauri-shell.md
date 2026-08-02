@@ -14,7 +14,7 @@ Ship the phone experience and clean up the desktop build: deploy the same React 
 
 ## Steps to Reproduce Context
 
-1. `index.html` has no PWA manifest or mobile meta tags; `vite.config.ts` is configured only for Tauri dev (fixed port 1420, react plugin only).
+1. `index.html` has no PWA manifest or mobile meta tags; `vite.config.ts` is configured only for Tauri dev (fixed port 3000, react plugin only).
 2. There is currently no authentication UI or session handling anywhere in the app.
 3. `src-tauri/src/lib.rs` still hosts all commands and `src-tauri/capabilities/default.json` grants `opener:default` and `notification:default`; after Phase 1 the Rust commands are no longer used by the frontend.
 4. Notifications already fall back to the Web Notification API in browsers (`AppStateContext.tsx:19-33`), and sounds use plain `HTMLAudioElement` (`src/hooks/useSounds.ts`), so the web build is platform-ready.

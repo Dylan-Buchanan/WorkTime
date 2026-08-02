@@ -7,7 +7,7 @@
 - Add a web app manifest (`manifest.webmanifest`) declaring `name`, `short_name`, icons (192px and 512px), `start_url` of `"/"`, `display` of `standalone`, `theme_color`, and `background_color`; link it from `index.html` so the app is installable (add-to-home-screen) on phones.
 - Add a service worker via `vite-plugin-pwa` configured with `registerType: "autoUpdate"` and precaching of the build assets, so the PWA is installable and loads from cache; new deploys auto-update.
 - Add mobile-friendly meta tags to `index.html` (`theme-color`, `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`, and an `apple-touch-icon`) and replace the title `"Tauri + React + Typescript"` with the product name.
-- Configure `vite.config.ts` with the `vite-plugin-pwa` plugin and a root base path (`base: "/"`) for Cloudflare Pages deployment; the existing Tauri dev server config (fixed port 1420, `TAURI_DEV_HOST` handling) must remain so `tauri dev` still works.
+- Configure `vite.config.ts` with the `vite-plugin-pwa` plugin and a root base path (`base: "/"`) for Cloudflare Pages deployment; the existing Tauri dev server config (fixed port 3000, `TAURI_DEV_HOST` handling) must remain so `tauri dev` still works.
 - Supabase URL and anon key must come only from build-time env vars `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (no hardcoding); the build must fail fast if either is missing rather than producing a bundle that throws at runtime.
 - Add a Cloudflare Pages SPA fallback (`public/_redirects` containing `/* /index.html 200`) so BrowserRouter deep links resolve on the static host.
 
@@ -37,27 +37,27 @@
 ## Tests To Create Or Update
 
 - For the PWA manifest/service-worker items:
-  - A build-output assertion that `npm run build` succeeds and `dist/` contains `manifest.webmanifest`, a registered service worker file, and an `index.html` that references the manifest link and the mobile meta tags.
-  - A static check that `public/_redirects` contains the `/* /index.html 200` SPA fallback rule.
-  - Manual visual check: install the hosted PWA on a phone and confirm add-to-home-screen and a local timer-end notification (automated installability verification is not practical).
+    - A build-output assertion that `npm run build` succeeds and `dist/` contains `manifest.webmanifest`, a registered service worker file, and an `index.html` that references the manifest link and the mobile meta tags.
+    - A static check that `public/_redirects` contains the `/* /index.html 200` SPA fallback rule.
+    - Manual visual check: install the hosted PWA on a phone and confirm add-to-home-screen and a local timer-end notification (automated installability verification is not practical).
 - For the `AuthProvider`/`RequireAuth` items:
-  - Unit test that the provider renders children when a session is present and routes to login when absent; that `signIn`/`signUp`/`signOut`/`resetPassword` call a mocked Supabase client with the correct arguments; and that it reacts to `onAuthStateChange`.
-  - Unit test that `RequireAuth` redirects to `/login` with the `from` location preserved when no session, renders children when a session exists, and redirects `/login` → `/` when already authenticated.
+    - Unit test that the provider renders children when a session is present and routes to login when absent; that `signIn`/`signUp`/`signOut`/`resetPassword` call a mocked Supabase client with the correct arguments; and that it reacts to `onAuthStateChange`.
+    - Unit test that `RequireAuth` redirects to `/login` with the `from` location preserved when no session, renders children when a session exists, and redirects `/login` → `/` when already authenticated.
 - For the `/signup` item:
-  - Unit test that it posts `email`/`password`/`inviteCode` to the `invite-signup` Edge Function, then calls `signInWithPassword` on success; renders error messages for an invalid invite (403), an existing email (409), and missing fields.
+    - Unit test that it posts `email`/`password`/`inviteCode` to the `invite-signup` Edge Function, then calls `signInWithPassword` on success; renders error messages for an invalid invite (403), an existing email (409), and missing fields.
 - For the `/login` item:
-  - Unit test that it calls `signInWithPassword` and renders an error on invalid credentials.
+    - Unit test that it calls `signInWithPassword` and renders an error on invalid credentials.
 - For the password-reset items:
-  - Unit test that the "forgot password" control calls `resetPasswordForEmail` with the correct `redirectTo`; that the `/reset-password` page calls `auth.updateUser` with the new password from the recovery token and redirects to `/login` on success.
+    - Unit test that the "forgot password" control calls `resetPasswordForEmail` with the correct `redirectTo`; that the `/reset-password` page calls `auth.updateUser` with the new password from the recovery token and redirects to `/login` on success.
 - For the auth flow end-to-end:
-  - Playwright tests against local Supabase: an unauthenticated visit to `/` redirects to `/login`; a signup with a valid invite code creates an account and lands on the timer; a login with the wrong password shows an error; sign-out returns to `/login`. (Requires the `invite-signup` function to be served locally with a known `SIGNUP_INVITE_CODE`; document this test setup.)
+    - Playwright tests against local Supabase: an unauthenticated visit to `/` redirects to `/login`; a signup with a valid invite code creates an account and lands on the timer; a login with the wrong password shows an error; sign-out returns to `/login`. (Requires the `invite-signup` function to be served locally with a known `SIGNUP_INVITE_CODE`; document this test setup.)
 - For the Tauri slimming items:
-  - A build smoke gate that `npm run tauri build` succeeds and produces an MSI.
-  - A static/review check that `src-tauri/src/lib.rs` no longer contains `#[tauri::command]` or an `invoke_handler`, and `src-tauri/Cargo.toml` no longer lists `chrono`/`uuid`/`serde`/`serde_json`.
-  - Regression: `npm run test:unit` and `npm run test:e2e` still pass after the Rust suite and `mock-ipc.js` removal; `package.json` `test:all` and `AGENTS.md` no longer reference `test:rust` or `mock-ipc.js`.
+    - A build smoke gate that `npm run tauri build` succeeds and produces an MSI.
+    - A static/review check that `src-tauri/src/lib.rs` no longer contains `#[tauri::command]` or an `invoke_handler`, and `src-tauri/Cargo.toml` no longer lists `chrono`/`uuid`/`serde`/`serde_json`.
+    - Regression: `npm run test:unit` and `npm run test:e2e` still pass after the Rust suite and `mock-ipc.js` removal; `package.json` `test:all` and `AGENTS.md` no longer reference `test:rust` or `mock-ipc.js`.
 - For the notifications item:
-  - Keep/extend a unit test asserting the Web Notification fallback is used when the Tauri notification plugin import fails (non-Tauri environment); existing `AppStateContext` behavior tests must still pass.
-  - Manual check: confirm a timer-end native notification fires in the MSI build and a local notification fires in the installed phone PWA.
+    - Keep/extend a unit test asserting the Web Notification fallback is used when the Tauri notification plugin import fails (non-Tauri environment); existing `AppStateContext` behavior tests must still pass.
+    - Manual check: confirm a timer-end native notification fires in the MSI build and a local notification fires in the installed phone PWA.
 
 ## Important Background Information
 
@@ -84,11 +84,11 @@
 
 ## User Decisions Made During Requirement Creation
 
-| Decision Needed | Answer | Reason |
-| --------------- | ------ | ------ |
-| Which static host should the PWA target? | Cloudflare Pages | Fast global CDN, simple SPA fallback via `_redirects`, env vars in dashboard, good reach for a phone PWA. |
-| Which service-worker/caching approach? | `vite-plugin-pwa` with `autoUpdate` + precache | Standard Vite PWA plugin; generates manifest + workbox SW, precaches build assets, auto-updates on new deploys. Best fit for a Vite SPA. |
-| How far should the Rust slimming go? | Remove commands + pure functions + Rust tests | The frontend no longer calls `invoke`; the TS engine parity suite already covers timer semantics. Slim `lib.rs` to window + notification plugins only and drop the Rust suite, updating `AGENTS.md`/`test:all`. |
-| Which routing/auth-guard approach? | BrowserRouter + SPA fallback + `RequireAuth` guard | Keeps the existing `BrowserRouter`, gives clean shareable URLs, and supports the email-link `/reset-password` landing route. Cloudflare Pages SPA fallback is a one-line `_redirects`. |
-| Which password-reset flow? | Email reset link → hosted PWA `/reset-password` page | Uses Supabase `resetPasswordForEmail` with `redirectTo` the hosted PWA reset page; Tauri users reset via the browser then sign back in, since the webview cannot receive email deep links. |
-| How should the Tauri shell source its UI? | Bundle local `dist` with build-time env vars | Keeps the shell self-contained (`frontendDist: ../dist`); `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` are baked at `tauri build` time so the webview talks directly to Supabase. |
+| Decision Needed                           | Answer                                               | Reason                                                                                                                                                                                                          |
+| ----------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Which static host should the PWA target?  | Cloudflare Pages                                     | Fast global CDN, simple SPA fallback via `_redirects`, env vars in dashboard, good reach for a phone PWA.                                                                                                       |
+| Which service-worker/caching approach?    | `vite-plugin-pwa` with `autoUpdate` + precache       | Standard Vite PWA plugin; generates manifest + workbox SW, precaches build assets, auto-updates on new deploys. Best fit for a Vite SPA.                                                                        |
+| How far should the Rust slimming go?      | Remove commands + pure functions + Rust tests        | The frontend no longer calls `invoke`; the TS engine parity suite already covers timer semantics. Slim `lib.rs` to window + notification plugins only and drop the Rust suite, updating `AGENTS.md`/`test:all`. |
+| Which routing/auth-guard approach?        | BrowserRouter + SPA fallback + `RequireAuth` guard   | Keeps the existing `BrowserRouter`, gives clean shareable URLs, and supports the email-link `/reset-password` landing route. Cloudflare Pages SPA fallback is a one-line `_redirects`.                          |
+| Which password-reset flow?                | Email reset link → hosted PWA `/reset-password` page | Uses Supabase `resetPasswordForEmail` with `redirectTo` the hosted PWA reset page; Tauri users reset via the browser then sign back in, since the webview cannot receive email deep links.                      |
+| How should the Tauri shell source its UI? | Bundle local `dist` with build-time env vars         | Keeps the shell self-contained (`frontendDist: ../dist`); `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` are baked at `tauri build` time so the webview talks directly to Supabase.                               |
