@@ -36,6 +36,8 @@ supabase/.env.local
 
 # Local development state
 dev-data/
+/data.json
+/pm-state.json
 
 # Test output
 test-results/
