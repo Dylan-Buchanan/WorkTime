@@ -1,50 +1,42 @@
-## Overview
+# WorkTime repository guidance
 
-WorkTime is a Windows Tauri desktop app with a React/Vite frontend and a Rust backend. The current live desktop path uses Tauri commands and local JSON persistence. Supabase and the shared TypeScript engine are foundation work for future multi-user clients and are not wired into the desktop contexts yet.
+WorkTime is a Windows Tauri desktop app with a React/Vite frontend. The browser PWA and Tauri webview share the Supabase-backed React application and authenticated routes. The Tauri backend is a slim native shell containing only the opener and notification plugins; application data and timer behavior live in the frontend Supabase data access layer and pure TypeScript engine.
 
-## Project Basics
+## Project basics
 
-- `src/` contains the React frontend, contexts, shared state types, display helpers, and frontend tests.
-- `src-tauri/` contains the Rust Tauri commands, timer/task domain implementation, and Rust tests.
-- `e2e/` contains Playwright tests and the mock Tauri IPC bridge used by browser tests.
-- `src/lib/engine/` contains the pure TypeScript port of the 16 timer/task commands. Commands clone input state, take explicit `Date` and task-ID inputs, perform no I/O, and return `{ state, value }`.
-- `src/lib/supabase.ts` is an environment-only browser client foundation. Do not import it into the live app until a later client-rewire task.
-- `supabase/` contains the local CLI config, versioned migration, owner-scoped RLS policies, invite-signup Edge Function, and local verification notes.
-- Local desktop data is persisted by Rust under `dev-data/` during development; do not migrate or replace that path as part of Phase 0 foundation work.
+- `src/` contains React routes, auth, contexts, shared state types, display helpers, and frontend tests.
+- `src/lib/engine/` is the pure TypeScript timer/task source of truth. It has no I/O, network, wall-clock, or random-ID dependencies in command inputs.
+- `src-tauri/` contains only the native Tauri startup shell and retained plugin configuration.
+- `e2e/` contains Playwright tests against the real React app and local Supabase.
+- `supabase/` contains the schema/RLS migration, local Auth configuration, invite-signup Edge Function, and setup notes.
+- `public/` contains PWA install artwork and the Cloudflare Pages SPA fallback.
 
-### Supabase workflow
+Do not add Tauri `invoke` data paths, local JSON persistence, service-role credentials, invite codes, or push/background-sync behavior. Keep service-role keys and `SIGNUP_INVITE_CODE` server-only. Browser configuration may use only `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and the public recovery origin `VITE_PUBLIC_APP_URL`.
 
-Docker Desktop must be running for the local Supabase stack. The package scripts are:
+## Environment and Supabase
 
-- `npm run supabase:start` - start the local Supabase services.
-- `npm run supabase:stop` - stop the local Supabase services.
-- `npm run supabase:reset` - destructively reset the local database and reapply migrations.
+Production web and Tauri builds require all three public Vite variables. Development may omit `VITE_PUBLIC_APP_URL`, in which case recovery uses the current browser origin. The canonical production value must be an origin without a path or trailing slash.
 
-Use `npx supabase status` to inspect local URLs and keys without committing them. Never run a database reset against a hosted project. Keep real `.env` files, `supabase/.env.local`, service-role keys, and invite codes out of Git. Browser configuration may use only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`; service-role credentials and `SIGNUP_INVITE_CODE` are server-only.
+Docker Desktop is required for local Supabase:
 
-## Updating
+```powershell
+npm run supabase:start
+npx supabase status
+npx supabase functions serve invite-signup --no-verify-jwt --env-file supabase/.env.local
+```
 
-When adding new code use the following process to ensure the code works:
+Use an ignored `supabase/.env.local` containing a temporary server-side `SIGNUP_INVITE_CODE`. Never run `npm run supabase:reset` against a hosted project. Hosted Supabase must keep public email signup disabled, deploy the invite function with its server-side secret, and allow the exact `${VITE_PUBLIC_APP_URL}/reset-password` redirect.
 
-1. Run `npm install` to make sure dependencies are up to date.
-2. Run `npm run build`.
+## Updating and testing
 
-Do not change `src-tauri/src/lib.rs`, `src/state/AppStateContext.tsx`, `src/state/ProjectManagerContext.tsx`, `e2e/mock-ipc.js`, or the existing display helpers merely to add Phase 0 foundation code. If timer semantics change intentionally, update every corresponding pure implementation and test boundary.
+After dependency or source changes, run `npm install` and `npm run build`. Before completion, use the smallest relevant checks:
 
-## Testing
+- `npm run test:unit` — Vitest frontend, auth, context, and pure-engine tests.
+- `npm run test:pwa` — production build plus generated manifest/service-worker/mobile metadata checks; provide the required public env.
+- `npm run test:platform` — static checks for the slim native shell, retained capabilities, local `dist` packaging, and workflow cleanup.
+- `npm run test:integration` — local Supabase configuration/data checks; requires the local stack.
+- `npm run test:e2e` — Playwright against local Supabase and the served invite function; requires Chromium and the local stack.
+- `npm run test:all` — unit, PWA, platform, integration, and E2E coverage.
+- `npm run tauri build` — explicit Windows packaging smoke gate; requires all public Vite variables and should produce an MSI under `src-tauri/target/release/bundle/msi/`.
 
-Before considering a change complete, run the test suites that cover it:
-
-- `npm run test:unit` — frontend unit + context integration tests (Vitest, jsdom, Testing Library).
-- `npm run test:unit -- src/lib/engine/engine.test.ts` — focused deterministic TypeScript engine parity suite.
-- `npm run test:rust` — Rust backend engine tests (`cargo test` in `src-tauri`). The domain logic in `src-tauri/src/lib.rs` is extracted into pure functions so the timer engine is fully covered; keep these in sync if you change timer/task behavior.
-- `npm run test:e2e` — Playwright tests driving the real React app in a browser against a mock Tauri IPC bridge (`e2e/mock-ipc.js`). Run `npx playwright install chromium` once after setup.
-- `npm run test:all` — runs all three suites.
-
-### Notes
-
-- The Tauri IPC bridge is mocked for e2e and context integration tests. `window.__TAURI_INTERNALS__.invoke` is implemented by `e2e/mock-ipc.js` (e2e) and `vi.mock("@tauri-apps/api/core")` (unit/integration).
-- Pure logic that must stay testable lives in `src/lib/` (`timer.ts`, `analytics.ts`) and in exported helpers (`quickAddParse`, `normalizeState`).
-- The shared engine also lives in `src/lib/engine/`; it must not import Supabase, Tauri, filesystem, network, wall-clock, or random-ID APIs. Preserve exact Rust error strings and timer accrual semantics when changing it.
-- Supabase schema, Auth, and RLS checks are documented manual checks in `supabase/README.md`; automated Phase 0 coverage is intentionally focused on the pure engine.
-- If you change the timer engine semantics in `lib.rs`, mirror the change in the e2e mock (`e2e/mock-ipc.js`) so e2e stays faithful.
+Keep `DataProvider`, `AppStateProvider`, `ProjectManagerProvider`, and `StateSyncBridge` behind the authenticated route shell. Public auth pages must not trigger authenticated data reads. Preserve the existing notification entry point and its Web Notification fallback, and do not change timer/task semantics without updating the TypeScript engine tests.

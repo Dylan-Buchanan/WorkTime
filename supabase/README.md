@@ -16,6 +16,8 @@ npx supabase status
 
 The local Auth configuration disables direct email/password signup while preserving password sign-in. The hosted Auth dashboard must have the equivalent “Allow new users to sign up” setting disabled; `db push` does not change hosted Auth settings.
 
+The browser and Tauri builds require the public variables `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and (for production builds) `VITE_PUBLIC_APP_URL`. Set the last value to the canonical Cloudflare Pages origin, without a path or trailing slash. Password-reset emails use its `/reset-password` route, so add that exact URL to the hosted Supabase Auth redirect allow-list. Local development also allows the `http://localhost:1420/reset-password` and `http://127.0.0.1:1420/reset-password` routes above.
+
 ## Invite function
 
 Create the ignored `supabase/.env.local` file with a temporary local secret:
@@ -42,6 +44,8 @@ npx supabase functions deploy invite-signup --no-verify-jwt
 ```
 
 The function accepts `POST` JSON with `email`, `password`, and `inviteCode`; it normalizes only the email and returns safe `id`/`email` fields on success. It uses `email_confirm: true`, so the new user can immediately sign in with `signInWithPassword` without an invite code.
+
+Client signup must continue to use this invite function; direct anonymous `auth.signUp` is intentionally disabled. Keep `SIGNUP_INVITE_CODE` and the service-role key only in the ignored Edge Function environment.
 
 Manual Auth cases:
 

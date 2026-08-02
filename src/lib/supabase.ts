@@ -1,17 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import { supabaseAuthStorageKey } from "./supabaseAuthStorage";
+import { readPublicAppEnv } from "./supabaseEnv";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl?.trim()) {
-    throw new Error("Missing VITE_SUPABASE_URL configuration");
-}
-
-if (!supabaseAnonKey?.trim()) {
-    throw new Error("Missing VITE_SUPABASE_ANON_KEY configuration");
-}
+const { supabaseUrl, supabaseAnonKey } = readPublicAppEnv(import.meta.env);
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: { storageKey: supabaseAuthStorageKey(supabaseUrl) },
+    auth: {
+        storageKey: supabaseAuthStorageKey(supabaseUrl),
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+    },
 });

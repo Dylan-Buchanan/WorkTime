@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { AppStateProvider, useAppState } from "./AppStateContext";
+import { AppStateProvider, resetNotifyForTesting, useAppState } from "./AppStateContext";
 import { DataProvider } from "./DataContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState, makeActiveTimer } from "../test/mockTauri";
+
+vi.mock("@tauri-apps/plugin-notification", () => {
+    throw new Error("native notifications are unavailable in the browser test");
+});
 
 function Probe() {
     const { state, remainingMs, tick, createTask, startWork, pauseTimer, resumeTimer } = useAppState();
@@ -24,6 +28,13 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
 }
 
 beforeEach(() => localStorage.clear());
+
+afterEach(() => {
+    resetNotifyForTesting();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete (document as unknown as { hidden?: boolean }).hidden;
+});
 
 describe("AppStateContext", () => {
     it("loads backend state on mount", async () => {
@@ -57,5 +68,24 @@ describe("AppStateContext", () => {
         await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("loaded"));
         await act(async () => screen.getByText("create").click());
         await waitFor(() => expect(data.store.state.tasks["new-id"]?.name).toBe("New Task"));
+    });
+
+    it("falls back to Web Notifications when the native adapter is unavailable", async () => {
+        const notifications: Array<{ title: string; options?: { body?: string } }> = [];
+        class MockNotification {
+            static permission = "granted";
+            static requestPermission = vi.fn(async () => "granted");
+            constructor(title: string, options?: { body?: string }) { notifications.push({ title, options }); }
+        }
+        vi.stubGlobal("Notification", MockNotification);
+        Object.defineProperty(document, "hidden", { configurable: true, value: true });
+        vi.spyOn(document, "hasFocus").mockReturnValue(false);
+        const data = new InMemoryDataAccess(makeAppState({
+            active_task: "t1",
+            tasks: { t1: { id: "t1", name: "Browser task", target_pomodoros: 1, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } },
+            timer: makeActiveTimer({ task_id: "t1", ends_at: new Date(Date.now() - 1000).toISOString(), planned_secs: 1500 }),
+        }));
+        render(wrap(data, <Probe />));
+        await waitFor(() => expect(notifications.some((item) => item.title === "Pomodoro Complete")).toBe(true));
     });
 });

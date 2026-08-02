@@ -6,6 +6,9 @@ import { useData } from "./DataContext";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
 
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
+export function resetNotifyForTesting(): void {
+    notify = null;
+}
 async function ensureNotification() {
     if (notify) return;
     try {

@@ -1,9 +1,5 @@
 import { AppStateData, Settings } from "../state/types";
 
-// Shared fixture builders for integration tests.
-// Note: `vi.mock("@tauri-apps/api/core")` must be declared in each test file that
-// needs the mocked `invoke`; helpers here stay mock-free.
-
 export const defaultSettings: Settings = {
     work_minutes: 25,
     short_break_minutes: 5,
