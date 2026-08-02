@@ -29,7 +29,7 @@ Use an ignored `supabase/.env.local` containing a temporary server-side `SIGNUP_
 
 ## Updating and testing
 
-After dependency or source changes, run `npm install` and `npm run build`. Before completion, use the smallest relevant checks:
+After dependency or source changes, run `pnpm install` and `pnpm run build`. Before completion, use the smallest relevant checks:
 
 - `npm run test:unit` — Vitest frontend, auth, context, and pure-engine tests.
 - `npm run test:pwa` — production build plus generated manifest/service-worker/mobile metadata checks; provide the required public env.
