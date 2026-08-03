@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { backendPMState, openApp } from "./helpers";
+import { backendPMState, openApp, syncData } from "./helpers";
 
 test.describe("Project Manager", () => {
     test("create a project and add a task via quick add", async ({ browser }) => {
@@ -25,13 +25,8 @@ test.describe("Project Manager", () => {
         await expect(page.getByText("Projects: 2")).toBeVisible();
         await expect(page.getByText("Tasks: 1")).toBeVisible();
 
-        // PM state is persisted to the mock backend (debounced, so poll for it).
-        await expect
-            .poll(async () => {
-                const pm = await backendPMState(app);
-                return pm ? Object.keys(pm.tasks).length : 0;
-            }, { timeout: 5000 })
-            .toBe(1);
+        // PM changes stage immediately and reach Supabase only on explicit sync.
+        await syncData(page);
 
         const pm = await backendPMState(app);
         const pmTask = Object.values(pm.tasks)[0] as any;

@@ -1,24 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-    DEFAULT_SETTINGS,
-    cloneAppState,
-    createTask,
-    finalizeTask,
-    getState,
-    resetAppState,
-    setActiveTask,
-    setTaskTarget,
-    startBreakTimer,
-    startWorkTimer,
-    stopWorkTimer,
-    updateSettings,
-    completeTimer as engineCompleteTimer,
-    pauseTimer,
-    resumeTimer,
-    skipBreak,
-} from "../engine";
-import type { ActiveTimer, AppStateData, PomodoroLogEntry, Settings, Task } from "../../state/types";
-import { DataAccessAuthError, type CompleteTimerResult, type DataAccess, type FetchStateResult, type SyncedPMState } from "./DataAccess";
+import type { ActiveTimer, PomodoroLogEntry, Settings, Task } from "../../state/types";
+import { DataAccessAuthError } from "./DataAccess";
+import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./staging/types";
+import type { PushPlan, SyncRemote } from "./sync/types";
+import { completionRpcPayload } from "./sync/timerCompletions";
 
 const PAGE_SIZE = 500;
 type JsonRecord = Record<string, unknown>;
@@ -27,47 +12,55 @@ function clone<T>(value: T): T {
     return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }
 
-function equal(a: unknown, b: unknown): boolean {
-    return JSON.stringify(a) === JSON.stringify(b);
-}
-
 function isRecord(value: unknown): value is JsonRecord {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function timerSlice(state: AppStateData) {
-    return { active_task: state.active_task, current_cycle_pomodoros: state.current_cycle_pomodoros, timer: state.timer };
+function isSettings(value: unknown): value is Settings {
+    return (
+        isRecord(value) &&
+        typeof value.work_minutes === "number" &&
+        typeof value.short_break_minutes === "number" &&
+        typeof value.long_break_minutes === "number" &&
+        typeof value.segment_length === "number"
+    );
 }
 
-function taskRow(ownerId: string, task: Task) {
-    return { owner_id: ownerId, id: task.id, name: task.name, target_pomodoros: task.target_pomodoros, completed_pomodoros: task.completed_pomodoros, created_at: task.created_at, completed_at: task.completed_at, break_skips: task.break_skips, archived: task.archived };
+/**
+ * Serializes a task into the JSON row shape the staged-sync RPCs expect. The
+ * RPCs derive the owner from the caller's JWT and ignore `owner_id`, but it is
+ * kept for parity with the legacy row shape. `updated_at` is optional so
+ * `complete_timer` keeps its existing now()-default behavior while
+ * `apply_staged_sync` task upserts author their exact LWW timestamp.
+ */
+function taskRow(ownerId: string, task: Task, updatedAt?: string) {
+    return {
+        owner_id: ownerId,
+        id: task.id,
+        name: task.name,
+        target_pomodoros: task.target_pomodoros,
+        completed_pomodoros: task.completed_pomodoros,
+        created_at: task.created_at,
+        completed_at: task.completed_at,
+        break_skips: task.break_skips,
+        archived: task.archived,
+        updated_at: updatedAt,
+    };
 }
 
-interface Hydrated {
-    state: AppStateData;
-    completed: boolean;
-    rawTimer: unknown;
-}
-
-export interface SupabaseDataAccessOptions {
-    now?: () => Date;
-    createTaskId?: () => string;
-    createLogId?: () => string;
-}
-
-export class SupabaseDataAccess implements DataAccess {
+/**
+ * Authenticated, paginated remote transport used only by the sync coordinator.
+ * It no longer owns per-interaction application state: `pull` returns a complete
+ * versioned snapshot, timer completions replay through the existing CAS RPCs,
+ * ordinary staged changes push through `apply_staged_sync`, and expired
+ * sessions refresh explicitly. Every method verifies that the current session
+ * belongs to `expectedOwnerId` before touching any table.
+ */
+export class SupabaseDataAccess implements SyncRemote {
     private readonly client: SupabaseClient;
-    private readonly now: () => Date;
-    private readonly createTaskId: () => string;
-    private readonly createLogId: () => string;
 
-    constructor(client: SupabaseClient, options: SupabaseDataAccessOptions = {}) {
+    constructor(client: SupabaseClient) {
         this.client = client;
-        this.now = options.now ?? (() => new Date());
-        this.createTaskId = options.createTaskId ?? (() => {
-            try { return globalThis.crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
-        });
-        this.createLogId = options.createLogId ?? this.createTaskId;
     }
 
     private fail(table: string, error: unknown): never {
@@ -85,11 +78,18 @@ export class SupabaseDataAccess implements DataAccess {
         throw new Error(`Supabase ${table} query failed: ${message}${suffix}`);
     }
 
-    private async ownerId(): Promise<string> {
+    /**
+     * The session is the transport's auth source; `expectedOwnerId` is a
+     * verification value, never forwarded to an RPC/DML owner input. A missing
+     * session (even without an SDK error) and an owner mismatch are both hard
+     * auth failures the coordinator must surface or retry.
+     */
+    private async requireSessionOwner(expectedOwnerId: string): Promise<string> {
         const { data, error } = await this.client.auth.getSession();
         if (error) this.fail("auth", error);
         const id = data.session?.user?.id;
-        if (!id) throw new DataAccessAuthError();
+        if (!id) throw new DataAccessAuthError("DATA_ACCESS_NO_SESSION");
+        if (id !== expectedOwnerId) throw new DataAccessAuthError("DATA_ACCESS_OWNER_MISMATCH");
         return id;
     }
 
@@ -107,10 +107,28 @@ export class SupabaseDataAccess implements DataAccess {
     }
 
     private validateTask(row: any): Task {
-        if (!row || typeof row.id !== "string" || typeof row.name !== "string" || typeof row.created_at !== "string") this.fail("tasks", new Error(`invalid task row for ${row?.id ?? "unknown"}`));
+        if (
+            !row ||
+            typeof row.id !== "string" ||
+            typeof row.name !== "string" ||
+            typeof row.created_at !== "string" ||
+            typeof row.updated_at !== "string"
+        ) {
+            this.fail("tasks", new Error(`invalid task row for ${row?.id ?? "unknown"}`));
+        }
         return {
             id: row.id, name: row.name, target_pomodoros: Number(row.target_pomodoros), completed_pomodoros: Number(row.completed_pomodoros),
             created_at: row.created_at, completed_at: row.completed_at ?? null, break_skips: Number(row.break_skips), archived: Boolean(row.archived),
+        };
+    }
+
+    private validateLog(row: any): PomodoroLogEntry {
+        if (!row || typeof row.id !== "string" || typeof row.task_id !== "string" || typeof row.finished_at !== "string") {
+            this.fail("pomodoro_logs", new Error(`invalid log row for ${row?.id ?? "unknown"}`));
+        }
+        return {
+            id: row.id, task_id: row.task_id, duration_minutes: Number(row.duration_minutes), finished_at: row.finished_at,
+            was_break: Boolean(row.was_break), break_skipped: Boolean(row.break_skipped),
         };
     }
 
@@ -122,156 +140,174 @@ export class SupabaseDataAccess implements DataAccess {
         return clone(value) as unknown as ActiveTimer;
     }
 
-    private async hydrate(ownerId: string): Promise<Hydrated> {
-        const [taskRows, logRows] = await Promise.all([
-            this.page("tasks", ownerId, [{ column: "id" }]),
-            this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
-        ]);
-        const tasks: Record<string, Task> = {};
-        for (const row of taskRows) tasks[row.id] = this.validateTask(row);
-        const logs: PomodoroLogEntry[] = logRows.map((row) => {
-            if (!row || typeof row.id !== "string" || typeof row.task_id !== "string" || typeof row.finished_at !== "string") this.fail("pomodoro_logs", new Error(`invalid log row for ${row?.id ?? "unknown"}`));
-            return { id: row.id, task_id: row.task_id, duration_minutes: Number(row.duration_minutes), finished_at: row.finished_at, was_break: Boolean(row.was_break), break_skipped: Boolean(row.break_skipped) };
-        });
-
-        const settingsResponse = await this.client.from("settings").select("data").eq("owner_id", ownerId).maybeSingle();
-        if (settingsResponse.error) this.fail("settings", settingsResponse.error);
-        const settings = settingsResponse.data?.data;
-        if (settings !== undefined && (!isRecord(settings) || typeof settings.work_minutes !== "number" || typeof settings.short_break_minutes !== "number" || typeof settings.long_break_minutes !== "number" || typeof settings.segment_length !== "number")) this.fail("settings", new Error(`invalid settings row for ${ownerId}`));
-
-        const timerResponse = await this.client.from("timer_state").select("data, completed").eq("owner_id", ownerId).maybeSingle();
-        if (timerResponse.error) this.fail("timer_state", timerResponse.error);
-        const rawData = timerResponse.data?.data;
-        const timerData = isRecord(rawData) ? rawData : {};
-        if (rawData !== undefined && !isRecord(rawData)) this.fail("timer_state", new Error(`invalid timer row for ${ownerId}`));
-        const rawTimer = timerData.timer ?? null;
-        const timer = this.validateTimer(rawTimer);
-        const state: AppStateData = {
-            tasks, logs, settings: clone((settings as Settings | undefined) ?? DEFAULT_SETTINGS),
-            active_task: typeof timerData.active_task === "string" ? timerData.active_task : null,
-            current_cycle_pomodoros: typeof timerData.current_cycle_pomodoros === "number" ? timerData.current_cycle_pomodoros : 0,
-            timer,
+    private validateTimerSlice(raw: unknown): TimerStateSlice {
+        if (!isRecord(raw)) this.fail("timer_state", new Error("invalid timer JSON"));
+        return {
+            active_task: typeof raw.active_task === "string" ? raw.active_task : null,
+            current_cycle_pomodoros: typeof raw.current_cycle_pomodoros === "number" ? raw.current_cycle_pomodoros : 0,
+            timer: this.validateTimer(raw.timer ?? null),
         };
-        const maintained = getState(state);
-        if (maintained.value) await this.persistTransition(ownerId, state, maintained.state);
-        return { state: maintained.state, completed: Boolean(timerResponse.data?.completed ?? false), rawTimer: clone(rawTimer) };
     }
 
-    private async persistTransition(ownerId: string, before: AppStateData, after: AppStateData, newTimerGeneration = false): Promise<void> {
-        const changedTasks = Object.values(after.tasks).filter((task) => !before.tasks[task.id] || !equal(before.tasks[task.id], task));
-        const newLogs = after.logs.slice(before.logs.length);
-        const settingsChanged = !equal(before.settings, after.settings);
-        const timerChanged = !equal(timerSlice(before), timerSlice(after)) || newTimerGeneration;
-        // The task, log, settings, and timer writes commit in one SQL transaction
-        // (persist_transition RPC), so a partial failure cannot leave progress
-        // applied against a still-active timer and be double-applied on retry.
+    // ---- SyncRemote transport ---------------------------------------------
+
+    async pull(expectedOwnerId: string): Promise<SyncSnapshot> {
+        const ownerId = await this.requireSessionOwner(expectedOwnerId);
+
+        const [taskRows, logRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
+            this.page("tasks", ownerId, [{ column: "id" }]),
+            this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
+            this.client.from("settings").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
+            this.client.from("timer_state").select("data, completed, updated_at").eq("owner_id", ownerId).maybeSingle(),
+            this.client.from("pm_state").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
+        ]);
+        if (settingsResponse.error) this.fail("settings", settingsResponse.error);
+        if (timerResponse.error) this.fail("timer_state", timerResponse.error);
+        if (pmResponse.error) this.fail("pm_state", pmResponse.error);
+
+        const tasks: SyncSnapshot["tasks"] = {};
+        for (const row of taskRows) {
+            const task = this.validateTask(row);
+            tasks[row.id] = { value: task, updatedAt: row.updated_at };
+        }
+
+        const logs: SyncSnapshot["logs"] = {};
+        for (const row of logRows) {
+            const log = this.validateLog(row);
+            logs[row.id] = log;
+        }
+
+        const settingsData = settingsResponse.data?.data;
+        if (settingsData !== undefined && !isSettings(settingsData)) {
+            this.fail("settings", new Error(`invalid settings row for ${ownerId}`));
+        }
+        const timerData = timerResponse.data?.data;
+        const timerSlice = timerResponse.data ? this.validateTimerSlice(timerData) : null;
+        const pmData = pmResponse.data?.data;
+        if (pmData !== undefined && !isRecord(pmData)) {
+            this.fail("pm_state", new Error(`invalid PM row for ${ownerId}`));
+        }
+
+        // Absent singleton rows stay `{ value: null, updatedAt: null }` so the
+        // merge engine can distinguish "never existed" from default app values.
+        const snapshot: SyncSnapshot = {
+            tasks,
+            logs,
+            settings: {
+                value: settingsResponse.data ? clone(settingsData) : null,
+                updatedAt: settingsResponse.data?.updated_at ?? null,
+            },
+            timerState: {
+                value: timerSlice,
+                updatedAt: timerResponse.data?.updated_at ?? null,
+                completed: Boolean(timerResponse.data?.completed ?? false),
+            },
+            pmState: {
+                value: pmResponse.data ? clone(pmData) : null,
+                updatedAt: pmResponse.data?.updated_at ?? null,
+            },
+        };
+        return clone(snapshot);
+    }
+
+    /**
+     * Prepares a local-only timer generation for its later CAS replay: persists
+     * only the timer slice through the `persist_transition` signature with
+     * `p_timer_new_generation=true`, which also resets the server-side
+     * completion guard to false. The client completion timestamp LWW-gates the
+     * upsert so the install can never overwrite a timer row another tab started
+     * after this client's pull.
+     */
+    async installTimerGeneration(expectedOwnerId: string, entry: PendingTimerCompletion): Promise<void> {
+        await this.requireSessionOwner(expectedOwnerId);
         const response = await this.client.rpc("persist_transition", {
-            p_tasks: changedTasks.length ? changedTasks.map((task) => taskRow(ownerId, task)) : null,
-            p_logs: newLogs.length ? newLogs.map((log) => ({ ...log })) : null,
-            p_settings: settingsChanged ? after.settings : null,
-            p_timer_data: timerChanged ? timerSlice(after) : null,
-            p_timer_new_generation: newTimerGeneration,
+            p_tasks: null,
+            p_logs: null,
+            p_settings: null,
+            p_timer_data: clone(entry.expectedTimerState),
+            p_timer_new_generation: true,
+            p_timer_updated_at: entry.completedAt,
         });
         if (response.error) this.fail("persist_transition", response.error);
     }
 
-    private async transition<T>(ownerId: string, command: (state: AppStateData) => { state: AppStateData; value: T }, newTimerGeneration = false) {
-        const before = await this.hydrate(ownerId);
-        const result = command(before.state);
-        await this.persistTransition(ownerId, before.state, result.state, newTimerGeneration);
-        return { state: cloneAppState(result.state), value: clone(result.value) };
-    }
-
-    async fetchState(): Promise<FetchStateResult> {
-        const ownerId = await this.ownerId();
-        const loaded = await this.hydrate(ownerId);
-        const timer = loaded.state.timer;
-        if (timer && !timer.paused && new Date(timer.ends_at).getTime() <= this.now().getTime() && !loaded.completed) {
-            const completion = await this.completeHydrated(ownerId, loaded, timer);
-            return {
-                state: cloneAppState(completion.state), value: cloneAppState(completion.state),
-                reconciledTimer: { kind: timer.kind, taskId: timer.task_id, applied: completion.applied },
-            };
-        }
-        return { state: cloneAppState(loaded.state), value: cloneAppState(loaded.state), reconciledTimer: null };
-    }
-
-    async createTask(name: string, targetPomodoros: number) { const owner = await this.ownerId(); return this.transition(owner, (s) => createTask(s, name, targetPomodoros, this.now(), this.createTaskId())); }
-    async setActiveTask(taskId: string) { const owner = await this.ownerId(); return this.transition(owner, (s) => setActiveTask(s, taskId, this.now(), this.createLogId())); }
-    async startWorkTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => startWorkTimer(s, this.now()), true); }
-    async startBreakTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => startBreakTimer(s, this.now()), true); }
-    async stopWorkTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => stopWorkTimer(s, this.now(), this.createLogId())); }
-    async pauseTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => pauseTimer(s, this.now())); }
-    async resumeTimer() { const owner = await this.ownerId(); return this.transition(owner, (s) => resumeTimer(s, this.now())); }
-    async skipBreak() { const owner = await this.ownerId(); return this.transition(owner, (s) => skipBreak(s, this.now(), this.createLogId())); }
-    async updateSettings(settings: Settings) { const owner = await this.ownerId(); return this.transition(owner, (s) => updateSettings(s, settings)); }
-    async finalizeTask(taskId: string) { const owner = await this.ownerId(); return this.transition(owner, (s) => finalizeTask(s, taskId, this.now())); }
-    async setTaskTarget(taskId: string, target: number) { const owner = await this.ownerId(); return this.transition(owner, (s) => setTaskTarget(s, taskId, target)); }
-
-    private async completeHydrated(ownerId: string, loaded: Hydrated, expectedTimer?: ActiveTimer): Promise<CompleteTimerResult> {
-        if (expectedTimer && !equal(expectedTimer, loaded.state.timer)) return { state: cloneAppState(loaded.state), value: cloneAppState(loaded.state), applied: false };
-        if (loaded.completed) return { state: cloneAppState(loaded.state), value: cloneAppState(loaded.state), applied: false };
-        const result = engineCompleteTimer(loaded.state, this.now(), this.createLogId());
-        const newLogs = result.state.logs.slice(loaded.state.logs.length);
-        let changedTask: Task | null = null;
-        for (const task of Object.values(result.state.tasks)) {
-            if (!loaded.state.tasks[task.id] || !equal(loaded.state.tasks[task.id], task)) {
-                changedTask = task;
-                break;
-            }
-        }
-        // The snapshot predicate rejects stale generations, and the timer claim,
-        // log insert, and task upsert now commit in one SQL transaction
-        // (complete_timer RPC). A failed downstream write rolls back the claim, so
-        // a retry can win the race instead of losing the log/task updates.
+    private async completeTimerRpc(ownerId: string, entry: PendingTimerCompletion): Promise<boolean> {
+        // The journal's exact expected timer, result timer slice, client-ID
+        // log, and changed task map to the unchanged complete_timer signature.
+        // The task row carries the client-authored completion timestamp so the
+        // server's LWW gate can reject the write when another client updated
+        // the task after the local completion was journaled (a delayed offline
+        // completion must never erase a newer rename/target/archive edit).
+        const payload = completionRpcPayload(entry);
         const response = await this.client.rpc("complete_timer", {
-            p_expected_timer: loaded.rawTimer,
-            p_timer_data: timerSlice(result.state),
-            p_log: newLogs.length ? newLogs[0] : null,
-            p_task: changedTask ? taskRow(ownerId, changedTask) : null,
+            p_expected_timer: payload.p_expected_timer,
+            p_timer_data: payload.p_timer_data,
+            p_log: payload.p_log,
+            p_task: payload.p_task ? taskRow(ownerId, payload.p_task, entry.completedAt) : null,
         });
         if (response.error) this.fail("complete_timer", response.error);
-        const applied = response.data?.[0]?.applied === true;
-        if (!applied) {
-            const latest = await this.hydrate(ownerId);
-            return { state: cloneAppState(latest.state), value: cloneAppState(latest.state), applied: false };
+        return response.data?.[0]?.applied === true;
+    }
+
+    /**
+     * Replays one journaled completion through the CAS. Returns the RPC's
+     * boolean `applied` result so the coordinator can run the winner or loser
+     * reconciliation.
+     */
+    async completeTimer(expectedOwnerId: string, entry: PendingTimerCompletion): Promise<boolean> {
+        const ownerId = await this.requireSessionOwner(expectedOwnerId);
+        return this.completeTimerRpc(ownerId, entry);
+    }
+
+    /**
+     * Converts a `PushPlan` into `apply_staged_sync` parameter names exactly.
+     * Unchanged singletons are sent as null, empty entity arrays are sent as
+     * null, and the full wipe is one request (never split across requests).
+     * Unresolved completion-derived rows never appear here: `buildPushPlan`
+     * already masks them, and the transport adds nothing to the plan.
+     */
+    async push(expectedOwnerId: string, plan: PushPlan): Promise<void> {
+        const ownerId = await this.requireSessionOwner(expectedOwnerId);
+        const response = await this.client.rpc("apply_staged_sync", {
+            p_task_upserts: plan.taskUpserts.length
+                ? plan.taskUpserts.map(({ value, updatedAt }) => taskRow(ownerId, value, updatedAt))
+                : null,
+            p_task_tombstones: plan.taskTombstones.length
+                ? plan.taskTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
+                : null,
+            p_log_upserts: plan.logUpserts.length ? plan.logUpserts.map((log) => ({ ...log })) : null,
+            p_log_tombstones: plan.logTombstones.length
+                ? plan.logTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
+                : null,
+            p_settings_data: plan.settings?.value ?? null,
+            p_settings_updated_at: plan.settings?.updatedAt ?? null,
+            p_timer_data: plan.timerState?.value ?? null,
+            p_timer_updated_at: plan.timerState?.updatedAt ?? null,
+            p_timer_new_generation: plan.timerState?.newGeneration ?? false,
+            p_pm_data: plan.pmState?.value ?? null,
+            p_pm_updated_at: plan.pmState?.updatedAt ?? null,
+            p_full_wipe: plan.fullWipe,
+        });
+        if (response.error) this.fail("apply_staged_sync", response.error);
+    }
+
+    /**
+     * Refreshes the GoTrue session explicitly and verifies the refreshed
+     * session still belongs to the same owner. A refreshed session belonging to
+     * another user must never access or overwrite the original owner's local
+     * record, so a mismatch throws instead of returning.
+     */
+    async refreshSession(expectedOwnerId: string): Promise<void> {
+        const { data, error } = await this.client.auth.refreshSession();
+        if (error) {
+            throw new DataAccessAuthError("DATA_ACCESS_REFRESH_FAILED");
         }
-        return { state: cloneAppState(result.state), value: cloneAppState(result.state), applied: true };
-    }
-
-    async completeTimer(expectedTimer?: ActiveTimer): Promise<CompleteTimerResult> {
-        const owner = await this.ownerId();
-        const loaded = await this.hydrate(owner);
-        return this.completeHydrated(owner, loaded, expectedTimer);
-    }
-
-    async resetAppState() {
-        const owner = await this.ownerId();
-        const result = resetAppState((await this.hydrate(owner)).state);
-        const taskDelete = await this.client.from("tasks").delete().eq("owner_id", owner);
-        if (taskDelete.error) this.fail("tasks", taskDelete.error);
-        const logDelete = await this.client.from("pomodoro_logs").delete().eq("owner_id", owner);
-        if (logDelete.error) this.fail("pomodoro_logs", logDelete.error);
-        const settings = await this.client.from("settings").upsert({ owner_id: owner, data: result.state.settings });
-        if (settings.error) this.fail("settings", settings.error);
-        const timer = await this.client.from("timer_state").upsert({ owner_id: owner, data: timerSlice(result.state), completed: false });
-        if (timer.error) this.fail("timer_state", timer.error);
-        return { state: cloneAppState(result.state), value: cloneAppState(result.value) };
-    }
-
-    async savePMState(state: SyncedPMState): Promise<void> {
-        const owner = await this.ownerId();
-        const response = await this.client.from("pm_state").upsert({ owner_id: owner, data: { projects: clone(state.projects), tasks: clone(state.tasks), meta: clone(state.meta) } });
-        if (response.error) this.fail("pm_state", response.error);
-    }
-
-    async loadPMState(): Promise<SyncedPMState | null> {
-        const owner = await this.ownerId();
-        const response = await this.client.from("pm_state").select("data").eq("owner_id", owner).maybeSingle();
-        if (response.error) this.fail("pm_state", response.error);
-        if (!response.data) return null;
-        const data = response.data.data;
-        if (!isRecord(data)) this.fail("pm_state", new Error(`invalid PM row for ${owner}`));
-        return clone({ projects: data.projects, tasks: data.tasks, meta: data.meta }) as SyncedPMState;
+        const id = data.session?.user?.id;
+        if (!id) {
+            throw new DataAccessAuthError("DATA_ACCESS_REFRESH_FAILED");
+        }
+        if (id !== expectedOwnerId) {
+            throw new DataAccessAuthError("DATA_ACCESS_OWNER_MISMATCH");
+        }
     }
 }

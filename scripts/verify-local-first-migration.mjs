@@ -11,13 +11,28 @@
 // Uses only node: built-ins (child_process and global fetch). It shells out to
 // `npx supabase` and parses `npx supabase status -o env`, mirroring
 // tests/supabase/localSupabase.ts; no new npm dependencies are required.
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 
 function run(command) {
     return execSync(command, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function refreshLocalGatewayDns() {
+    const names = execFileSync(
+        "docker",
+        ["ps", "--filter", `label=com.supabase.cli.workdir=${root}`, "--format", "{{.Names}}"],
+        { cwd: root, encoding: "utf8" },
+    )
+        .split(/\r?\n/)
+        .filter(Boolean);
+    const gateway = names.find((name) => name.startsWith("supabase_kong_"));
+    if (!gateway) throw new Error("Could not locate this repo's local Supabase gateway container");
+    // db reset can recreate Auth at a new container IP while Kong retains the
+    // old DNS answer. Restarting only this repo's gateway refreshes that cache.
+    execFileSync("docker", ["restart", gateway], { cwd: root, stdio: "ignore" });
 }
 
 function loadConfig() {
@@ -67,23 +82,40 @@ async function rest(config, accessToken, path, options = {}) {
 }
 
 async function createThrowawayUser(config) {
-    const email = `worktime-replay-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
     const password = "WorkTime-replay-123";
-    const response = await fetch(`${config.url}/auth/v1/admin/users`, {
-        method: "POST",
-        headers: {
-            apikey: config.serviceRoleKey,
-            Authorization: `Bearer ${config.serviceRoleKey}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, password, email_confirm: true }),
-    });
-    if (!response.ok) {
-        throw new Error(`Failed to create throwaway local user (${response.status}): ${await response.text()}`);
+    let lastFailure = "local Auth did not become ready";
+    // A local db reset restarts services asynchronously. Retry only transient
+    // upstream/readiness failures, using a fresh throwaway address so an
+    // ambiguous gateway response cannot turn the next attempt into a conflict.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+        const email = `worktime-replay-${Date.now()}-${attempt}-${Math.random().toString(36).slice(2)}@example.test`;
+        let response;
+        try {
+            response = await fetch(`${config.url}/auth/v1/admin/users`, {
+                method: "POST",
+                headers: {
+                    apikey: config.serviceRoleKey,
+                    Authorization: `Bearer ${config.serviceRoleKey}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ email, password, email_confirm: true }),
+            });
+        } catch (error) {
+            lastFailure = error instanceof Error ? error.message : String(error);
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+            continue;
+        }
+        if (response.ok) {
+            const created = await response.json();
+            if (!created.id) throw new Error("Admin user creation returned no user id");
+            return { userId: created.id, email, password };
+        }
+        const body = await response.text();
+        lastFailure = `Failed to create throwaway local user (${response.status}): ${body}`;
+        if (response.status !== 502 && response.status !== 503) throw new Error(lastFailure);
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
     }
-    const created = await response.json();
-    if (!created.id) throw new Error("Admin user creation returned no user id");
-    return { userId: created.id, email, password };
+    throw new Error(lastFailure);
 }
 
 async function signIn(config, email, password) {
@@ -173,6 +205,7 @@ try {
 
     console.log("Resetting local database to the migration before 20260802000000_sync_metadata.sql...");
     run("npx supabase db reset --local --version 20260801020000");
+    refreshLocalGatewayDns();
 
     const user = await createThrowawayUser(config);
     const accessToken = await signIn(config, user.email, user.password);
@@ -189,6 +222,7 @@ try {
 } finally {
     try {
         run("npx supabase db reset --local");
+        refreshLocalGatewayDns();
         restored = true;
         console.log("Restored the latest local schema.");
     } catch (error) {

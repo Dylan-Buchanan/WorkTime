@@ -3,6 +3,8 @@ import type { AppStateData, Settings, Task, TimerKind, ActiveTimer } from "./typ
 import { useSounds } from "../hooks/useSounds";
 import { computeRemainingMs } from "../lib/timer";
 import { useData } from "./DataContext";
+import { useSync } from "./SyncContext";
+import type { EngineResult } from "../lib/engine";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
 
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
@@ -52,6 +54,10 @@ const AppStateContext = createContext<AppContextShape | undefined>(undefined);
 
 export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const data = useData();
+    // SyncProvider owns the bootstrap/focus/visibility lifecycle triggers. This
+    // provider only consumes the revision so it can re-read its staged local
+    // view after any same-tab or cross-tab write.
+    const { revision } = useSync();
     const [state, setState] = useState<AppStateData | null>(null);
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
@@ -62,9 +68,16 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try { soundApi = useSounds(); } catch { /* optional sound setup */ }
     stateRef.current = state;
 
+    // Same-tab commands already adopt their staged result, so the revision
+    // effect's follow-up fetch usually returns an identical view. Skip the
+    // redundant setState (and its extra render) while still returning the fresh
+    // clone for progression/reconciliation callers.
     const fetchAndSetState = useCallback(async () => {
         const result = await data.fetchState();
-        setState(result.state);
+        setState((current) => {
+            if (current && JSON.stringify(current) === JSON.stringify(result.state)) return current;
+            return result.state;
+        });
         return result;
     }, [data]);
 
@@ -112,11 +125,21 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (!after.timer) {
                 const kind = finishedTimer?.kind ?? reconciliation?.timer.kind;
                 if (kind === "Work") {
-                    try { await data.startBreakTimer(); } catch (err) { console.warn("Failed to auto-start break timer", err); }
+                    try {
+                        const started = await data.startBreakTimer();
+                        setState(started.state);
+                    } catch (err) { console.warn("Failed to auto-start break timer", err); }
                 } else if (after.active_task) {
-                    try { await data.startWorkTimer(); } catch (err) { console.warn("Failed to auto-start work timer", err); }
+                    try {
+                        const started = await data.startWorkTimer();
+                        setState(started.state);
+                    } catch (err) { console.warn("Failed to auto-start work timer", err); }
                 }
             }
+            // A storage/sync revision arriving mid-progression may have left
+            // another expired timer to reconcile. Capture it from the local
+            // store so the guard below replays it instead of starting a second
+            // progression loop.
             const final = await fetchAndSetState();
             if (final.reconciledTimer) queuedReconciliationRef.current = { timer: final.reconciledTimer, state: final.state };
         } catch (err: any) {
@@ -141,17 +164,12 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     }, [fetchAndSetState, runProgression]);
 
+    // Read the staged local view on mount and after every same-tab or cross-tab
+    // write (revision bump). SyncProvider owns the focus/visibility/pagehide
+    // triggers, so this provider never registers them.
     useEffect(() => {
         void refresh().catch(() => undefined);
-        const onFocus = () => void refresh().catch(() => undefined);
-        const onVisibility = () => { if (document.visibilityState === "visible") void refresh().catch(() => undefined); };
-        window.addEventListener("focus", onFocus);
-        document.addEventListener("visibilitychange", onVisibility);
-        return () => {
-            window.removeEventListener("focus", onFocus);
-            document.removeEventListener("visibilitychange", onVisibility);
-        };
-    }, [refresh]);
+    }, [refresh, revision]);
 
     useEffect(() => {
         const id = setInterval(() => setTick((value) => value + 1), 1000);
@@ -166,16 +184,25 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     useEffect(() => { void ensureNotification(); }, []);
 
-    const wrapVoid = async (fn: () => Promise<unknown>) => {
-        try { setError(null); await fn(); await refresh(); }
-        catch (err: any) { setError(err?.message || err?.toString?.() || "Unknown error"); }
+    // Runs a local command and adopts its EngineResult state directly. No
+    // follow-up fetch and no sync call: the staged result is the new view.
+    // Errors leave React state untouched (last persisted state stays visible)
+    // and surface in `error`.
+    const adoptResult = async (run: () => Promise<EngineResult<unknown>>) => {
+        try {
+            setError(null);
+            const result = await run();
+            setState(result.state);
+        } catch (err: any) {
+            setError(err?.message || err?.toString?.() || "Unknown error");
+        }
     };
 
     const createTask = async (name: string, target: number) => {
         try {
             setError(null);
             const result = await data.createTask(name, target);
-            await refresh();
+            setState(result.state);
             return result.value;
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
@@ -183,7 +210,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     };
 
-    const setActiveTask = (id: string) => wrapVoid(() => data.setActiveTask(id));
+    const setActiveTask = (id: string) => adoptResult(() => data.setActiveTask(id));
     const ensureActiveTask = async () => {
         if (!state?.active_task) {
             const tasks = Object.values(state?.tasks || {}).filter((task) => !task.archived);
@@ -192,23 +219,28 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             else throw new Error("Select a task first");
         }
     };
-    const startWork = async () => { try { await ensureActiveTask(); await wrapVoid(() => data.startWorkTimer()); } catch (err: any) { setError(err?.message || err?.toString?.()); } };
-    const startBreak = async () => { try { await ensureActiveTask(); await wrapVoid(() => data.startBreakTimer()); } catch (err: any) { setError(err?.message || err?.toString?.()); } };
+    const startWork = async () => { try { await ensureActiveTask(); await adoptResult(() => data.startWorkTimer()); } catch (err: any) { setError(err?.message || err?.toString?.() || "Unknown error"); } };
+    const startBreak = async () => { try { await ensureActiveTask(); await adoptResult(() => data.startBreakTimer()); } catch (err: any) { setError(err?.message || err?.toString?.() || "Unknown error"); } };
 
     const completeTimer = async () => {
         const captured = state?.timer;
         if (!captured) return;
         await runProgression(captured);
     };
-    const stopWork = () => wrapVoid(() => data.stopWorkTimer());
-    const skipBreak = () => wrapVoid(() => data.skipBreak());
-    const updateSettings = (settings: Settings) => wrapVoid(() => data.updateSettings(settings));
-    const finalizeTask = (id: string) => wrapVoid(() => data.finalizeTask(id));
-    const pauseTimer = () => { if (state?.timer && !state.timer.paused) void wrapVoid(() => data.pauseTimer()); };
-    const resumeTimer = () => { if (state?.timer?.paused) void wrapVoid(() => data.resumeTimer()); };
+    const stopWork = () => adoptResult(() => data.stopWorkTimer());
+    const skipBreak = () => adoptResult(() => data.skipBreak());
+    const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
+    const finalizeTask = (id: string) => adoptResult(() => data.finalizeTask(id));
+    const pauseTimer = () => { if (state?.timer && !state.timer.paused) void adoptResult(() => data.pauseTimer()); };
+    const resumeTimer = () => { if (state?.timer?.paused) void adoptResult(() => data.resumeTimer()); };
     const resetAll = async () => {
-        try { setError(null); await data.resetAppState(); await refresh(); }
-        catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to reset"); }
+        try {
+            setError(null);
+            const result = await data.resetAppState();
+            setState(result.state);
+        } catch (err: any) {
+            setError(err?.message || err?.toString?.() || "Failed to reset");
+        }
     };
 
     return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;

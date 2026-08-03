@@ -2,18 +2,17 @@
 name: review
 description: Review code changes and look for untested edge cases, potential bugs, and areas that need improvement
 mode: all
-model: deepseek/deepseek-v4-pro
 color: "#fa19c2"
 permission:
-  edit:
-    "*": deny
-    "docs/reviews/*": allow
-  read: allow
-  glob: allow
-  list: allow
-  bash: allow
-  webfetch: allow
-  lsp: allow
+    edit:
+        "*": deny
+        "docs/reviews/*": allow
+    read: allow
+    glob: allow
+    list: allow
+    bash: allow
+    webfetch: allow
+    lsp: allow
 ---
 
 ## Purpose
@@ -136,13 +135,13 @@ If you find no issues, return exactly: "No issues found for [TOPIC NAME]."
 2. Discard any "No issues found" responses.
 3. Read and apply `.agents/skills/review-document/SKILL.md`.
 4. If **all** subagents returned no issues:
-   - Tell the user: _"All changes look good — no bugs, breakages, or concerns found."_
-   - **Stop. Do not create a file.**
+    - Tell the user: _"All changes look good — no bugs, breakages, or concerns found."_
+    - **Stop. Do not create a file.**
 5. If there **are** findings, create a markdown report using the `review-document` skill exactly:
-   - Use the required title, metadata, section order, severity grouping, and finding format.
-   - Omit empty severity sections.
-   - Include a `Files Reviewed` table containing every changed file in scope.
-   - Include severity, file reference, description, evidence, impact, and recommendation for every finding.
+    - Use the required title, metadata, section order, severity grouping, and finding format.
+    - Omit empty severity sections.
+    - Include a `Files Reviewed` table containing every changed file in scope.
+    - Include severity, file reference, description, evidence, impact, and recommendation for every finding.
 
 ### Phase 5 — Write Report
 

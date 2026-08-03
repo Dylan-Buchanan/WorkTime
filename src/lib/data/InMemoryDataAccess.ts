@@ -1,8 +1,10 @@
 import type { EngineResult } from "../engine";
 import {
     DEFAULT_SETTINGS,
+    EngineError,
     cloneAppState,
     createTask,
+    deleteTask,
     finalizeTask,
     getState,
     resetAppState,
@@ -18,7 +20,7 @@ import {
     skipBreak,
 } from "../engine";
 import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
-import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncedPMState } from "./DataAccess";
+import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncOptions, SyncResult, SyncedPMState } from "./DataAccess";
 
 function clone<T>(value: T): T {
     return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
@@ -53,14 +55,27 @@ export interface InMemoryDataAccessOptions {
     createTaskId?: () => string;
     createLogId?: () => string;
     beforeCompletionCommit?: () => void | Promise<void>;
+    onSync?: (options: SyncOptions) => void | Promise<void>;
+    /**
+     * Optional `pendingCount` returned by a successful `sync()`. Production
+     * syncs can legitimately succeed while residual completion work stays
+     * pending, so context tests can model that with a non-zero value; the
+     * default resets pending to zero as before.
+     */
+    pendingAfterSync?: number;
 }
 
 export class InMemoryDataAccess implements DataAccess {
     readonly store: InMemoryDataStore;
+    readonly syncCalls: SyncOptions[] = [];
     private readonly now: () => Date;
     private readonly createTaskId: () => string;
     private readonly createLogId: () => string;
     private readonly beforeCompletionCommit?: () => void | Promise<void>;
+    private readonly onSync?: (options: SyncOptions) => void | Promise<void>;
+    private readonly pendingAfterSync?: number;
+    private readonly listeners = new Set<() => void>();
+    private pending = 0;
 
     constructor(initial?: Partial<AppStateData> | InMemoryDataStore, options: InMemoryDataAccessOptions = {}) {
         if (initial && "state" in initial && "completed" in initial && "pmState" in initial) {
@@ -83,10 +98,24 @@ export class InMemoryDataAccess implements DataAccess {
         this.createTaskId = options.createTaskId ?? randomId;
         this.createLogId = options.createLogId ?? randomId;
         this.beforeCompletionCommit = options.beforeCompletionCommit;
+        this.onSync = options.onSync;
+        this.pendingAfterSync = options.pendingAfterSync;
+    }
+
+    private notify(): void {
+        for (const listener of [...this.listeners]) {
+            try {
+                listener();
+            } catch {
+                // A subscriber failure must not break the command or other listeners.
+            }
+        }
     }
 
     private result<T>(result: EngineResult<T>): EngineResult<T> {
         this.store.state = cloneAppState(result.state);
+        this.pending += 1;
+        this.notify();
         return { state: cloneAppState(this.store.state), value: clone(result.value) };
     }
 
@@ -145,6 +174,8 @@ export class InMemoryDataAccess implements DataAccess {
         }
         this.store.state = cloneAppState(result.state);
         this.store.completed = true;
+        this.pending += 1;
+        this.notify();
         return { state: cloneAppState(this.store.state), value: cloneAppState(this.store.state), applied: true };
     }
 
@@ -161,12 +192,61 @@ export class InMemoryDataAccess implements DataAccess {
         return this.result(resetAppState(this.store.state));
     }
 
+    async deleteTask(taskId: string): Promise<EngineResult<void>> {
+        return this.result(deleteTask(this.store.state, taskId));
+    }
+
+    async deletePomodoroLog(logId: string): Promise<EngineResult<void>> {
+        const next = cloneAppState(this.store.state);
+        const index = next.logs.findIndex((log) => log.id === logId);
+        if (index === -1) throw new EngineError("Log not found");
+        next.logs.splice(index, 1);
+        return this.result({ state: next, value: undefined });
+    }
+
     async savePMState(state: SyncedPMState): Promise<void> {
         this.store.pmState = clone({ projects: state.projects, tasks: state.tasks, meta: state.meta });
+        this.pending += 1;
+        this.notify();
     }
 
     async loadPMState(): Promise<SyncedPMState | null> {
         return this.store.pmState ? clone(this.store.pmState) : null;
+    }
+
+    async sync(options: SyncOptions): Promise<SyncResult> {
+        this.syncCalls.push(options);
+        if (this.onSync) await this.onSync(options);
+        if (this.pendingAfterSync !== undefined) {
+            this.pending = this.pendingAfterSync;
+        } else {
+            this.pending = 0;
+        }
+        return {
+            state: cloneAppState(this.store.state),
+            pmState: this.store.pmState ? clone(this.store.pmState) : null,
+            pendingCount: this.pending,
+            initialized: true,
+        };
+    }
+
+    pendingCount(): number {
+        return this.pending;
+    }
+
+    isInitialized(): boolean {
+        return true;
+    }
+
+    reloadFromStorage(): void {
+        this.notify();
+    }
+
+    subscribe(listener: () => void): () => void {
+        this.listeners.add(listener);
+        return () => {
+            this.listeners.delete(listener);
+        };
     }
 }
 

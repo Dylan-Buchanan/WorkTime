@@ -1,12 +1,64 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppState } from "./AppStateContext";
 import { usePM } from "./ProjectManagerContext";
 import { TaskStatus, PMTask } from "./types";
 import { useData } from "./DataContext";
+import { useSync } from "./SyncContext";
+
+/** One backend task whose estimate diverges from its PM metadata estimate. */
+interface PropagationTarget {
+    appTaskId: string;
+    pmTaskId: string;
+    estimatePomos: number;
+    minTarget: number;
+    desired: number;
+    /** True only when the desired target differs from the current backend value. */
+    push: boolean;
+}
+
+/**
+ * Pure divergence scan for the estimate-propagation effect. For every PM task
+ * with an app link and a numeric estimate, computes the normalized desired
+ * backend target (clamped to the completed-work minimum). A task only needs a
+ * push when its desired target differs from the current backend value; the
+ * estimate normalization itself applies on the main path even when no push is
+ * needed.
+ */
+function collectPropagationTargets(
+    pmState: { tasks: Record<string, PMTask> },
+    appState: { tasks: Record<string, { id: string; target_pomodoros: number; completed_pomodoros: number }> },
+): PropagationTarget[] {
+    const backendTargets: Record<string, number> = {};
+    for (const task of Object.values(appState.tasks)) {
+        backendTargets[task.id] = task.target_pomodoros;
+    }
+    const targets: PropagationTarget[] = [];
+    for (const pmTask of Object.values(pmState.tasks)) {
+        if (!pmTask.appTaskId) continue;
+        if (typeof pmTask.estimatePomos !== "number") continue;
+        const current = backendTargets[pmTask.appTaskId];
+        if (current === undefined) continue;
+        const completed = appState.tasks[pmTask.appTaskId]?.completed_pomodoros ?? 0;
+        const minTarget = Math.max(1, Math.ceil(completed));
+        let desired = Math.round(pmTask.estimatePomos);
+        if (!Number.isFinite(desired)) desired = minTarget;
+        if (desired < minTarget) desired = minTarget;
+        targets.push({
+            appTaskId: pmTask.appTaskId,
+            pmTaskId: pmTask.id,
+            estimatePomos: pmTask.estimatePomos,
+            minTarget,
+            desired,
+            push: desired !== current,
+        });
+    }
+    return targets;
+}
 
 export const StateSyncBridge: React.FC = () => {
     const { state: appState, refresh, createTask: createAppTask, setActiveTask } = useAppState();
     const { state: pmState, updateTask, ensureMetadataForAppTask } = usePM();
+    const { sync } = useSync();
     const data = useData();
 
     // Keep a stable reference to updateTask for effects that should only react to app state changes.
@@ -16,6 +68,120 @@ export const StateSyncBridge: React.FC = () => {
     }, [updateTask]);
 
     const pendingTargetsRef = useRef<Record<string, number>>({});
+    // Non-null while an estimate propagation batch is running. New effect runs
+    // return early so staged writes can never start a second overlapping batch.
+    const batchInFlightRef = useRef<Promise<void> | null>(null);
+    // Set when a bail-out observed a still-divergent target while a batch was
+    // running. The batch's completion schedules one more pass so that edit is
+    // propagated instead of silently dropped (React does not re-run an effect
+    // just because a ref changed).
+    const rerunPendingRef = useRef(false);
+    const [rerunTick, setRerunTick] = useState(0);
+    const mountedRef = useRef(false);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
+    // Propagate estimate changes from PM -> backend targets. Runs before the
+    // metadata/progress effects so its pending targets are pre-seeded before
+    // they can overwrite a divergent estimate. Every divergent target is staged
+    // locally as one batch, the local app view refreshes once, then one bridge
+    // sync pushes the batch. A cleanup cancels the remaining work on unmount;
+    // a divergent edit observed during the batch schedules one follow-up pass.
+    useEffect(() => {
+        let cancelled = false;
+        const cleanup = () => {
+            // Dependency changes re-run this effect while the same batch is
+            // notifying AppStateProvider. Only the component's unmount should
+            // cancel the detached work; the lifecycle effect runs first and
+            // marks mountedRef false during an actual unmount.
+            if (!mountedRef.current) cancelled = true;
+        };
+        if (!pmState || !appState) return cleanup;
+        if (batchInFlightRef.current) {
+            if (collectPropagationTargets(pmState, appState).some((target) => target.push)) {
+                rerunPendingRef.current = true;
+            }
+            const inFlight = batchInFlightRef.current;
+            void inFlight.then(() => {
+                if (!cancelled && mountedRef.current && rerunPendingRef.current) {
+                    rerunPendingRef.current = false;
+                    setRerunTick((value) => value + 1);
+                }
+            });
+            return cleanup;
+        }
+
+        const targets = collectPropagationTargets(pmState, appState);
+        if (targets.length === 0) return cleanup;
+
+        for (const target of targets) {
+            // Only normalize locally if the value actually violates constraints;
+            // otherwise leave user input intact.
+            if (
+                target.desired !== target.estimatePomos &&
+                (target.estimatePomos < target.minTarget || !Number.isFinite(target.estimatePomos))
+            ) {
+                updateTaskRef.current(target.pmTaskId, { estimatePomos: target.desired });
+            }
+            if (target.push) {
+                // Pre-seed the pending target before any await so the
+                // metadata/progress effects defer to this propagation.
+                pendingTargetsRef.current[target.appTaskId] = target.desired;
+            }
+        }
+        const plan = targets.filter((target) => target.push);
+        if (plan.length === 0) return cleanup;
+
+        const batch = (async () => {
+            let changed = false;
+            for (const { appTaskId, desired } of plan) {
+                if (cancelled || !mountedRef.current) return;
+                try {
+                    await data.setTaskTarget(appTaskId, desired);
+                    changed = true;
+                } catch (err) {
+                    console.warn("Failed to push estimate to backend", err);
+                    // Clear only the pending entry that still holds the
+                    // attempted value; a later edit that rekeyed the pending
+                    // target survives.
+                    if (pendingTargetsRef.current[appTaskId] === desired) {
+                        delete pendingTargetsRef.current[appTaskId];
+                    }
+                }
+            }
+            if (!changed) return;
+            if (cancelled || !mountedRef.current) return;
+            try {
+                await refresh();
+            } catch (err) {
+                console.warn("[bridge] failed to refresh the app view", err);
+            }
+            if (cancelled || !mountedRef.current) return;
+            try {
+                await sync({ reason: "bridge" });
+            } catch (err) {
+                console.warn("[bridge] estimate sync failed", err);
+            }
+        })()
+            .catch((err) => {
+                console.warn("[bridge] unexpected propagation failure", err);
+            })
+            .finally(() => {
+                batchInFlightRef.current = null;
+                // Re-check any divergence that arrived while the batch ran.
+                if (!cancelled && mountedRef.current && rerunPendingRef.current) {
+                    rerunPendingRef.current = false;
+                    setRerunTick((value) => value + 1);
+                }
+            });
+        batchInFlightRef.current = batch;
+        return cleanup;
+    }, [pmState?.tasks, appState?.tasks, refresh, sync, data, updateTask, rerunTick]);
 
     // Ensure every backend task has corresponding PM metadata entry.
     useEffect(() => {
@@ -39,6 +205,7 @@ export const StateSyncBridge: React.FC = () => {
         (async () => {
             const activeBefore = appState.active_task;
             for (const pmTask of unlinked) {
+                if (cancelled) return;
                 try {
                     const created = await createAppTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
                     if (cancelled) return;
@@ -48,12 +215,23 @@ export const StateSyncBridge: React.FC = () => {
                             await setActiveTask(activeBefore);
                         } catch {}
                     }
-                    await refresh();
                 } catch (err) {
                     console.warn("Failed to create backend task for PM entry", pmTask.id, err);
                 }
             }
-        })();
+            // Commands are local and adopt their staged results, so collapse the
+            // repeated per-item refreshes into one post-loop view refresh. No
+            // per-item sync; the explicit sync action remains the only write path.
+            if (!cancelled) {
+                try {
+                    await refresh();
+                } catch (err) {
+                    console.warn("Failed to refresh after linking PM entries", err);
+                }
+            }
+        })().catch((err) => {
+            console.warn("[bridge] unexpected metadata propagation failure", err);
+        });
         return () => {
             cancelled = true;
         };
@@ -111,59 +289,6 @@ export const StateSyncBridge: React.FC = () => {
             }
         });
     }, [appState?.tasks, appState?.timer, appState?.settings.work_minutes]);
-
-    // Propagate estimate changes from PM -> backend targets.
-    useEffect(() => {
-        if (!pmState || !appState) return;
-        const backendTargets: Record<string, number> = {};
-        Object.values(appState.tasks).forEach((task) => {
-            backendTargets[task.id] = task.target_pomodoros;
-        });
-        let cancelled = false;
-        (async () => {
-            for (const pmTask of Object.values(pmState.tasks)) {
-                if (!pmTask.appTaskId) continue;
-                if (typeof pmTask.estimatePomos !== "number") continue;
-                const current = backendTargets[pmTask.appTaskId];
-                if (current === undefined) continue;
-                const backendTask = appState.tasks[pmTask.appTaskId];
-                const completed = backendTask?.completed_pomodoros ?? 0;
-                const minTarget = Math.max(1, Math.ceil(completed));
-                let desired = Math.round(pmTask.estimatePomos);
-                if (!Number.isFinite(desired)) {
-                    desired = minTarget;
-                }
-                if (desired < minTarget) {
-                    desired = minTarget;
-                }
-                // Only normalize locally if the value actually violates constraints; otherwise leave user input intact
-                if (desired !== pmTask.estimatePomos && (pmTask.estimatePomos < minTarget || !Number.isFinite(pmTask.estimatePomos))) {
-                    updateTaskRef.current(pmTask.id, { estimatePomos: desired });
-                }
-                if (desired !== current) {
-                    if (pmTask.appTaskId) {
-                        pendingTargetsRef.current[pmTask.appTaskId] = desired;
-                    }
-                    try {
-                        await data.setTaskTarget(pmTask.appTaskId, desired);
-                        if (cancelled) return;
-                        await refresh();
-                    } catch (err) {
-                        console.warn("Failed to push estimate to backend", err);
-                        if (pmTask.appTaskId) {
-                            const pendingTarget = pendingTargetsRef.current[pmTask.appTaskId];
-                            if (pendingTarget === desired) {
-                                delete pendingTargetsRef.current[pmTask.appTaskId];
-                            }
-                        }
-                    }
-                }
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [pmState?.tasks, appState?.tasks, refresh, updateTask, data]);
 
     // Mark PM tasks done when backend tasks complete.
     useEffect(() => {

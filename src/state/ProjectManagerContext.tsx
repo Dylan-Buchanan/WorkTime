@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { ProjectManagerState, Project, PMTask, TaskPriority, TaskStatus } from "./types";
 import { useAppState } from "./AppStateContext";
 import { useData } from "./DataContext";
+import { useSync } from "./SyncContext";
 import type { SyncedPMState } from "../lib/data/DataAccess";
 
 // LocalStorage key
@@ -85,7 +86,7 @@ interface PMContextShape {
     setView: (v: "list" | "board") => void;
     setListGrouping: (g: ProjectManagerState["ui"]["listGrouping"]) => void;
     setFilters: (patch: Partial<ProjectManagerState["ui"]>) => void;
-    resetPM: () => void;
+    refreshPM: () => Promise<void>;
 }
 
 const PMContext = createContext<PMContextShape | undefined>(undefined);
@@ -168,16 +169,36 @@ export const ProjectManagerProvider: React.FC<{
 }> = ({ children }) => {
     const app = useAppState();
     const data = useData();
+    // SyncProvider owns the single sync action, the bootstrap guard, and the
+    // focus/visibility/pagehide lifecycle triggers. `initialized` gates the
+    // save effect (no PM stage before the first successful pull), `revision`
+    // drives staged PM reloads, and `sync` is the only remote write path.
+    const { initialized, revision, sync } = useSync();
     const hasLocalStorage = (() => {
         try { return typeof window !== "undefined" && typeof window.localStorage !== "undefined"; } catch { return false; }
     })();
     const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
     const [hydrated, setHydrated] = useState(false);
-    const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-    const pendingSnapshotRef = useRef<SyncedPMState | null>(null);
-    const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastServerSerializedRef = useRef<string | null>(null);
+    const pendingServerSerializedRef = useRef<string | null>(null);
     const suppressServerSaveRef = useRef(false);
+    // Serialized staged PM slice the last time a reload applied it. A reload
+    // only applies when the staged slice actually changed (a sync or cross-tab
+    // write); when it is unchanged, the local view may hold a newer edit that
+    // has not been staged yet, and reloading the stale snapshot would clobber it.
+    const lastReloadedPmRef = useRef<string | null>(null);
+    // Latest UI snapshot for the staged reload. Reading from a ref avoids
+    // re-running the reload effect every time `applyServerState` rebuilds the
+    // `ui` object reference on a reload.
+    const uiRef = useRef(state.ui);
+    const stateRef = useRef(state);
+    // Written from a layout effect (not the render body) so a discarded render
+    // under concurrent React can never leak a `ui` object that was never
+    // committed into the ref.
+    useLayoutEffect(() => {
+        uiRef.current = state.ui;
+        stateRef.current = state;
+    }, [state]);
 
     const serverSlice = useCallback((input: ProjectManagerState | SyncedPMState): SyncedPMState => JSON.parse(JSON.stringify({ projects: input.projects, tasks: input.tasks, meta: input.meta })) as SyncedPMState, []);
     const applyServerState = useCallback((remote: SyncedPMState | null, localUI: ProjectManagerState["ui"]): ProjectManagerState => {
@@ -194,43 +215,6 @@ export const ProjectManagerProvider: React.FC<{
         return { projects: normalized.projects, tasks: normalized.tasks, meta: normalized.meta, ui: { ...localUI, selectedProjectIds, statusFilter: [...localUI.statusFilter], tagFilter: [...localUI.tagFilter], priorityFilter: [...localUI.priorityFilter] } };
     }, []);
 
-    const flushPendingSnapshot = useCallback(
-        (snapshot?: SyncedPMState | null) => {
-            const snap = snapshot ?? pendingSnapshotRef.current;
-            if (!snap) return saveQueueRef.current;
-            pendingSnapshotRef.current = null;
-            const payload = serverSlice(snap);
-            saveQueueRef.current = saveQueueRef.current
-                .catch(() => undefined)
-                .then(() => data.savePMState(payload))
-                .then(
-                    () => undefined,
-                    (err) => {
-                        console.warn("[PM] failed to persist project manager state", err);
-                    }
-                );
-            return saveQueueRef.current;
-        },
-        [data, serverSlice]
-    );
-
-    const persistSnapshot = useCallback(
-        (snapshot: SyncedPMState, options?: { immediate?: boolean }) => {
-            pendingSnapshotRef.current = serverSlice(snapshot);
-            if (flushTimeoutRef.current) {
-                clearTimeout(flushTimeoutRef.current);
-                flushTimeoutRef.current = null;
-            }
-            if (options?.immediate) return flushPendingSnapshot();
-            flushTimeoutRef.current = setTimeout(() => {
-                flushTimeoutRef.current = null;
-                void flushPendingSnapshot();
-            }, 750);
-            return Promise.resolve();
-        },
-        [flushPendingSnapshot, hasLocalStorage, serverSlice]
-    );
-
     const readLocalUI = useCallback((): ProjectManagerState["ui"] => {
         if (!hasLocalStorage) return normalizeLocalUI(undefined);
         try {
@@ -241,13 +225,6 @@ export const ProjectManagerProvider: React.FC<{
             return normalizeLocalUI(undefined);
         }
     }, [hasLocalStorage]);
-
-    useEffect(() => {
-        return () => {
-            if (flushTimeoutRef.current) clearTimeout(flushTimeoutRef.current);
-            void flushPendingSnapshot();
-        };
-    }, [flushPendingSnapshot]);
 
     useEffect(() => {
         let cancelled = false;
@@ -266,16 +243,17 @@ export const ProjectManagerProvider: React.FC<{
             const synced = serverSlice(finalState);
             lastServerSerializedRef.current = JSON.stringify(synced);
             suppressServerSaveRef.current = true;
-            if (!remote) await persistSnapshot(synced, { immediate: true });
+            // A null remote renders the normalized default but is never staged
+            // here: the bootstrap guard forbids seeding before the first pull.
             if (hasLocalStorage) {
                 try { window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: localUI })); } catch { /* local UI is best effort */ }
             }
         })();
         return () => { cancelled = true; };
-    }, [applyServerState, data, hasLocalStorage, persistSnapshot, readLocalUI, serverSlice]);
+    }, [applyServerState, data, hasLocalStorage, readLocalUI, serverSlice]);
 
     useEffect(() => {
-        if (!hydrated) return;
+        if (!hydrated || !initialized) return;
         const synced = serverSlice(state);
         const serialized = JSON.stringify(synced);
         if (suppressServerSaveRef.current && serialized === lastServerSerializedRef.current) {
@@ -283,35 +261,74 @@ export const ProjectManagerProvider: React.FC<{
             return;
         }
         if (serialized === lastServerSerializedRef.current) return;
-        lastServerSerializedRef.current = serialized;
-        persistSnapshot(synced);
-    }, [state, hydrated, persistSnapshot, serverSlice]);
+        if (pendingServerSerializedRef.current === serialized) return;
+        pendingServerSerializedRef.current = serialized;
+        // Keep the React view ahead of the staged copy until the write really
+        // succeeds. A later revision then retries this exact snapshot instead
+        // of reloading stale data over an unsaved edit.
+        void data.savePMState(synced).then(() => {
+            if (pendingServerSerializedRef.current === serialized) {
+                lastServerSerializedRef.current = serialized;
+                pendingServerSerializedRef.current = null;
+            }
+        }).catch((err) => {
+            if (pendingServerSerializedRef.current === serialized) {
+                pendingServerSerializedRef.current = null;
+            }
+            console.warn("[PM] failed to persist project manager state", err);
+        });
+    }, [state, hydrated, initialized, revision, serverSlice, data]);
 
     useEffect(() => {
         if (!hydrated || !hasLocalStorage) return;
         try { window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: state.ui })); } catch (err) { console.warn("[PM] failed to save local UI state", err); }
     }, [state.ui, hydrated, hasLocalStorage]);
 
-    const refreshPM = useCallback(async () => {
-        if (flushTimeoutRef.current) {
-            clearTimeout(flushTimeoutRef.current);
-            flushTimeoutRef.current = null;
+    // Reloads the staged PM slice, applying the server slice while retaining the
+    // device-local UI. Marks the result as suppress-once so the save effect never
+    // writes this reload back to the store. A reload applies only when the staged
+    // slice changed since the last reload; an unchanged staged snapshot may lag a
+    // local edit that is still being persisted, so applying it would revert the
+    // view (dropping a quick-add task's fields or the task itself).
+    const reloadStagedPM = useCallback(async () => {
+        let remote: SyncedPMState | null = null;
+        try {
+            remote = await data.loadPMState();
+        } catch (err) {
+            console.warn("[PM] failed to load project manager state", err);
         }
-        await flushPendingSnapshot();
-        const remote = await data.loadPMState();
-        const next = applyServerState(remote, state.ui);
+        const serialized = JSON.stringify(remote);
+        const currentSerialized = JSON.stringify(serverSlice(stateRef.current));
+        // A local save is either still in flight or failed. Do not replace the
+        // newer in-memory edit with the stale staged snapshot on that revision.
+        if (lastServerSerializedRef.current !== null && currentSerialized !== lastServerSerializedRef.current) return;
+        // Same-tab save notifications commonly arrive before the save promise
+        // resolves. Equal data needs no reload or render round-trip.
+        if (serialized === currentSerialized) {
+            lastReloadedPmRef.current = serialized;
+            return;
+        }
+        if (serialized === lastReloadedPmRef.current) return;
+        lastReloadedPmRef.current = serialized;
+        const next = applyServerState(remote, uiRef.current);
         lastServerSerializedRef.current = JSON.stringify(serverSlice(next));
         suppressServerSaveRef.current = true;
         setState(next);
-    }, [applyServerState, data, flushPendingSnapshot, serverSlice, state.ui]);
+    }, [applyServerState, data, serverSlice]);
 
+    // Every store revision (same-tab sync commit, cross-tab storage write, or a
+    // local PM stage) reloads the staged PM view. SyncProvider owns focus and
+    // visibility triggers, so this provider never registers its own listeners.
     useEffect(() => {
-        const refresh = () => { void refreshPM().catch((err) => console.warn("[PM] failed to refresh project manager state", err)); };
-        const onVisibility = () => { if (document.visibilityState === "visible") refresh(); };
-        window.addEventListener("focus", refresh);
-        document.addEventListener("visibilitychange", onVisibility);
-        return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", onVisibility); };
-    }, [refreshPM]);
+        if (!hydrated) return;
+        void reloadStagedPM();
+    }, [hydrated, revision, reloadStagedPM]);
+
+    // Retained manual refresh: one sync trigger followed by the staged reload.
+    const refreshPM = useCallback(async () => {
+        await sync({ reason: "manual" });
+        await reloadStagedPM();
+    }, [sync, reloadStagedPM]);
 
     const persist = useCallback((next: ProjectManagerState | ((prev: ProjectManagerState) => ProjectManagerState)) => {
         setState((prev) => (typeof next === "function" ? (next as any)(prev) : next));
@@ -410,6 +427,29 @@ export const ProjectManagerProvider: React.FC<{
         const status = opts.status || "Backlog";
         let created: PMTask | null = null;
         persist((prev) => {
+            // App task creation updates AppState before this async command
+            // resumes. StateSyncBridge may therefore have already created the
+            // PM metadata row for the same app task. Deduplicate against the
+            // latest functional-update snapshot rather than the render-time
+            // `state` closure, otherwise quick add can create two PM rows.
+            const linked = opts.appTaskId
+                ? Object.values(prev.tasks).find((task) => task.appTaskId === opts.appTaskId)
+                : undefined;
+            if (linked) {
+                const task: PMTask = {
+                    ...linked,
+                    ...opts,
+                    id: linked.id,
+                    title,
+                    projectId,
+                    updatedAt: now(),
+                };
+                created = task;
+                return {
+                    ...prev,
+                    tasks: { ...prev.tasks, [linked.id]: task },
+                };
+            }
             const sortOrder = Object.values(prev.tasks).filter((t) => t.status === status).length;
             const task: PMTask = {
                 id,
@@ -609,10 +649,6 @@ export const ProjectManagerProvider: React.FC<{
             ui: { ...prev.ui, ...patch },
         }));
 
-    const resetPM = () => {
-        persist(() => buildDefaultState());
-    };
-
     // Expose & log each render (development aid)
     useEffect(() => {
         (globalThis as any).__PM__ = {
@@ -649,7 +685,7 @@ export const ProjectManagerProvider: React.FC<{
                 setView,
                 setListGrouping,
                 setFilters,
-                resetPM,
+                refreshPM,
             }}
         >
             {children}

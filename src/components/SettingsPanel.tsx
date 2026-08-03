@@ -1,18 +1,10 @@
 import React, { useState } from "react";
 import { useAppState } from "../state/AppStateContext";
-import { usePM } from "../state/ProjectManagerContext";
 import { Settings } from "../state/types";
 import { useSounds } from "../hooks/useSounds";
 
 export const SettingsPanel: React.FC = () => {
     const { state, updateSettings, resetAll } = useAppState();
-    const pm = (() => {
-        try {
-            return usePM();
-        } catch {
-            return null;
-        }
-    })();
     const { play } = useSounds();
     const s = state?.settings;
     const [local, setLocal] = useState<Settings | null>(s || null);
@@ -92,7 +84,8 @@ export const SettingsPanel: React.FC = () => {
                         </h4>
                         <p className="text-neutral-400 leading-relaxed">
                             This will delete all timer tasks, logs, settings and
-                            project manager data. Type{" "}
+                            timer state. Your projects and estimates will be
+                            kept. Type{" "}
                             <span className="text-red-400 font-semibold">
                                 yes
                             </span>{" "}
@@ -132,7 +125,6 @@ export const SettingsPanel: React.FC = () => {
                                         return;
                                     play("pressSide");
                                     await resetAll();
-                                    pm?.resetPM?.();
                                     setShowReset(false);
                                     setConfirm("");
                                 }}

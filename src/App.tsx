@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { BrowserRouter } from "react-router-dom";
@@ -11,20 +11,24 @@ import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPa
 import { AppStateProvider } from "./state/AppStateContext";
 import AnalyticsPage from "./components/AnalyticsPage";
 import StateSyncBridge from "./state/StateSyncBridge";
+import { SyncProvider } from "./state/SyncContext";
+import { SyncControls, UnsyncedBanner } from "./components/SyncControls";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { DataProvider } from "./state/DataContext";
-import { defaultDataAccess } from "./lib/data/defaultDataAccess";
+import { createDefaultDataAccess } from "./lib/data/defaultDataAccess";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AuthLoading, RequireAuth } from "./auth/RequireAuth";
 import { RedirectIfAuthenticated } from "./auth/RedirectIfAuthenticated";
 import { LoginPage } from "./components/auth/LoginPage";
 import { SignupPage } from "./components/auth/SignupPage";
 import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
+import { TauriCloseProvider } from "./state/TauriCloseContext";
 
 const App: React.FC = () => (
     <BrowserRouter>
         <AuthProvider>
-            <Routes>
+            <TauriCloseProvider>
+                <Routes>
                 <Route element={<RedirectIfAuthenticated />}>
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/signup" element={<SignupPage />} />
@@ -38,24 +42,38 @@ const App: React.FC = () => (
                     </Route>
                 </Route>
                 <Route path="*" element={<UnknownRoute />} />
-            </Routes>
+                </Routes>
+            </TauriCloseProvider>
         </AuthProvider>
     </BrowserRouter>
 );
 
-const AuthenticatedShell: React.FC = () => (
-    <DataProvider dataAccess={defaultDataAccess}>
-        <AppStateProvider>
-            <ProjectManagerProvider>
-                <StateSyncBridge />
-                <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
-                    <TopNav />
-                    <div className="flex-1 min-h-0"><Outlet /></div>
-                </div>
-            </ProjectManagerProvider>
-        </AppStateProvider>
-    </DataProvider>
-);
+const AuthenticatedShell: React.FC = () => {
+    const { session } = useAuth();
+    // The shell only renders behind RequireAuth, so the session is present. A
+    // user change produces a fresh owner-scoped graph; never reuse one across
+    // owners. Public auth routes never construct this graph.
+    const dataAccess = useMemo(
+        () => createDefaultDataAccess(session!.user.id),
+        [session?.user.id],
+    );
+    return (
+        <DataProvider dataAccess={dataAccess}>
+            <SyncProvider ownerId={session!.user.id}>
+                <AppStateProvider>
+                    <ProjectManagerProvider>
+                        <StateSyncBridge />
+                        <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
+                            <TopNav />
+                            <UnsyncedBanner />
+                            <div className="flex-1 min-h-0"><Outlet /></div>
+                        </div>
+                    </ProjectManagerProvider>
+                </AppStateProvider>
+            </SyncProvider>
+        </DataProvider>
+    );
+};
 
 const TopNav: React.FC = () => {
     const { play } = useSounds();
@@ -82,6 +100,7 @@ const TopNav: React.FC = () => {
             <Link to="/analytics" onClick={() => handleClick("/analytics")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/analytics"))}>Analytics</Link>
             <div className="ml-auto flex items-center gap-2">
                 {error && <span role="alert" className="text-red-300">{error}</span>}
+                <SyncControls />
                 <button type="button" onClick={handleSignOut} disabled={signingOut} className="rounded px-2 py-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-50">{signingOut ? "Signing out…" : "Sign out"}</button>
             </div>
         </div>

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { baseState, backendState, openApp, taskFixture } from "./helpers";
+import { baseState, backendState, openApp, syncData, taskFixture } from "./helpers";
 
 test.describe("Timer workflows", () => {
     test("create a task and run a full focus/stop cycle", async ({ browser }) => {
@@ -33,6 +33,8 @@ test.describe("Timer workflows", () => {
         await page.waitForTimeout(1100);
         await page.getByRole("button", { name: "Stop Early" }).click();
         await expect(page.getByRole("button", { name: "Start Focus" })).toBeVisible();
+
+        await syncData(page);
 
         const state = await backendState(app);
         expect(state.timer).toBeNull();
@@ -69,6 +71,8 @@ test.describe("Timer workflows", () => {
 
         // When the seeded timer ends, the app auto-completes it and starts a break.
         await expect(page.getByText("SHORTBREAK")).toBeVisible({ timeout: 15000 });
+
+        await syncData(page);
 
         const state = await backendState(app);
         expect(state.logs.some((l: any) => !l.was_break)).toBe(true);

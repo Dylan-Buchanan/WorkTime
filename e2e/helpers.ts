@@ -1,4 +1,4 @@
-import { Browser, BrowserContext, Page } from "@playwright/test";
+import { Browser, BrowserContext, expect, Page } from "@playwright/test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAuthStorageKey } from "../src/lib/supabaseAuthStorage";
 import { createLocalUser, localSupabaseConfig, type LocalUser } from "../tests/supabase/localSupabase";
@@ -72,6 +72,33 @@ export async function backendState(app: TestApp): Promise<AppStateData> {
 export async function backendPMState(app: TestApp) {
     const response = await app.client.from("pm_state").select("data").maybeSingle();
     return response.data?.data ?? null;
+}
+
+/** Push staged browser state before an assertion reads Supabase. */
+export async function syncData(page: Page): Promise<void> {
+    const button = page.getByRole("button", { name: /Sync data/ });
+    const badge = page.getByTestId("pending-badge");
+    // Sync until the staged store drains. A single sync can succeed while a
+    // same-tab write (the estimate/PM bridge) lands during the sync and stays
+    // pending, so retry a bounded number of times. Each attempt waits for the
+    // button to cycle, proving that sync's coordinator attempt settled.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        await button.click();
+        await expect(button).toBeDisabled();
+        await expect(button).toBeEnabled();
+        try {
+            await expect(badge).toHaveCount(0, { timeout: 2000 });
+            break;
+        } catch {
+            // A same-tab write raced this sync; drain it on the next attempt.
+        }
+    }
+    // The badge clearing is the stable success signal: the staged store is fully
+    // drained. The derived "Synced" text can flip to "Ready" when a same-tab
+    // write or focus event fires during the assertion window, so accept either
+    // settled text rather than asserting the exact success string.
+    await expect(badge).toHaveCount(0);
+    await expect(page.getByRole("status")).toHaveText(/Synced|Ready/);
 }
 
 export const defaultSettings: Settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };

@@ -11,7 +11,9 @@ WorkTime is a Windows Tauri desktop app with a React/Vite frontend. The browser 
 - `supabase/` contains the schema/RLS migration, local Auth configuration, invite-signup Edge Function, and setup notes.
 - `public/` contains PWA install artwork and the Cloudflare Pages SPA fallback.
 
-Do not add Tauri `invoke` data paths, local JSON persistence, service-role credentials, invite codes, or push/background-sync behavior. Keep service-role keys and `SIGNUP_INVITE_CODE` server-only. Browser configuration may use only `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and the public recovery origin `VITE_PUBLIC_APP_URL`.
+Do not add Tauri `invoke` data paths, service-role credentials, invite codes, or push/background-sync behavior. Keep service-role keys and `SIGNUP_INVITE_CODE` server-only. Browser configuration may use only `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and the public recovery origin `VITE_PUBLIC_APP_URL`.
+
+The per-owner localStorage staging store (`worktime:staging:v1:*`, implemented in `src/lib/data/staging/`) is the only application-data persistence exception. It is frontend-owned, holds only the owner's local app/PM state plus sync metadata, and must not be replaced by Tauri `invoke`/file paths or moved server-side. Everything under `pm_state_v1` (UI-only) and the GoTrue `sb-...-auth-token` key remains outside the staging store.
 
 ## Environment and Supabase
 

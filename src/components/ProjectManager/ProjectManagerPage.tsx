@@ -8,11 +8,13 @@ import { usePM } from "../../state/ProjectManagerContext";
 export const ProjectManagerPage: React.FC = () => {
     const { state, createTask, quickAddParse, setFilters, setView } = usePM();
     const [quick, setQuick] = useState("");
+    const [quickError, setQuickError] = useState<string | null>(null);
     const activeProjectId = state.ui.selectedProjectIds[0] || null;
 
     const submitQuick = async () => {
         const raw = quick.trim();
         if (!raw) return;
+        setQuickError(null);
         const { task, projectName } = quickAddParse(raw);
         const parsedTitle = task.title?.trim();
         const title = parsedTitle && parsedTitle.length > 0 ? parsedTitle : "Untitled";
@@ -33,10 +35,17 @@ export const ProjectManagerPage: React.FC = () => {
         }
 
         const { title: _omit, ...taskPayload } = task;
-        const created = await createTask(title, {
-            ...taskPayload,
-            projectId,
-        });
+        let created;
+        try {
+            created = await createTask(title, {
+                ...taskPayload,
+                projectId,
+            });
+        } catch (err) {
+            console.warn("Failed to quick-add task", err);
+            setQuickError("Could not add task. Please try again.");
+            return;
+        }
         setFilters({ selectedTaskId: created.id });
         setQuick("");
     };
@@ -57,7 +66,10 @@ export const ProjectManagerPage: React.FC = () => {
                 )}
                 <input
                     value={quick}
-                    onChange={(e) => setQuick(e.target.value)}
+                    onChange={(e) => {
+                        setQuick(e.target.value);
+                        setQuickError(null);
+                    }}
                     onKeyDown={(e) => {
                         if (e.key === "Enter") {
                             void submitQuick();
@@ -66,6 +78,7 @@ export const ProjectManagerPage: React.FC = () => {
                     placeholder="Quick add: Title @Project ^YYYY-MM-DD #tag !high"
                     className="flex-1 bg-neutral-900 rounded px-2 py-1"
                 />
+                {quickError && <span role="alert" className="text-red-400">{quickError}</span>}
                 <button
                     onClick={() => {
                         submitQuick();
@@ -150,11 +163,19 @@ const ViewSwitch: React.FC<{
 const InlineAddTask: React.FC<{ projectId: string }> = ({ projectId }) => {
     const { createTask, setFilters } = usePM();
     const [title, setTitle] = React.useState("");
+    const [error, setError] = React.useState<string | null>(null);
     const submit = async () => {
         const t = title.trim();
         if (!t) return;
-        const task = await createTask(t, { projectId });
-        setFilters({ selectedTaskId: task.id });
+        setError(null);
+        try {
+            const task = await createTask(t, { projectId });
+            setFilters({ selectedTaskId: task.id });
+        } catch (err) {
+            console.warn("Failed to add task", err);
+            setError("Could not add task.");
+            return;
+        }
         setTitle("");
     };
     return (
@@ -178,6 +199,7 @@ const InlineAddTask: React.FC<{ projectId: string }> = ({ projectId }) => {
             >
                 Add
             </button>
+            {error && <span role="alert" className="text-red-400">{error}</span>}
         </div>
     );
 };
