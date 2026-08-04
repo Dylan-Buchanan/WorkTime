@@ -233,13 +233,13 @@ export const TaskPanel: React.FC = () => {
                         console.error("Failed to create task", err);
                     }
                 }}
-                className="flex gap-2"
+                className="flex gap-2 border border-neutral-700 rounded-md bg-neutral-900/40 p-2"
             >
                 <input
                     value={name}
                     placeholder="Task name"
                     onChange={(e) => setName(e.target.value)}
-                    className="flex-1 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="flex-1 min-w-0 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
                 <input
                     type="number"
@@ -259,7 +259,7 @@ export const TaskPanel: React.FC = () => {
                 {groupedTasks.map((group) => {
                     const collapsed = collapsedGroups[group.key] ?? false;
                     return (
-                        <div key={group.key} className="border border-neutral-800/80 rounded-md bg-neutral-900/40">
+                        <div key={group.key} className="border border-neutral-700 rounded-md bg-neutral-900/40">
                             <button
                                 type="button"
                                 onClick={() => toggleGroup(group.key)}

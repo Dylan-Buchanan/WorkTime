@@ -3,15 +3,7 @@ import { useAppState } from "../state/AppStateContext";
 import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
 import { TaskInspector } from "./ProjectManager/TaskInspector";
-import {
-    EPSILON,
-    computeElapsedSecs,
-    formatDurationMinutes,
-    formatMs,
-    formatPomodoroCount,
-    parseDueDateKey,
-    toLocalDateKey,
-} from "../lib/timer";
+import { EPSILON, computeElapsedSecs, formatDurationMinutes, formatMs, formatPomodoroCount, parseDueDateKey, toLocalDateKey } from "../lib/timer";
 
 type FinishProjection =
     | {
@@ -55,10 +47,7 @@ export const TimerPanel: React.FC = () => {
     const plannedSecs = timer?.planned_secs || (timer ? (new Date(timer.ends_at).getTime() - new Date(timer.started_at).getTime()) / 1000 : 0);
 
     // Elapsed seconds including accumulated (if paused/resumed) + current run segment
-    const elapsedSecs = useMemo(
-        () => computeElapsedSecs(timer, Date.now(), plannedSecs),
-        [timer, plannedSecs, tick]
-    );
+    const elapsedSecs = useMemo(() => computeElapsedSecs(timer, Date.now(), plannedSecs), [timer, plannedSecs, tick]);
 
     const pct = plannedSecs > 0 ? Math.min(1, Math.max(0, elapsedSecs / plannedSecs)) : 0;
 
@@ -197,7 +186,7 @@ export const TimerPanel: React.FC = () => {
 
             const backendTask = pmTask.appTaskId ? backendTasks[pmTask.appTaskId] : undefined;
             if (backendTask?.completed_at) return;
-            const estimate = typeof pmTask.estimatePomos === "number" ? pmTask.estimatePomos : backendTask?.target_pomodoros ?? 0;
+            const estimate = typeof pmTask.estimatePomos === "number" ? pmTask.estimatePomos : (backendTask?.target_pomodoros ?? 0);
             if (!Number.isFinite(estimate) || estimate <= EPSILON) return;
 
             let worked = backendTask?.completed_pomodoros ?? 0;
@@ -348,14 +337,14 @@ export const TimerPanel: React.FC = () => {
                                 }}
                                 aria-hidden
                             />
-                            <div className="absolute inset-[6px] rounded-full bg-neutral-950 border border-neutral-800 flex items-center justify-center">
+                            <div className="absolute inset-1.5 rounded-full bg-neutral-950 border border-neutral-800 flex items-center justify-center">
                                 <span className="text-6xl font-semibold tabular-nums tracking-tight">{timer ? formatMs(ms) : "READY"}</span>
                             </div>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap justify-center">
                             {kindBadge}
                             {taskName && (
-                                <span className="px-2 py-1 rounded bg-neutral-800 text-[10px] max-w-[220px] truncate" title={taskName}>
+                                <span className="px-2 py-1 rounded bg-neutral-800 text-[10px] max-w-55 truncate" title={taskName}>
                                     {taskName}
                                 </span>
                             )}
