@@ -98,6 +98,28 @@ export interface ActiveTimer {
     accumulated_secs?: number; // elapsed active seconds before current segment
 }
 
+export type HabitFrequency = "daily" | "weekly" | "monthly";
+
+export interface Habit {
+    id: string;
+    name: string;
+    description: string;
+    color: string;
+    frequency: HabitFrequency;
+    position: number;
+    isArchived: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface HabitCompletion {
+    id: string;
+    habitId: string;
+    bucket: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
 export interface AppStateData {
     tasks: Record<string, Task>;
     logs: PomodoroLogEntry[];
