@@ -4,6 +4,7 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import {
     dateFromBucket,
+    derive365Grid,
     getBucketKey,
     getWindowBuckets,
     isHabitCellCheckable,
@@ -48,6 +49,7 @@ export const HabitsPage: React.FC = () => {
         reorderHabits,
         setPeriod,
         setSelectedHabit,
+        toggleHabitExpanded,
     } = useHabits();
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -178,7 +180,12 @@ export const HabitsPage: React.FC = () => {
                                                 now={now}
                                                 completions={Object.values(state.completions)}
                                                 selected={state.ui.selected === habit.id}
+                                                expanded={Boolean(state.ui.expanded[habit.id])}
                                                 onSelect={() => setSelectedHabit(habit.id)}
+                                                onToggleExpand={() => {
+                                                    setSelectedHabit(habit.id);
+                                                    toggleHabitExpanded(habit.id);
+                                                }}
                                                 onCheck={(bucket, checked) => checked ? uncheckCompletion(habit.id, bucket) : checkCompletion(habit.id, bucket)}
                                                 onEdit={() => openEdit(habit)}
                                                 onArchive={() => archiveHabit(habit.id)}
@@ -201,8 +208,13 @@ export const HabitsPage: React.FC = () => {
                                             now={now}
                                             completions={Object.values(state.completions)}
                                             selected={state.ui.selected === habit.id}
+                                            expanded={Boolean(state.ui.expanded[habit.id])}
                                             archived
                                             onSelect={() => setSelectedHabit(habit.id)}
+                                            onToggleExpand={() => {
+                                                setSelectedHabit(habit.id);
+                                                toggleHabitExpanded(habit.id);
+                                            }}
                                             onCheck={(bucket, checked) => checked ? uncheckCompletion(habit.id, bucket) : checkCompletion(habit.id, bucket)}
                                             onEdit={() => openEdit(habit)}
                                             onArchive={() => archiveHabit(habit.id, false)}
@@ -286,8 +298,10 @@ type HabitCardProps = {
     now: Date;
     completions: ReadonlyArray<{ habitId: string; bucket: string }>;
     selected: boolean;
+    expanded: boolean;
     archived?: boolean;
     onSelect: () => void;
+    onToggleExpand: () => void;
     onCheck: (bucket: string, checked: boolean) => void;
     onEdit: () => void;
     onArchive: () => void;
@@ -298,9 +312,11 @@ type HabitCardProps = {
     dragListeners?: DraggableSyntheticListeners;
 };
 
-const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, selected, archived = false, onSelect, onCheck, onEdit, onArchive, onDelete, setNodeRef, style, dragAttributes, dragListeners }) => {
+const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, selected, expanded, archived = false, onSelect, onToggleExpand, onCheck, onEdit, onArchive, onDelete, setNodeRef, style, dragAttributes, dragListeners }) => {
     const buckets = getWindowBuckets(period, habit.frequency, now);
     const todayBucket = getBucketKey(now, habit.frequency);
+    const canExpand365 = period === "year" && (habit.frequency === "daily" || habit.frequency === "weekly");
+    const grid = canExpand365 && expanded ? derive365Grid(habit, completions, now) : null;
     return (
         <article ref={setNodeRef} style={style} onClick={onSelect} className={`rounded-lg border bg-neutral-900/70 p-3 shadow-sm transition-colors ${selected ? "border-indigo-500/70 ring-1 ring-indigo-500/30" : "border-neutral-800 hover:border-neutral-700"} ${archived ? "opacity-70" : ""}`}>
             <div className="flex items-start gap-3">
@@ -320,7 +336,8 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
                             {archived && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-300">Archived</span>}
                         </div>
                     </div>
-                    <div className="mt-3 flex min-w-0 gap-1 overflow-x-auto pb-1" aria-label={`${habit.name} ${period} completion cells`}>
+                    {grid && <Habit365Grid habit={habit} grid={grid} todayBucket={todayBucket} onCheck={onCheck} />}
+                    <div className={grid ? "hidden" : "mt-3 flex min-w-0 gap-1 overflow-x-auto pb-1"} aria-label={`${habit.name} ${period} completion cells`}>
                         {buckets.map((bucket) => {
                             const checked = isHabitCompleted(completions, habit.id, bucket);
                             const checkable = isHabitCellCheckable(habit, bucket, now);
@@ -345,6 +362,17 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                         <span className="text-[10px] text-neutral-500">{buckets.length} {buckets.length === 1 ? "cell" : "cells"} · today highlighted</span>
                         <div className="flex items-center gap-1">
+                            {canExpand365 && (
+                                <button
+                                    type="button"
+                                    aria-expanded={expanded}
+                                    aria-label={`${expanded ? "Collapse" : "Expand"} ${habit.name} 365 details`}
+                                    onClick={(event) => { event.stopPropagation(); onToggleExpand(); }}
+                                    className="rounded px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-950/50 hover:text-indigo-200"
+                                >
+                                    {expanded ? "Collapse 365 details" : "Expand 365 details"}
+                                </button>
+                            )}
                             <button type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }} className="rounded px-2 py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">Edit</button>
                             <button type="button" onClick={(event) => { event.stopPropagation(); onArchive(); }} className="rounded px-2 py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">{archived ? "Restore" : "Archive"}</button>
                             <button type="button" onClick={(event) => { event.stopPropagation(); onDelete(); }} className="rounded px-2 py-1 text-[10px] text-red-300 hover:bg-red-950/50">Delete</button>
@@ -355,6 +383,36 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
         </article>
     );
 };
+
+const Habit365Grid: React.FC<{
+    habit: Habit;
+    grid: ReturnType<typeof derive365Grid>;
+    todayBucket: string;
+    onCheck: (bucket: string, checked: boolean) => void;
+}> = ({ habit, grid, todayBucket, onCheck }) => (
+    <div className="mt-3 max-h-80 overflow-y-auto rounded border border-neutral-800 bg-neutral-950/50 p-1" aria-label={`${habit.name} ${habit.frequency} 365 completion grid`}>
+        <div className="grid grid-cols-7 gap-1">
+            {grid.cells.map((cell) => {
+                const label = `${formatBucket(cell.bucket, habit.frequency)}${cell.bucket === todayBucket ? " today" : ""}${cell.checked ? ", completed" : ", not completed"}`;
+                return (
+                    <button
+                        key={cell.bucket}
+                        type="button"
+                        disabled={!cell.checkable}
+                        aria-pressed={cell.checked}
+                        aria-label={label}
+                        title={`${formatBucket(cell.bucket, habit.frequency)}${!cell.checkable ? " - future" : ""}`}
+                        onClick={(event) => { event.stopPropagation(); onCheck(cell.bucket, cell.checked); }}
+                        className={`relative flex h-7 w-full shrink-0 items-center justify-center rounded border text-[10px] transition ${cell.checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-600 hover:border-neutral-500"} ${cell.bucket === todayBucket ? "ring-2 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
+                        style={cell.checked ? { backgroundColor: habit.color, borderColor: habit.color } : undefined}
+                    >
+                        {cell.checked ? "\u2713" : ""}
+                    </button>
+                );
+            })}
+        </div>
+    </div>
+);
 
 function formatBucket(bucket: string, frequency: HabitFrequency): string {
     const date = dateFromBucket(bucket);

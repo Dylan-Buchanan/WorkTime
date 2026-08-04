@@ -96,4 +96,38 @@ describe("HabitsPage", () => {
         expect(confirm).toHaveBeenCalledWith(expect.stringContaining("completion history"));
         confirm.mockRestore();
     });
+
+    it("expands daily and weekly year history into engine-derived seven-column grids", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.saveHabits([
+            habit("daily", { name: "Daily", frequency: "daily" }),
+            habit("weekly", { name: "Weekly", frequency: "weekly", position: 1 }),
+            habit("monthly", { name: "Monthly", frequency: "monthly", position: 2 }),
+        ], []);
+        const user = userEvent.setup();
+
+        render(wrap(data));
+        await screen.findByText("Daily");
+        await user.click(screen.getByRole("button", { name: "Year" }));
+
+        expect(screen.getByRole("button", { name: "Expand Daily 365 details" })).toHaveAttribute("aria-expanded", "false");
+        expect(screen.getByRole("button", { name: "Expand Weekly 365 details" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Expand Monthly 365 details" })).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Expand Daily 365 details" }));
+        const dailyGrid = screen.getByLabelText("Daily daily 365 completion grid");
+        expect(dailyGrid).toBeVisible();
+        expect(within(dailyGrid).getAllByRole("button")).toHaveLength(365);
+        expect(screen.getByRole("button", { name: "Collapse Daily 365 details" })).toHaveAttribute("aria-expanded", "true");
+        await user.click(within(dailyGrid).getByRole("button", { name: /today, not completed/ }));
+        await waitFor(() => expect(within(dailyGrid).getByRole("button", { name: /today, completed/ })).toHaveAttribute("aria-pressed", "true"));
+
+        await user.click(screen.getByRole("button", { name: "Expand Weekly 365 details" }));
+        const weeklyGrid = screen.getByLabelText("Weekly weekly 365 completion grid");
+        expect(within(weeklyGrid).getAllByRole("button")).toHaveLength(53);
+        expect(JSON.parse(localStorage.getItem("habit_state_v1")!).ui).toMatchObject({
+            selected: "weekly",
+            expanded: { daily: true, weekly: true },
+        });
+    });
 });
