@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
 import { defaultAppState } from "../src/lib/engine";
 import type { PushPlan } from "../src/lib/data/sync/types";
+import { LocalStagingStore, type StorageLike } from "../src/lib/data/staging/LocalStagingStore";
+import { SyncCoordinator } from "../src/lib/data/sync/SyncCoordinator";
 import { createLocalUser, type LocalUser } from "../tests/supabase/localSupabase";
 
 // The tasks/pomodoro_logs primary keys are the global `id`, so these fixed ids
@@ -11,6 +13,11 @@ const TASK_B = "00000000-0000-4000-8000-300000000002";
 const TASK_C = "00000000-0000-4000-8000-300000000003";
 const LOG_ID = "00000000-0000-4000-8000-300000000004";
 const LOG_ID_OLD = "00000000-0000-4000-8000-300000000005";
+const HABIT_A = "00000000-0000-4000-8000-300000000010";
+const HABIT_B = "00000000-0000-4000-8000-300000000011";
+const HABIT_C = "00000000-0000-4000-8000-300000000014";
+const COMPLETION_A = "00000000-0000-4000-8000-300000000012";
+const COMPLETION_B = "00000000-0000-4000-8000-300000000013";
 const T0 = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T00:00:00.000Z";
 
@@ -38,13 +45,27 @@ function emptyPlan(): PushPlan {
         taskTombstones: [],
         logUpserts: [],
         logTombstones: [],
+        habitUpserts: [],
+        habitTombstones: [],
+        habitCompletionUpserts: [],
+        habitCompletionTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
         fullWipe: false,
         acknowledged: {
-            taskUpserts: {}, taskTombstones: {}, logUpserts: {}, logTombstones: {},
-            settings: null, timerState: null, pmState: null, fullWipe: null,
+            taskUpserts: {},
+            taskTombstones: {},
+            logUpserts: {},
+            logTombstones: {},
+            habitUpserts: {},
+            habitTombstones: {},
+            habitCompletionUpserts: {},
+            habitCompletionTombstones: {},
+            settings: null,
+            timerState: null,
+            pmState: null,
+            fullWipe: null,
         },
     };
 }
@@ -55,6 +76,14 @@ function task(id: string, name: string) {
 
 function log(id: string) {
     return { id, task_id: TASK_A, duration_minutes: 25, finished_at: "2026-01-01T00:26:00.000Z", was_break: false, break_skipped: false };
+}
+
+function habit(id: string, name: string, updatedAt = T0) {
+    return { id, name, description: "A habit", color: "#ff0000", frequency: "daily", position: 1, isArchived: false, createdAt: T0, updatedAt };
+}
+
+function completion(id: string, habitId: string, bucket = "2026-01-01") {
+    return { id, habitId, bucket, createdAt: T0, updatedAt: T0 };
 }
 
 describe("local-first staged sync transport", () => {
@@ -282,5 +311,182 @@ describe("local-first staged sync transport", () => {
             expect(pulled.was_break).toBe(seeded.was_break);
             expect(pulled.break_skipped).toBe(seeded.break_skipped);
         }
+    });
+
+    it("applies habit LWW, tombstones, completion identity, and wipe preservation", async () => {
+        const owner = track(await createLocalUser());
+        const data = remote(owner);
+
+        // Seed two habits and one completion.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitUpserts: [
+                { value: habit(HABIT_A, "Old name"), updatedAt: T0 },
+                { value: habit(HABIT_B, "Doomed habit"), updatedAt: T0 },
+            ],
+            habitCompletionUpserts: [completion(COMPLETION_A, HABIT_A)],
+        });
+
+        // A newer server row blocks a stale habit upsert (strict LWW gate).
+        await owner.client.from("habits").update({ name: "Newer name" }).eq("owner_id", owner.userId).eq("id", HABIT_A);
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitUpserts: [{ value: habit(HABIT_A, "Stale name"), updatedAt: T0 }],
+        });
+        const habitARow = await owner.client.from("habits").select("name").eq("id", HABIT_A).single();
+        expect(habitARow.error).toBeNull();
+        expect(habitARow.data!.name).toBe("Newer name");
+
+        // A guarded tombstone deletes a row that has not changed since seeding.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitTombstones: [{ id: HABIT_B, deletedAt: LATER }],
+        });
+        expect((await owner.client.from("habits").select("id").eq("id", HABIT_B)).data).toHaveLength(0);
+
+        // A tombstone older than the row's updated_at cannot delete it; the
+        // direct update stamped HABIT_A with the current wall clock, so a stale
+        // deletion is rejected and the concurrent rename survives.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitTombstones: [{ id: HABIT_A, deletedAt: LATER }],
+        });
+        const habitASurvivor = await owner.client.from("habits").select("name").eq("id", HABIT_A).single();
+        expect(habitASurvivor.error).toBeNull();
+        expect(habitASurvivor.data!.name).toBe("Newer name");
+
+        // Replaying the same (habit_id, bucket) is a no-op even with a new id.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitCompletionUpserts: [completion(COMPLETION_B, HABIT_A)],
+        });
+        const completions = await owner.client.from("habit_completions").select("id");
+        expect(completions.error).toBeNull();
+        expect(completions.data).toHaveLength(1);
+        expect(completions.data![0].id).toBe(COMPLETION_A);
+
+        // A completion tombstone deletes by (owner_id, id).
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitCompletionTombstones: [{ id: COMPLETION_A, deletedAt: LATER }],
+        });
+        expect((await owner.client.from("habit_completions").select("id")).data).toHaveLength(0);
+
+        // A full wipe clears tasks/logs/settings/timer but preserves habits, and
+        // an independent habit delta (a brand-new habit) still rides the wipe.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            taskUpserts: [{ value: task(TASK_A, "Doomed task"), updatedAt: T0 }],
+            logUpserts: [log(LOG_ID)],
+        });
+        const defaults = defaultAppState();
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            fullWipe: true,
+            settings: { value: { ...defaults.settings }, updatedAt: LATER },
+            timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: LATER, newGeneration: true },
+            habitUpserts: [{ value: habit(HABIT_C, "Added during wipe", LATER), updatedAt: LATER }],
+        });
+
+        const snapshot = await data.pull(owner.userId);
+        expect(snapshot.tasks).toEqual({});
+        expect(snapshot.logs).toEqual({});
+        // Habits survive the wipe and the independent habit delta applied.
+        expect(snapshot.habits[HABIT_A].value.name).toBe("Newer name");
+        expect(snapshot.habits[HABIT_C].value.name).toBe("Added during wipe");
+        expect(Object.keys(snapshot.habits).sort()).toEqual([HABIT_A, HABIT_C].sort());
+        expect(snapshot.habitCompletions).toEqual({});
+    });
+
+    it("re-pushes a different-field habit merge with a strictly-later stamp through the real RPC", async () => {
+        const owner = track(await createLocalUser());
+        const data = remote(owner);
+        const t1 = "2026-01-15T00:00:00.000Z";
+
+        // Seed the base habit row with an old client timestamp, then capture the
+        // exact baseline the two devices would have pulled.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitUpserts: [{ value: habit(HABIT_A, "Base habit"), updatedAt: T0 }],
+        });
+        const baseline = await data.pull(owner.userId);
+        expect(baseline.habits[HABIT_A].value.name).toBe("Base habit");
+        expect(new Date(baseline.habits[HABIT_A].updatedAt).getTime()).toBe(new Date(T0).getTime());
+
+        function makeStore(): LocalStagingStore {
+            const map = new Map<string, string>();
+            const storage: StorageLike = {
+                getItem: (key) => map.get(key) ?? null,
+                setItem: (key, value) => {
+                    map.set(key, value);
+                },
+                removeItem: (key) => {
+                    map.delete(key);
+                },
+            };
+            return new LocalStagingStore(storage);
+        }
+
+        const storeA = makeStore();
+        const storeB = makeStore();
+        async function seedDevice(store: LocalStagingStore, name: string, color: string, stamp: string): Promise<void> {
+            await store.update(owner.userId, (current) => ({
+                ...current,
+                initialized: true,
+                lastSynced: baseline,
+                habits: { [HABIT_A]: { ...habit(HABIT_A, name), color } },
+                habitUpdatedAt: { [HABIT_A]: stamp },
+            }));
+        }
+
+        // Device A edits the name (older stamp); device B edits the color (newer).
+        await seedDevice(storeA, "From A", "#ff0000", t1);
+        await seedDevice(storeB, "Base habit", "#000000", LATER);
+
+        // B syncs first and its newer color-only edit wins the LWW gate.
+        await new SyncCoordinator(owner.userId, storeB, data).sync({ reason: "manual" });
+        const afterB = await data.pull(owner.userId);
+        expect(afterB.habits[HABIT_A].value.color).toBe("#000000");
+
+        // A pulls B's row, merges both edits, and must re-push with a stamp
+        // strictly later than the stored LATER so the server accepts the
+        // combined row (an equal stamp would be a silent no-op and A's name
+        // edit would be lost on the next pull).
+        await new SyncCoordinator(owner.userId, storeA, data).sync({ reason: "manual" });
+        const recordA = storeA.read(owner.userId);
+        expect(recordA.habitUpdatedAt[HABIT_A]).toBeUndefined();
+
+        const final = await data.pull(owner.userId);
+        expect(final.habits[HABIT_A].value.name).toBe("From A");
+        expect(final.habits[HABIT_A].value.color).toBe("#000000");
+        expect(new Date(final.habits[HABIT_A].updatedAt).getTime()).toBeGreaterThan(new Date(LATER).getTime());
+
+        // A second sync observes a converged row and pushes nothing further.
+        await new SyncCoordinator(owner.userId, storeA, data).sync({ reason: "manual" });
+        const again = await data.pull(owner.userId);
+        expect(again.habits[HABIT_A].value.name).toBe("From A");
+        expect(again.habits[HABIT_A].value.color).toBe("#000000");
+    });
+
+    it("removes the old 12-argument apply_staged_sync signature", async () => {
+        const owner = track(await createLocalUser());
+        // The old 12-argument named-argument call must no longer resolve to any
+        // installed overload after the forward-only migration replaced it with
+        // the 16-argument signature.
+        const response = await owner.client.rpc("apply_staged_sync", {
+            p_task_upserts: null,
+            p_task_tombstones: null,
+            p_log_upserts: null,
+            p_log_tombstones: null,
+            p_settings_data: null,
+            p_settings_updated_at: null,
+            p_timer_data: null,
+            p_timer_updated_at: null,
+            p_timer_new_generation: false,
+            p_pm_data: null,
+            p_pm_updated_at: null,
+            p_full_wipe: false,
+        });
+        expect(response.error).not.toBeNull();
     });
 });

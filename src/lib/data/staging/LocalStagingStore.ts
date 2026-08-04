@@ -54,6 +54,11 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         pendingCompletions: [],
         unbootstrapped: false,
         lastSynced: null,
+        habits: {},
+        habitCompletions: {},
+        habitUpdatedAt: {},
+        habitTombstones: {},
+        habitCompletionTombstones: {},
     };
 }
 
@@ -85,21 +90,78 @@ function pmDiffers(record: StagedOwnerRecord, base: SyncSnapshot): boolean {
 }
 
 /**
+ * Habit deltas relative to the baseline. Each current habit that differs from
+ * `base.habits` and carries a new/different `habitUpdatedAt` stamp counts as
+ * one item; each habit tombstone counts only while the baseline still carries
+ * that habit, matching the task/task-tombstone comparison used for the plan.
+ */
+function countHabitDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const habitIds = new Set<string>([...Object.keys(record.habits), ...Object.keys(base.habits)]);
+    for (const id of habitIds) {
+        const current = record.habits[id];
+        if (!current) continue; // local removal is represented by its tombstone below.
+        const baseline = base.habits[id];
+        const localStamp = record.habitUpdatedAt[id];
+        const baselineStamp = baseline?.updatedAt;
+        const valueUnchanged = baseline !== undefined && deepValuesEqual(current, baseline.value);
+        const neverTouchedLocally = baseline !== undefined && localStamp === undefined;
+        const stampUnchanged = baseline !== undefined && localStamp === baselineStamp;
+        if (valueUnchanged && (neverTouchedLocally || stampUnchanged)) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.habitTombstones)) {
+        if (base.habits[id]) count += 1;
+    }
+    return count;
+}
+
+/**
+ * Habit completion deltas relative to the baseline. Each current completion
+ * whose value differs from `base.habitCompletions[id]` counts as one item; each
+ * completion tombstone counts only while the baseline still carries it.
+ */
+function countHabitCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const completionIds = new Set<string>([
+        ...Object.keys(record.habitCompletions),
+        ...Object.keys(base.habitCompletions),
+    ]);
+    for (const id of completionIds) {
+        const current = record.habitCompletions[id];
+        if (!current) continue;
+        const baseline = base.habitCompletions[id] ?? null;
+        if (baseline !== null && deepValuesEqual(current, baseline)) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.habitCompletionTombstones)) {
+        if (base.habitCompletions[id]) count += 1;
+    }
+    return count;
+}
+
+/**
  * Entity-based pending work relative to `lastSynced`. Task upserts, task
- * tombstones, new/changed logs, log tombstones, and each changed
- * settings/timer/PM singleton count as one item. A full wipe counts as one
- * scoped change plus one more only when PM independently differs, instead of
- * counting every removed row. Completion-derived entities are part of those
- * entity counts; journal entries are never counted separately. Before the
- * first successful bootstrap there is no baseline to compare against, so any
- * staged edit (`unbootstrapped`) counts as one unsynced item instead of zero.
+ * tombstones, new/changed logs, log tombstones, habit upserts, habit
+ * tombstones, new/changed habit completions, completion tombstones, and each
+ * changed settings/timer/PM singleton count as one item. A full wipe counts as
+ * one scoped change plus one more for PM when it differs plus every
+ * habit/completion delta, instead of counting every removed row.
+ * Completion-derived entities are part of those entity counts; journal entries
+ * are never counted separately. Before the first successful bootstrap there is
+ * no baseline to compare against, so any staged edit (`unbootstrapped`) counts
+ * as one unsynced item instead of zero.
  */
 function countPending(record: StagedOwnerRecord): number {
     if (!record.initialized || record.lastSynced === null) return record.unbootstrapped ? 1 : 0;
     const base = record.lastSynced;
 
     if (record.fullWipe) {
-        return pmDiffers(record, base) ? 2 : 1;
+        let count = 1;
+        if (pmDiffers(record, base)) count += 1;
+        count += countHabitDeltas(record, base);
+        count += countHabitCompletionDeltas(record, base);
+        return count;
     }
 
     let count = 0;
@@ -156,6 +218,9 @@ function countPending(record: StagedOwnerRecord): number {
         count += 1;
     }
     if (pmDiffers(record, base)) count += 1;
+
+    count += countHabitDeltas(record, base);
+    count += countHabitCompletionDeltas(record, base);
 
     return count;
 }

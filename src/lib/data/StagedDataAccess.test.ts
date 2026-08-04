@@ -6,7 +6,7 @@ import { StagedDataAccess } from "./StagedDataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
 import { timerGenerationKey } from "./sync/timerCompletions";
-import type { ActiveTimer } from "../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion } from "../../state/types";
 
 const OWNER_A = "owner-a";
 const OWNER_B = "owner-b";
@@ -21,6 +21,32 @@ const TASK_T1 = {
     break_skips: 0,
     archived: false,
 };
+
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
 
 function throwingStorage(): StorageLike {
     return {
@@ -62,6 +88,8 @@ function makeBaseline(timer: ActiveTimer | null, overrides: Partial<SyncSnapshot
     return {
         tasks: { t1: { value: { ...TASK_T1 }, updatedAt: "2026-01-01T00:00:00.000Z" } },
         logs: {},
+        habits: {},
+        habitCompletions: {},
         settings: { value: { ...defaultSettings }, updatedAt: "2026-01-01T00:00:00.000Z" },
         timerState: {
             value: { active_task: "t1", current_cycle_pomodoros: 0, timer },
@@ -299,7 +327,7 @@ describe("StagedDataAccess", () => {
         expect(record.logTombstones["log-1"]).toEqual({ id: "log-1", deletedAt: "2026-01-02T00:00:00.000Z" });
     });
 
-    it("reset stages a full wipe, clears task/log staging, and preserves PM", async () => {
+    it("reset stages a full wipe, clears task/log staging, and preserves PM and habits", async () => {
         const { executor } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);
         const data = new StagedDataAccess(OWNER_A, store, executor, {
@@ -307,6 +335,7 @@ describe("StagedDataAccess", () => {
             createTaskId: () => "task-1",
         });
         await data.savePMState({ projects: {}, tasks: {}, meta: { initializedAt: "pm-time" } });
+        await data.saveHabits([H("h1", { name: "Survivor habit" })], [HC("c1", "h1", { bucket: "2026-01-02" })]);
         await data.createTask("Doomed", 1);
 
         const result = await data.resetAppState();
@@ -326,6 +355,82 @@ describe("StagedDataAccess", () => {
         // PM state and its timestamp survive the wipe untouched.
         expect(await data.loadPMState()).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "pm-time" } });
         expect(record.pmUpdatedAt).toBe("2026-01-03T00:00:00.000Z");
+
+        // Habits and completions are outside the wipe scope and survive too.
+        expect(record.habits.h1.name).toBe("Survivor habit");
+        expect(record.habitCompletions.c1.bucket).toBe("2026-01-02");
+        expect(await data.loadHabits()).toEqual({
+            habits: [H("h1", { name: "Survivor habit" })],
+            completions: [HC("c1", "h1", { bucket: "2026-01-02" })],
+        });
+    });
+
+    it("stages habit and completion saves with stamps, tombstones, and zero network calls", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        // Baseline already carries h1/c1 so unchanged rows never re-stamp.
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            initialized: true,
+            lastSynced: makeBaseline(null, {
+                habits: { h1: { value: H("h1", { name: "Original" }), updatedAt: "2026-01-01T00:00:00.000Z" } },
+                habitCompletions: { c1: HC("c1", "h1") },
+            }),
+            habits: { h1: H("h1", { name: "Original" }) },
+            habitCompletions: { c1: HC("c1", "h1") },
+        }));
+
+        await data.saveHabits(
+            [
+                H("h1", { name: "Changed" }), // changed -> fresh stamp
+                H("h2", { name: "New" }),     // new -> stamp
+            ],
+            [
+                HC("c1", "h1"),                          // unchanged -> kept, no tombstone
+                HC("c2", "h1", { bucket: "2026-01-03" }), // new
+            ],
+        );
+
+        const record = store.read(OWNER_A);
+        expect(sync).not.toHaveBeenCalled();
+        expect(record.habits.h1.name).toBe("Changed");
+        expect(record.habits.h2.name).toBe("New");
+        expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.habitUpdatedAt.h2).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.habitCompletions.c2.bucket).toBe("2026-01-03");
+        expect(record.habitTombstones).toEqual({});
+        expect(record.habitCompletionTombstones).toEqual({});
+
+        // Removals stage id-keyed tombstones and clear stamps.
+        await data.saveHabits([], []);
+        const removed = store.read(OWNER_A);
+        expect(removed.habits).toEqual({});
+        expect(removed.habitCompletions).toEqual({});
+        expect(removed.habitUpdatedAt).toEqual({});
+        expect(removed.habitTombstones.h1).toEqual({ id: "h1", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(removed.habitTombstones.h2).toEqual({ id: "h2", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(removed.habitCompletionTombstones.c1).toEqual({ id: "c1", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(removed.habitCompletionTombstones.c2).toEqual({ id: "c2", deletedAt: "2026-01-02T00:00:00.000Z" });
+
+        // Reintroducing an id clears its tombstone and re-stamps it.
+        await data.saveHabits([H("h1", { name: "Back" })], [HC("c1", "h1")]);
+        const back = store.read(OWNER_A);
+        expect(back.habits.h1.name).toBe("Back");
+        expect(back.habitTombstones.h1).toBeUndefined();
+        expect(back.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
+        expect(back.habitCompletions.c1).toBeDefined();
+        expect(back.habitCompletionTombstones.c1).toBeUndefined();
+
+        // loadHabits returns fresh clones so callers cannot mutate the store.
+        const loaded = await data.loadHabits();
+        expect(loaded.habits.map((habit) => habit.id)).toEqual(["h1"]);
+        expect(loaded.completions.map((completion) => completion.id)).toEqual(["c1"]);
+        loaded.habits[0].name = "mutated";
+        expect((await data.loadHabits()).habits[0].name).toBe("Back");
     });
 
     it("isolates owners sharing one store and reads local writes immediately", async () => {

@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ActiveTimer, PomodoroLogEntry, Task } from "../../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
 import { LocalStagingStore, stagingKey, type StorageLike } from "../staging/LocalStagingStore";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "../staging/types";
 import { DataAccessAuthError } from "../DataAccess";
 import type { PushPlan, SyncRemote } from "./types";
 import { timerGenerationKey } from "./timerCompletions";
+import { timestampMs } from "./merge";
 import { SyncCoordinator } from "./SyncCoordinator";
 
 const OWNER = "owner-a";
@@ -45,6 +46,32 @@ function LOG(id: string, overrides: Partial<PomodoroLogEntry> = {}): PomodoroLog
     };
 }
 
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: T0,
+        updatedAt: T0,
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: T0,
+        updatedAt: T0,
+        ...overrides,
+    };
+}
+
 function TIMER(overrides: Partial<ActiveTimer> = {}): ActiveTimer {
     return {
         task_id: "t1",
@@ -67,6 +94,8 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
     return {
         tasks: {},
         logs: {},
+        habits: {},
+        habitCompletions: {},
         settings: { value: { ...defaultAppState().settings }, updatedAt: T0 },
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T0, completed: false },
         pmState: { value: null, updatedAt: null },
@@ -102,6 +131,29 @@ function applyPlanToServer(server: SyncSnapshot, plan: PushPlan): void {
     for (const id of Object.keys(ack.logTombstones)) {
         delete server.logs[id];
     }
+    for (const [id, value] of Object.entries(ack.habitUpserts)) {
+        // Mirror the RPC's strict `excluded.updated_at > habits.updated_at`
+        // LWW gate so the fake can model a rejected stale/equal-stamp upsert.
+        const existing = server.habits[id];
+        if (!existing || timestampMs(value.updatedAt) > timestampMs(existing.updatedAt)) {
+            server.habits[id] = { value: clone(value.value), updatedAt: value.updatedAt };
+        }
+    }
+    for (const id of Object.keys(ack.habitTombstones)) {
+        delete server.habits[id];
+    }
+    for (const [id, completion] of Object.entries(ack.habitCompletionUpserts)) {
+        // Mirror the RPC's `on conflict (habit_id, bucket) do nothing`: a
+        // second id for an already-occupied bucket is replayed as a no-op.
+        const key = `${completion.habitId}\u0000${completion.bucket}`;
+        const occupied = Object.values(server.habitCompletions).some(
+            (existing) => `${existing.habitId}\u0000${existing.bucket}` === key,
+        );
+        if (!occupied) server.habitCompletions[id] = clone(completion);
+    }
+    for (const id of Object.keys(ack.habitCompletionTombstones)) {
+        delete server.habitCompletions[id];
+    }
     if (ack.settings) server.settings = clone(ack.settings);
     if (ack.timerState) {
         server.timerState = {
@@ -114,6 +166,8 @@ function applyPlanToServer(server: SyncSnapshot, plan: PushPlan): void {
     if (ack.fullWipe) {
         server.tasks = {};
         server.logs = {};
+        // Habits and habit completions survive a full wipe on the real server,
+        // so the fake models the same behavior and never clears them here.
         if (plan.settings) server.settings = clone(plan.settings);
         if (plan.timerState) {
             server.timerState = {
@@ -446,12 +500,14 @@ describe("SyncCoordinator", () => {
         expect(record.state.tasks.t1.completed_pomodoros).toBe(0);
     });
 
-    it("pushes a full wipe in one atomic plan and preserves PM", async () => {
+    it("pushes a full wipe in one atomic plan and preserves PM, habits, and completions", async () => {
         const pm = { projects: {}, tasks: {}, meta: { initializedAt: T1 } };
         const { remote, server } = makeRemote(
             snapshot({
                 tasks: { t1: { value: T("t1"), updatedAt: T1 } },
                 logs: { "log-0": LOG("log-0") },
+                habits: { h1: { value: H("h1", { name: "Survivor" }), updatedAt: T1 } },
+                habitCompletions: { c1: HC("c1", "h1") },
             }),
         );
         const store = new LocalStagingStore(makeStorage());
@@ -479,10 +535,197 @@ describe("SyncCoordinator", () => {
         expect(record.pmState).toEqual(pm);
         expect(record.state).toEqual(defaultAppState());
         expect(result.pmState).toEqual(pm);
-        // The fake server dropped the seeded rows and kept PM.
+        // The fake server dropped the seeded tasks/logs and kept PM.
         expect(server.tasks).toEqual({});
         expect(server.logs).toEqual({});
         expect(server.pmState.value).toEqual(pm);
+        // Habits and completions survive the wipe and are never cleared.
+        expect(server.habits.h1).toEqual({ value: H("h1", { name: "Survivor" }), updatedAt: T1 });
+        expect(server.habitCompletions.c1).toEqual(HC("c1", "h1"));
+        expect(record.lastSynced?.habits.h1.value.name).toBe("Survivor");
+        expect(record.lastSynced?.habitCompletions.c1.id).toBe("c1");
+    });
+
+    it("syncs a staged habit to zero pending work and advances the baseline", async () => {
+        const { remote } = makeRemote(snapshot());
+        const store = new LocalStagingStore(makeStorage());
+        await store.update(OWNER, (current) => ({
+            ...current,
+            habits: { h1: H("h1", { name: "New habit" }) },
+            habitUpdatedAt: { h1: T1 },
+        }));
+
+        const coordinator = new SyncCoordinator(OWNER, store, remote, { now: () => NOW });
+        const result = await coordinator.sync({ reason: "manual" });
+
+        expect(remote.push).toHaveBeenCalledTimes(1);
+        const plan = remote.push.mock.calls[0][1];
+        expect(plan.habitUpserts).toEqual([{ value: H("h1", { name: "New habit" }), updatedAt: T1 }]);
+        expect(plan.habitCompletionUpserts).toEqual([]);
+        expect(plan.taskUpserts).toEqual([]);
+
+        const record = store.read(OWNER);
+        expect(record.initialized).toBe(true);
+        expect(record.lastSynced?.habits.h1).toEqual({ value: H("h1", { name: "New habit" }), updatedAt: T1 });
+        expect(record.habitUpdatedAt.h1).toBeUndefined();
+        expect(result.pendingCount).toBe(0);
+        expect(store.pendingCount(OWNER)).toBe(0);
+    });
+
+    it("resolves two-device habit edits deterministically by LWW", async () => {
+        const baseline = snapshot({ habits: { h1: { value: H("h1", { name: "Base" }), updatedAt: T0 } } });
+        const { remote, server } = makeRemote(baseline);
+        const storeA = new LocalStagingStore(makeStorage());
+        const storeB = new LocalStagingStore(makeStorage());
+        const storeC = new LocalStagingStore(makeStorage());
+
+        async function seedDevice(store: LocalStagingStore, name: string): Promise<void> {
+            await store.update(OWNER, (current) => ({
+                ...current,
+                initialized: true,
+                lastSynced: clone(baseline),
+                habits: { h1: H("h1", { name }) },
+            }));
+        }
+        await seedDevice(storeA, "Base");
+        await seedDevice(storeB, "Base");
+        await seedDevice(storeC, "Base");
+
+        // Device A edits first (older stamp), then device B edits (newer stamp).
+        await storeA.update(OWNER, (current) => ({
+            ...current,
+            habits: { h1: H("h1", { name: "From A" }) },
+            habitUpdatedAt: { h1: T1 },
+        }));
+        await storeB.update(OWNER, (current) => ({
+            ...current,
+            habits: { h1: H("h1", { name: "From B" }) },
+            habitUpdatedAt: { h1: T2 },
+        }));
+
+        const coordinatorA = new SyncCoordinator(OWNER, storeA, remote, { now: () => NOW });
+        const coordinatorB = new SyncCoordinator(OWNER, storeB, remote, { now: () => NOW });
+
+        // B syncs first, pushing the newer row to the shared server.
+        await coordinatorB.sync({ reason: "manual" });
+        expect(server.habits.h1.value.name).toBe("From B");
+
+        // A then pulls B's newer row and adopts it without pushing a stale delta.
+        await coordinatorA.sync({ reason: "manual" });
+        const recordA = storeA.read(OWNER);
+        expect(recordA.habits.h1.name).toBe("From B");
+        expect(recordA.habitUpdatedAt.h1).toBeUndefined();
+        expect(storeA.pendingCount(OWNER)).toBe(0);
+        expect(server.habits.h1.value.name).toBe("From B");
+
+        // A third device editing at an exact timestamp tie converges on the
+        // remote row (remote wins ties) with nothing left to push.
+        await storeC.update(OWNER, (current) => ({
+            ...current,
+            habits: { h1: H("h1", { name: "From C" }) },
+            habitUpdatedAt: { h1: T2 }, // exact tie with the server row
+        }));
+        const coordinatorC = new SyncCoordinator(OWNER, storeC, remote, { now: () => NOW });
+        await coordinatorC.sync({ reason: "manual" });
+        const recordC = storeC.read(OWNER);
+        expect(recordC.habits.h1.name).toBe("From B");
+        expect(recordC.habitUpdatedAt.h1).toBeUndefined();
+        expect(storeC.pendingCount(OWNER)).toBe(0);
+    });
+
+    it("re-pushes a different-field habit merge with a strictly-later stamp so both edits survive", async () => {
+        const baseline = snapshot({
+            habits: { h1: { value: H("h1", { name: "Base", color: "#ffffff" }), updatedAt: T0 } },
+        });
+        const { remote, server } = makeRemote(baseline);
+        const storeA = new LocalStagingStore(makeStorage());
+        const storeB = new LocalStagingStore(makeStorage());
+
+        async function seedDevice(store: LocalStagingStore, habit: Habit, stamp: string): Promise<void> {
+            await store.update(OWNER, (current) => ({
+                ...current,
+                initialized: true,
+                lastSynced: clone(baseline),
+                habits: { h1: habit },
+                habitUpdatedAt: { h1: stamp },
+            }));
+        }
+        // Device A edits the name (older stamp); device B edits the color (newer).
+        await seedDevice(storeA, H("h1", { name: "From A", color: "#ffffff" }), T1);
+        await seedDevice(storeB, H("h1", { name: "Base", color: "#000000" }), T2);
+
+        // B syncs first, pushing the newer color-only edit to the shared server.
+        const coordinatorB = new SyncCoordinator(OWNER, storeB, remote, { now: () => NOW });
+        await coordinatorB.sync({ reason: "manual" });
+        expect(server.habits.h1.value.color).toBe("#000000");
+
+        // A merges both field edits and must re-push with a stamp strictly
+        // later than B's so the server LWW gate accepts the combined row;
+        // otherwise the equal-stamp upsert is a silent no-op and A's name edit
+        // is lost on the next pull.
+        const coordinatorA = new SyncCoordinator(OWNER, storeA, remote, { now: () => NOW });
+        await coordinatorA.sync({ reason: "manual" });
+        expect(server.habits.h1.value.name).toBe("From A");
+        expect(server.habits.h1.value.color).toBe("#000000");
+        expect(timestampMs(server.habits.h1.updatedAt)).toBeGreaterThan(timestampMs(T2));
+
+        const recordA = storeA.read(OWNER);
+        expect(recordA.habitUpdatedAt.h1).toBeUndefined();
+        expect(storeA.pendingCount(OWNER)).toBe(0);
+
+        // A second pull observes the converged row with nothing left to push.
+        const pushes = remote.push.mock.calls.length;
+        await coordinatorA.sync({ reason: "manual" });
+        expect(remote.push.mock.calls.length).toBe(pushes);
+        expect(storeA.pendingCount(OWNER)).toBe(0);
+    });
+
+    it("converges a same-bucket completion conflict to one canonical server completion", async () => {
+        const baseline = snapshot({ habits: { h1: { value: H("h1"), updatedAt: T0 } } });
+        const { remote, server } = makeRemote(baseline);
+        const storeA = new LocalStagingStore(makeStorage());
+        const storeB = new LocalStagingStore(makeStorage());
+
+        // Device A checks the bucket first and its completion reaches the server.
+        await storeA.update(OWNER, (current) => ({
+            ...current,
+            initialized: true,
+            lastSynced: clone(baseline),
+            habits: { h1: H("h1") },
+            habitCompletions: { cA: HC("cA", "h1") },
+        }));
+        const coordinatorA = new SyncCoordinator(OWNER, storeA, remote, { now: () => NOW });
+        await coordinatorA.sync({ reason: "manual" });
+        expect(server.habitCompletions.cA).toEqual(HC("cA", "h1"));
+
+        // Device B independently checked the same bucket with a different id.
+        // Its local id can never be inserted (the (habit_id, bucket) key is
+        // occupied), so the merge must drop it and adopt the pulled server row.
+        await storeB.update(OWNER, (current) => ({
+            ...current,
+            initialized: true,
+            lastSynced: clone(baseline),
+            habits: { h1: H("h1") },
+            habitCompletions: { cB: HC("cB", "h1") },
+        }));
+        const coordinatorB = new SyncCoordinator(OWNER, storeB, remote, { now: () => NOW });
+        await coordinatorB.sync({ reason: "manual" });
+
+        const recordB = storeB.read(OWNER);
+        expect(recordB.habitCompletions.cA).toEqual(HC("cA", "h1"));
+        expect(recordB.habitCompletions.cB).toBeUndefined();
+        expect(storeB.pendingCount(OWNER)).toBe(0);
+
+        // B pushed nothing and the server keeps exactly one canonical completion.
+        expect(remote.push).toHaveBeenCalledTimes(1);
+        expect(Object.keys(server.habitCompletions)).toEqual(["cA"]);
+        expect(server.habitCompletions.cA).toEqual(HC("cA", "h1"));
+
+        // A second B sync leaves zero pending work with no retried ghost upsert.
+        const pushes = remote.push.mock.calls.length;
+        await coordinatorB.sync({ reason: "manual" });
+        expect(remote.push.mock.calls.length).toBe(pushes);
+        expect(storeB.pendingCount(OWNER)).toBe(0);
     });
 
     it("refreshes the session once and retries the whole attempt from persisted staging", async () => {

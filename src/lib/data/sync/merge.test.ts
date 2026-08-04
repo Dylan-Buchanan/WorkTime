@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ActiveTimer, PomodoroLogEntry, Task } from "../../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
+import { LocalStagingStore } from "../staging/LocalStagingStore";
 import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice } from "../staging/types";
 import { buildPushPlan, commitAcknowledgedPush, isLiveTimer, mergePulledSnapshot, MergeError } from "./merge";
 
@@ -8,6 +9,7 @@ const NOW = new Date("2026-01-10T00:00:00.000Z");
 const T1 = "2026-01-01T00:00:00.000Z";
 const T2 = "2026-01-02T00:00:00.000Z";
 const T3 = "2026-01-03T00:00:00.000Z";
+const T3_LATER = "2026-01-03T00:00:00.001Z";
 
 function T(id: string, overrides: Partial<Task> = {}): Task {
     return {
@@ -35,6 +37,40 @@ function LOG(id: string, overrides: Partial<PomodoroLogEntry> = {}): PomodoroLog
     };
 }
 
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+/**
+ * A pulled habit snapshot row: the domain `updatedAt` mirrors the transport
+ * `updated_at` value exactly, as `SupabaseDataAccess.validateHabit` produces.
+ */
+function HROW(habit: Habit, updatedAt: string): NonNullable<SyncSnapshot["habits"][string]> {
+    return { value: { ...habit, updatedAt }, updatedAt };
+}
+
 function timerSlice(timer: ActiveTimer | null): TimerStateSlice {
     return { active_task: "t1", current_cycle_pomodoros: 0, timer };
 }
@@ -43,6 +79,8 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
     return {
         tasks: {},
         logs: {},
+        habits: {},
+        habitCompletions: {},
         settings: { value: { ...defaultAppState().settings }, updatedAt: T1 },
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T1, completed: false },
         pmState: { value: null, updatedAt: null },
@@ -54,7 +92,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -78,13 +116,20 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         pendingCompletions: [],
         unbootstrapped: false,
         lastSynced: baseline,
+        habits: Object.fromEntries(Object.entries(baseline.habits).map(([id, row]) => [id, { ...row.value }])),
+        habitCompletions: Object.fromEntries(
+            Object.entries(baseline.habitCompletions).map(([id, completion]) => [id, { ...completion }]),
+        ),
+        habitUpdatedAt: {},
+        habitTombstones: {},
+        habitCompletionTombstones: {},
         ...overrides,
     };
 }
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
@@ -101,6 +146,11 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         pendingCompletions: [],
         unbootstrapped: false,
         lastSynced: null,
+        habits: {},
+        habitCompletions: {},
+        habitUpdatedAt: {},
+        habitTombstones: {},
+        habitCompletionTombstones: {},
         ...overrides,
     };
 }
@@ -351,6 +401,231 @@ describe("mergePulledSnapshot task matrix", () => {
 
         const merged = mergePulledSnapshot(record, remote, NOW);
         expect(merged.record.state.tasks.t1.created_at).toBe("2026-01-03T00:00:00.000Z");
+    });
+});
+
+describe("mergePulledSnapshot habit matrix", () => {
+    const base = snapshot({
+        habits: { h1: HROW(H("h1", { name: "Base" }), T1) },
+    });
+
+    it("preserves different-field changes from both branches", () => {
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Local" }) },
+            habitUpdatedAt: { h1: T2 },
+        });
+        const remote = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Base", color: "#000000" }), T3) },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.habits.h1.name).toBe("Local");
+        expect(merged.record.habits.h1.color).toBe("#000000");
+        // The synthesized row differs from the pulled remote row, so its
+        // transport stamp must be strictly later than the remote T3 for the
+        // RPC LWW gate to accept the re-push; the domain updatedAt mirrors it.
+        expect(merged.record.habits.h1.updatedAt).toBe(T3_LATER);
+        expect(merged.record.habitUpdatedAt.h1).toBe(T3_LATER);
+        expect(merged.pendingCount).toBe(1);
+
+        const plan = buildPushPlan(merged.record);
+        expect(plan.habitUpserts).toEqual([
+            { value: H("h1", { name: "Local", color: "#000000", updatedAt: T3_LATER }), updatedAt: T3_LATER },
+        ]);
+        expect(plan.acknowledged.habitUpserts.h1).toEqual({
+            value: H("h1", { name: "Local", color: "#000000", updatedAt: T3_LATER }),
+            updatedAt: T3_LATER,
+        });
+    });
+
+    it("lets the later updated_at win a same-field conflict and the remote wins an exact tie", () => {
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Local" }) },
+            habitUpdatedAt: { h1: T2 },
+        });
+        const remote = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Remote" }), T3) },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.habits.h1.name).toBe("Remote");
+        expect(merged.pendingCount).toBe(0);
+
+        // A local stamp newer than the remote keeps local and stays pending.
+        const localNewer = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Local" }) },
+            habitUpdatedAt: { h1: T3 },
+        });
+        const remoteOlder = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Remote" }), T2) },
+        });
+        const merged2 = mergePulledSnapshot(localNewer, remoteOlder, NOW);
+        expect(merged2.record.habits.h1.name).toBe("Local");
+        expect(merged2.record.habitUpdatedAt.h1).toBe(T3);
+        expect(merged2.pendingCount).toBe(1);
+        expect(buildPushPlan(merged2.record).habitUpserts).toEqual([
+            { value: H("h1", { name: "Local", updatedAt: T3 }), updatedAt: T3 },
+        ]);
+
+        // An exact timestamp tie chooses the remote value.
+        const tied = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Remote" }), T2) },
+        });
+        const merged3 = mergePulledSnapshot(record, tied, NOW);
+        expect(merged3.record.habits.h1.name).toBe("Remote");
+        expect(merged3.record.habitUpdatedAt.h1).toBeUndefined();
+        expect(merged3.pendingCount).toBe(0);
+    });
+
+    it("keeps a locally created habit and adopts a remote-only habit", () => {
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Base" }), h2: H("h2", { name: "Local" }) },
+            habitUpdatedAt: { h2: T2 },
+        });
+        const remote = snapshot({
+            habits: {
+                h1: HROW(H("h1", { name: "Base" }), T1),
+                h3: HROW(H("h3", { name: "Remote" }), T3),
+            },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.habits.h2.name).toBe("Local");
+        expect(merged.record.habits.h3.name).toBe("Remote");
+        expect(merged.record.habitUpdatedAt.h2).toBe(T2);
+        expect(merged.pendingCount).toBe(1);
+        expect(buildPushPlan(merged.record).habitUpserts).toEqual([
+            { value: H("h2", { name: "Local" }), updatedAt: T2 },
+        ]);
+    });
+
+    it("treats remote absence of a baseline habit as a remote deletion", () => {
+        const record = recordFromBaseline(base);
+        const merged = mergePulledSnapshot(record, snapshot(), NOW);
+        expect(merged.record.habits.h1).toBeUndefined();
+        expect(merged.record.habitTombstones.h1).toBeUndefined();
+        expect(merged.pendingCount).toBe(0);
+    });
+
+    it("keeps a newer local habit tombstone pending and revives on a newer remote row", () => {
+        const record = recordFromBaseline(base, {
+            habits: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: T2 } },
+        });
+
+        const merged = mergePulledSnapshot(record, base, NOW);
+        expect(merged.record.habits.h1).toBeUndefined();
+        expect(merged.record.habitTombstones.h1).toEqual({ id: "h1", deletedAt: T2 });
+        expect(merged.pendingCount).toBe(1);
+        expect(buildPushPlan(merged.record).habitTombstones).toEqual([{ id: "h1", deletedAt: T2 }]);
+
+        const revived = mergePulledSnapshot(
+            record,
+            snapshot({ habits: { h1: HROW(H("h1", { name: "Revived" }), T3) } }),
+            NOW,
+        );
+        expect(revived.record.habits.h1.name).toBe("Revived");
+        expect(revived.record.habitTombstones.h1).toBeUndefined();
+        expect(revived.record.habitUpdatedAt.h1).toBeUndefined();
+        expect(revived.pendingCount).toBe(0);
+    });
+
+    it("preserves a local habit edit when the remote deletes the baseline habit", () => {
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Local" }) },
+            habitUpdatedAt: { h1: T2 },
+        });
+        const merged = mergePulledSnapshot(record, snapshot(), NOW);
+        expect(merged.record.habits.h1.name).toBe("Local");
+        expect(merged.record.habitUpdatedAt.h1).toBe(T2);
+        expect(merged.pendingCount).toBe(1);
+        expect(buildPushPlan(merged.record).habitUpserts).toEqual([
+            { value: H("h1", { name: "Local" }), updatedAt: T2 },
+        ]);
+    });
+
+    it("fails safely on an invalid habit timestamp instead of ordering NaN", () => {
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Local" }) },
+            habitUpdatedAt: { h1: "not-a-date" },
+        });
+        expect(() => mergePulledSnapshot(record, base, NOW)).toThrow(MergeError);
+    });
+
+    it("throws for a changed unstamped habit when building the push plan", () => {
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Changed but unstamped" }) },
+        });
+        expect(() => buildPushPlan(record)).toThrow(/no updated_at stamp/);
+    });
+});
+
+describe("habit completion union", () => {
+    it("unions local and remote completions, dedups by id, and lets the remote win same-id rows", () => {
+        const base = snapshot({ habitCompletions: { c0: HC("c0", "h1") } });
+        const record = recordFromBaseline(base, {
+            habitCompletions: {
+                c0: HC("c0", "h1"),
+                c1: HC("c1", "h1", { bucket: "2026-01-02" }),
+            },
+        });
+        const remote = snapshot({
+            habitCompletions: {
+                c0: HC("c0", "h1", { updatedAt: T3 }),
+                c2: HC("c2", "h1", { bucket: "2026-01-03" }),
+            },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(Object.keys(merged.record.habitCompletions).sort()).toEqual(["c0", "c1", "c2"]);
+        expect(merged.record.habitCompletions.c0.updatedAt).toBe(T3); // remote same-id wins
+        expect(merged.pendingCount).toBe(1); // only the locally-new c1 stays pending
+
+        const plan = buildPushPlan(merged.record);
+        expect(plan.habitCompletionUpserts).toEqual([HC("c1", "h1", { bucket: "2026-01-02" })]);
+        expect(plan.acknowledged.habitCompletionUpserts.c1).toEqual(HC("c1", "h1", { bucket: "2026-01-02" }));
+    });
+
+    it("prefers the pulled server completion when a local id occupies the same bucket", () => {
+        const base = snapshot({ habitCompletions: { cA: HC("cA", "h1") } });
+        const record = recordFromBaseline(base, {
+            habitCompletions: { cB: HC("cB", "h1") },
+        });
+        const remote = snapshot({ habitCompletions: { cA: HC("cA", "h1") } });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(Object.keys(merged.record.habitCompletions)).toEqual(["cA"]);
+        expect(merged.record.habitCompletions.cA.id).toBe("cA");
+        expect(merged.record.habitCompletions.cB).toBeUndefined();
+        expect(merged.pendingCount).toBe(0);
+        expect(buildPushPlan(merged.record).habitCompletionUpserts).toEqual([]);
+    });
+
+    it("keeps a completion tombstone pending while the pulled remote still carries the id", () => {
+        const base = snapshot({ habitCompletions: { c1: HC("c1", "h1") } });
+        const record = recordFromBaseline(base, {
+            habitCompletions: {},
+            habitCompletionTombstones: { c1: { id: "c1", deletedAt: T2 } },
+        });
+
+        const merged = mergePulledSnapshot(record, base, NOW);
+        expect(merged.record.habitCompletions.c1).toBeUndefined();
+        expect(merged.record.habitCompletionTombstones.c1).toEqual({ id: "c1", deletedAt: T2 });
+        expect(merged.pendingCount).toBe(1);
+        expect(buildPushPlan(merged.record).habitCompletionTombstones).toEqual([{ id: "c1", deletedAt: T2 }]);
+    });
+
+    it("drops a completion tombstone once the remote no longer carries the id", () => {
+        const base = snapshot({ habitCompletions: { c1: HC("c1", "h1") } });
+        const record = recordFromBaseline(base, {
+            habitCompletions: {},
+            habitCompletionTombstones: { c1: { id: "c1", deletedAt: T2 } },
+        });
+
+        const merged = mergePulledSnapshot(record, snapshot(), NOW);
+        expect(merged.record.habitCompletionTombstones.c1).toBeUndefined();
+        expect(merged.pendingCount).toBe(0);
+        expect(buildPushPlan(merged.record).habitCompletionTombstones).toEqual([]);
     });
 });
 
@@ -624,6 +899,73 @@ describe("full wipe", () => {
         expect(merged.pendingCount).toBe(1);
         expect(buildPushPlan(merged.record).pmState).toBeNull();
     });
+
+    it("rides habit and completion deltas on a full wipe and never resets them", () => {
+        const base = snapshot({
+            habits: { h1: { value: H("h1", { name: "Survivor" }), updatedAt: T1 } },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        const record = recordFromBaseline(base, {
+            fullWipe: { createdAt: W },
+            state: defaultAppState(),
+            taskUpdatedAt: {},
+            settingsUpdatedAt: null,
+            timerUpdatedAt: null,
+            taskTombstones: {},
+            logTombstones: {},
+            habits: { h1: H("h1", { name: "Renamed" }), h2: H("h2", { name: "New" }) },
+            habitUpdatedAt: { h1: T2, h2: T2 },
+            habitCompletions: { c1: HC("c1", "h1"), c2: HC("c2", "h1", { bucket: "2026-01-02" }) },
+        });
+        const remote = base;
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.state).toEqual(defaultAppState());
+        expect(merged.record.fullWipe).toEqual({ createdAt: W });
+        // Habits and completions are outside the wipe scope: they merge against
+        // the pull and their deltas still ride the wipe plan.
+        expect(merged.record.habits.h1.name).toBe("Renamed");
+        expect(merged.record.habits.h2.name).toBe("New");
+        expect(merged.record.habitCompletions.c2.bucket).toBe("2026-01-02");
+        // wipe (1) + h1 rename + h2 creation (2) + new completion c2 (1).
+        expect(merged.pendingCount).toBe(4);
+
+        const plan = buildPushPlan(merged.record);
+        expect(plan.fullWipe).toBe(true);
+        expect(plan.habitUpserts).toEqual([
+            { value: H("h1", { name: "Renamed", updatedAt: T2 }), updatedAt: T2 },
+            { value: H("h2", { name: "New" }), updatedAt: T2 },
+        ]);
+        expect(plan.habitCompletionUpserts).toEqual([HC("c2", "h1", { bucket: "2026-01-02" })]);
+        expect(plan.acknowledged.habitUpserts.h1).toEqual({
+            value: H("h1", { name: "Renamed", updatedAt: T2 }),
+            updatedAt: T2,
+        });
+
+        // The pushed wipe baseline keeps habits/completions and clears only
+        // tasks/logs plus the default singleton rows.
+        const pushed = snapshot({
+            tasks: {},
+            logs: {},
+            settings: { value: defaultAppState().settings, updatedAt: W },
+            timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: W, completed: false },
+            habits: {
+                h1: { value: H("h1", { name: "Renamed", updatedAt: T2 }), updatedAt: T2 },
+                h2: { value: H("h2", { name: "New" }), updatedAt: T2 },
+            },
+            habitCompletions: {
+                c1: HC("c1", "h1"),
+                c2: HC("c2", "h1", { bucket: "2026-01-02" }),
+            },
+        });
+        const committed = commitAcknowledgedPush(merged.record, plan, pushed);
+        expect(committed.fullWipe).toBeNull();
+        expect(committed.habitUpdatedAt.h1).toBeUndefined();
+        expect(committed.habitUpdatedAt.h2).toBeUndefined();
+        expect(committed.habits.h1.name).toBe("Renamed");
+        expect(committed.lastSynced?.habits.h1.value.name).toBe("Renamed");
+        expect(committed.lastSynced?.habitCompletions.c2.id).toBe("c2");
+    });
 });
 
 describe("live-timer protection", () => {
@@ -833,6 +1175,54 @@ describe("buildPushPlan and commit", () => {
         expect(committed.taskTombstones.t1).toEqual({ id: "t1", deletedAt: T3 });
     });
 
+    it("leaves a habit edit made after the plan was built pending against the new baseline", () => {
+        const base = snapshot({
+            habits: { h1: { value: H("h1", { name: "Base" }), updatedAt: T1 } },
+        });
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Local" }) },
+            habitUpdatedAt: { h1: T2 },
+        });
+        const plan = buildPushPlan(record);
+        expect(plan.habitUpserts).toEqual([{ value: H("h1", { name: "Local" }), updatedAt: T2 }]);
+
+        // A concurrent edit that lands after the plan was built must not be
+        // cleared even though the old value was acknowledged.
+        const edited: StagedOwnerRecord = {
+            ...record,
+            revision: record.revision + 1,
+            habits: { h1: H("h1", { name: "EditedAfterPlan" }) },
+        };
+        const pushed = { ...base, habits: { h1: { value: H("h1", { name: "Local" }), updatedAt: T2 } } };
+        const committed = commitAcknowledgedPush(edited, plan, pushed);
+        expect(committed.habitUpdatedAt.h1).toBe(T2);
+        expect(committed.habits.h1.name).toBe("EditedAfterPlan");
+        expect(committed.lastSynced?.habits.h1).toEqual({ value: H("h1", { name: "Local" }), updatedAt: T2 });
+
+        // The exact acknowledged value/stamp clears on the unedited record.
+        const clean = commitAcknowledgedPush(record, plan, pushed);
+        expect(clean.habitUpdatedAt.h1).toBeUndefined();
+    });
+
+    it("does not clear a habit tombstone that changed after the plan was built", () => {
+        const base = snapshot({
+            habits: { h1: { value: H("h1"), updatedAt: T1 } },
+        });
+        const record = recordFromBaseline(base, {
+            habits: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: T2 } },
+        });
+        const plan = buildPushPlan(record);
+
+        const changed: StagedOwnerRecord = {
+            ...record,
+            habitTombstones: { h1: { id: "h1", deletedAt: T3 } },
+        };
+        const pushed = { ...base, habits: {} };
+        const committed = commitAcknowledgedPush(changed, plan, pushed);
+        expect(committed.habitTombstones.h1).toEqual({ id: "h1", deletedAt: T3 });
+    });
+
     it("builds a plan with a completed-generation timer flag only when the guard is set", () => {
         const base = snapshot({
             timerState: { value: timerSlice(null), updatedAt: T1, completed: false },
@@ -887,6 +1277,29 @@ describe("first-pull bootstrap merge", () => {
             updatedAt: T2,
         });
         expect(plan.fullWipe).toBe(false);
+    });
+});
+
+describe("pending count parity", () => {
+    it("matches the persisted store count for habit and completion deltas", async () => {
+        const base = snapshot({
+            habits: { h1: { value: H("h1", { name: "Base" }), updatedAt: T1 } },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        const record = recordFromBaseline(base, {
+            habits: { h1: H("h1", { name: "Changed" }), h2: H("h2", { name: "New" }) },
+            habitUpdatedAt: { h1: T2, h2: T2 },
+            habitCompletions: { c1: HC("c1", "h1"), c2: HC("c2", "h1", { bucket: "2026-01-02" }) },
+        });
+
+        const merged = mergePulledSnapshot(record, base, NOW);
+        expect(merged.pendingCount).toBe(3);
+
+        // Persisting the exact merged record into a real staging store and
+        // re-reading it must report the same entity-based pending count.
+        const store = new LocalStagingStore(window.localStorage);
+        await store.update("owner-a", () => merged.record);
+        expect(store.pendingCount("owner-a")).toBe(merged.pendingCount);
     });
 });
 

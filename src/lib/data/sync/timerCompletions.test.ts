@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ActiveTimer, PomodoroLogEntry, Task } from "../../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
 import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice } from "../staging/types";
+import { buildPushPlan } from "./merge";
 import {
     applyCompletionLoser,
     applyCompletionWinner,
@@ -57,10 +58,38 @@ function timerSlice(timer: ActiveTimer | null, cycle = 0): TimerStateSlice {
     return { active_task: "t1", current_cycle_pomodoros: cycle, timer };
 }
 
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
 function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
     return {
         tasks: {},
         logs: {},
+        habits: {},
+        habitCompletions: {},
         settings: { value: { ...defaultAppState().settings }, updatedAt: T1 },
         timerState: {
             value: { active_task: null, current_cycle_pomodoros: 0, timer: null },
@@ -75,7 +104,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const base = snapshot();
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -99,6 +128,11 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
         pendingCompletions: [],
         unbootstrapped: false,
         lastSynced: base,
+        habits: {},
+        habitCompletions: {},
+        habitUpdatedAt: {},
+        habitTombstones: {},
+        habitCompletionTombstones: {},
         ...overrides,
     };
 }
@@ -427,5 +461,27 @@ describe("completionMask", () => {
         expect(mask.taskIds.size).toBe(0);
         expect(mask.logIds.size).toBe(0);
         expect(mask.maskTimer).toBe(false);
+    });
+
+    it("does not mask habit or completion plan entries while the journal is unresolved", () => {
+        const completed = completedRecord({
+            habits: { h1: H("h1", { name: "Staged habit" }) },
+            habitUpdatedAt: { h1: T1 },
+            habitCompletions: { c1: HC("c1", "h1", { bucket: "2026-01-02" }) },
+        });
+        const mask = completionMask(completed);
+        expect(mask.taskIds.has("t1")).toBe(true);
+        expect(mask.logIds.has("log-completion-1")).toBe(true);
+        expect(mask.maskTimer).toBe(true);
+
+        // Habit deltas stay visible in the ordinary plan even though the timer
+        // journal is unresolved: habit rows are never added to completionMask.
+        const plan = buildPushPlan(completed);
+        expect(plan.habitUpserts).toEqual([{ value: H("h1", { name: "Staged habit" }), updatedAt: T1 }]);
+        expect(plan.habitCompletionUpserts).toEqual([HC("c1", "h1", { bucket: "2026-01-02" })]);
+        // The completion-owned task/log/timer rows are masked out.
+        expect(plan.taskUpserts).toEqual([]);
+        expect(plan.logUpserts).toEqual([]);
+        expect(plan.timerState).toBeNull();
     });
 });

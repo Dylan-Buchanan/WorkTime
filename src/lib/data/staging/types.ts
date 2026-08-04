@@ -1,12 +1,21 @@
-import type { ActiveTimer, AppStateData, PomodoroLogEntry, Settings, Task } from "../../../state/types";
+import type {
+    ActiveTimer,
+    AppStateData,
+    Habit,
+    HabitCompletion,
+    PomodoroLogEntry,
+    Settings,
+    Task,
+} from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
 
 /**
  * The versioned, serializable schema persisted for each owner under
- * `worktime:staging:v1:<ownerId>`. These shapes are the localStorage boundary
- * and intentionally stay separate from in-memory React/UI state. Database
- * transport metadata is excluded except for the client-supplied log ID that is
- * already part of `PomodoroLogEntry`.
+ * `worktime:staging:v1:<ownerId>` (the key prefix is intentionally stable
+ * across schema versions; only the embedded `schemaVersion` advances). These
+ * shapes are the localStorage boundary and intentionally stay separate from
+ * in-memory React/UI state. Database transport metadata is excluded except for
+ * the client-supplied log ID that is already part of `PomodoroLogEntry`.
  */
 
 /** The timer-related fields persisted together as the `timer_state` row. */
@@ -31,6 +40,8 @@ export interface VersionedValue<T> {
 export interface SyncSnapshot {
     tasks: Record<string, { value: Task; updatedAt: string }>;
     logs: Record<string, PomodoroLogEntry>;
+    habits: Record<string, { value: Habit; updatedAt: string }>;
+    habitCompletions: Record<string, HabitCompletion>;
     settings: VersionedValue<Settings>;
     timerState: VersionedValue<TimerStateSlice> & { completed: boolean };
     pmState: VersionedValue<SyncedPMState>;
@@ -57,7 +68,7 @@ export interface PendingTimerCompletion {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 1;
+    schemaVersion: 2;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -85,9 +96,17 @@ export interface StagedOwnerRecord {
     unbootstrapped: boolean;
     /** `null` is valid only while the record is uninitialized. */
     lastSynced: SyncSnapshot | null;
+    /** Current locally-staged habits, keyed by habit id. */
+    habits: Record<string, Habit>;
+    /** Current locally-staged habit completions, keyed by completion id. */
+    habitCompletions: Record<string, HabitCompletion>;
+    /** `updated_at` LWW transport stamps per locally-changed habit. */
+    habitUpdatedAt: Record<string, string>;
+    habitTombstones: Record<string, { id: string; deletedAt: string }>;
+    habitCompletionTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 1 as const;
+export const STAGING_SCHEMA_VERSION = 2 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -164,6 +183,40 @@ function isSettings(value: unknown): boolean {
     );
 }
 
+function isHabit(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.name === "string" &&
+        typeof value.description === "string" &&
+        typeof value.color === "string" &&
+        (value.frequency === "daily" || value.frequency === "weekly" || value.frequency === "monthly") &&
+        isFiniteNumber(value.position) &&
+        typeof value.isArchived === "boolean" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isHabitCompletion(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.habitId === "string" &&
+        typeof value.bucket === "string" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isTombstone(value: unknown): boolean {
+    return isObject(value) && typeof value.id === "string" && typeof value.deletedAt === "string";
+}
+
+function isTombstoneMap(value: unknown): boolean {
+    return isObject(value) && Object.values(value).every(isTombstone);
+}
+
 function isAppState(value: unknown): boolean {
     return (
         isObject(value) &&
@@ -196,6 +249,12 @@ function isSyncSnapshot(value: unknown): boolean {
         ) &&
         isObject(value.logs) &&
         Object.values(value.logs).every(isLog) &&
+        isObject(value.habits) &&
+        Object.values(value.habits).every(
+            (row) => isObject(row) && isHabit(row.value) && typeof row.updatedAt === "string",
+        ) &&
+        isObject(value.habitCompletions) &&
+        Object.values(value.habitCompletions).every(isHabitCompletion) &&
         isVersionedValue(value.settings, isSettings) &&
         isVersionedValue(timerState, isTimerSlice) &&
         typeof timerState.completed === "boolean" &&
@@ -235,10 +294,18 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["fullWipe", (v): boolean => v === null || isObject(v)],
     ["pendingCompletions", (v): boolean => Array.isArray(v)],
     ["lastSynced", (v): boolean => v === null || isObject(v)],
+    ["habits", (v): boolean => isObject(v) && Object.values(v).every(isHabit)],
+    ["habitCompletions", (v): boolean => isObject(v) && Object.values(v).every(isHabitCompletion)],
+    ["habitUpdatedAt", (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string")],
+    ["habitTombstones", isTombstoneMap],
+    ["habitCompletionTombstones", isTombstoneMap],
 ];
 
 /**
- * Validate and parse a stored record. Unknown/newer `schemaVersion` values and
+ * Validate and parse a stored record. Only numeric literal schema versions `1`
+ * and `2` are accepted; records at the unchanged v1 key migrate to v2 in memory
+ * by adding the five habit/completion fields and injecting empty snapshot maps
+ * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
  * local data is never silently overwritten or read under the wrong owner.
  * `unbootstrapped` predates this schema revision and defaults to false when
@@ -254,22 +321,44 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     if (!isObject(parsed)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" is not an object`);
     }
-    if (parsed.schemaVersion !== STAGING_SCHEMA_VERSION) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
         );
     }
-    if (parsed.ownerId !== ownerId) {
+    // v1 records predate the habit fields, so inject the five empty values and
+    // both empty snapshot maps before running v2 validation on the same shape
+    // newer records are parsed with. The v1 key prefix is not a migration.
+    const record: Record<string, unknown> =
+        parsed.schemaVersion === 1
+            ? {
+                  ...parsed,
+                  schemaVersion: 2,
+                  habits: {},
+                  habitCompletions: {},
+                  habitUpdatedAt: {},
+                  habitTombstones: {},
+                  habitCompletionTombstones: {},
+                  lastSynced:
+                      parsed.lastSynced === null
+                          ? null
+                          : {
+                                ...(parsed.lastSynced as Record<string, unknown>),
+                                habits: {},
+                                habitCompletions: {},
+                            },
+              }
+            : parsed;
+    if (record.ownerId !== ownerId) {
         throw new StagingStorageError(
-            `Staging record owner mismatch: stored "${String(parsed.ownerId)}" for key owner "${ownerId}"`,
+            `Staging record owner mismatch: stored "${String(record.ownerId)}" for key owner "${ownerId}"`,
         );
     }
     for (const [field, check] of REQUIRED_FIELD_CHECKS) {
-        if (!check(parsed[field])) {
+        if (!check(record[field])) {
             throw new StagingStorageError(`Staging record for owner "${ownerId}" is missing or invalid field "${field}"`);
         }
     }
-    const record = parsed as Record<string, unknown>;
     if (!isAppState(record.state)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" has an invalid state shape`);
     }
@@ -288,11 +377,11 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     ) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" has an invalid pendingCompletions list`);
     }
-    if (parsed.lastSynced !== null && !isSyncSnapshot(parsed.lastSynced)) {
+    if (record.lastSynced !== null && !isSyncSnapshot(record.lastSynced)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" has an invalid lastSynced shape`);
     }
-    if (typeof parsed.unbootstrapped !== "boolean") {
-        parsed.unbootstrapped = false;
+    if (typeof record.unbootstrapped !== "boolean") {
+        record.unbootstrapped = false;
     }
-    return parsed as unknown as StagedOwnerRecord;
+    return record as unknown as StagedOwnerRecord;
 }

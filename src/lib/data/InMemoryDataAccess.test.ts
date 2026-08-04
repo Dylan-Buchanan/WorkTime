@@ -1,6 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryDataAccess } from "./InMemoryDataAccess";
 import { defaultSettings, makeAppState, makeActiveTimer } from "../../test/mockTauri";
+import type { Habit, HabitCompletion } from "../../state/types";
+
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
 
 describe("InMemoryDataAccess", () => {
     it("returns cloned state and keeps PM ui out of the server slice", async () => {
@@ -103,5 +130,42 @@ describe("InMemoryDataAccess", () => {
         await data.sync({ reason: "bootstrap" });
         expect(data.pendingCount()).toBe(0);
         expect(await data.loadPMState()).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "now" } });
+    });
+
+    it("round-trips habits and completions as clones with one pending item and one notification", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const listener = vi.fn();
+        const unsubscribe = data.subscribe(listener);
+
+        await data.saveHabits(
+            [H("h1", { name: "Morning" })],
+            [HC("c1", "h1", { bucket: "2026-01-02" })],
+        );
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(data.pendingCount()).toBe(1);
+
+        const loaded = await data.loadHabits();
+        expect(loaded.habits).toEqual([H("h1", { name: "Morning" })]);
+        expect(loaded.completions).toEqual([HC("c1", "h1", { bucket: "2026-01-02" })]);
+        // Fresh clones: mutating the loaded arrays cannot mutate the store.
+        loaded.habits[0].name = "mutated";
+        loaded.completions[0].bucket = "mutated";
+        expect(await data.loadHabits()).toEqual({
+            habits: [H("h1", { name: "Morning" })],
+            completions: [HC("c1", "h1", { bucket: "2026-01-02" })],
+        });
+
+        // A second save replaces the arrays and notifies exactly once.
+        await data.saveHabits([], [HC("c2", "h1", { bucket: "2026-01-03" })]);
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(data.pendingCount()).toBe(2);
+        expect(await data.loadHabits()).toEqual({
+            habits: [],
+            completions: [HC("c2", "h1", { bucket: "2026-01-03" })],
+        });
+
+        unsubscribe();
+        await data.saveHabits([], []);
+        expect(listener).toHaveBeenCalledTimes(2);
     });
 });

@@ -9,6 +9,8 @@ import { createLocalUser, localSupabaseConfig, type LocalUser } from "../tests/s
 // must not overlap with other integration files (which use 2xxx/3xxx bases).
 const TASK_ID = "00000000-0000-4000-8000-100000000001";
 const LOG_ID = "00000000-0000-4000-8000-100000000002";
+const HABIT_ID = "00000000-0000-4000-8000-100000000003";
+const COMPLETION_ID = "00000000-0000-4000-8000-100000000004";
 const FOREIGN_OWNER = "ffffffff-ffff-4000-8000-ffffffffffff";
 const T0 = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T00:00:00.000Z";
@@ -25,15 +27,37 @@ function emptyPlan(): PushPlan {
         taskTombstones: [],
         logUpserts: [],
         logTombstones: [],
+        habitUpserts: [],
+        habitTombstones: [],
+        habitCompletionUpserts: [],
+        habitCompletionTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
         fullWipe: false,
         acknowledged: {
-            taskUpserts: {}, taskTombstones: {}, logUpserts: {}, logTombstones: {},
-            settings: null, timerState: null, pmState: null, fullWipe: null,
+            taskUpserts: {},
+            taskTombstones: {},
+            logUpserts: {},
+            logTombstones: {},
+            habitUpserts: {},
+            habitTombstones: {},
+            habitCompletionUpserts: {},
+            habitCompletionTombstones: {},
+            settings: null,
+            timerState: null,
+            pmState: null,
+            fullWipe: null,
         },
     };
+}
+
+function habit(id: string, name: string, updatedAt = T0) {
+    return { id, name, description: "A habit", color: "#ff0000", frequency: "weekly" as const, position: 2, isArchived: false, createdAt: T0, updatedAt };
+}
+
+function completion(id: string, habitId: string, bucket = "2026-01-02") {
+    return { id, habitId, bucket, createdAt: T0, updatedAt: T0 };
 }
 
 // PostgREST serializes timestamptz columns with an offset (+00:00) rather than
@@ -55,6 +79,8 @@ describe("SupabaseDataAccess transport", () => {
         const snapshot = await new SupabaseDataAccess(user.client).pull(user.userId);
         expect(snapshot.tasks).toEqual({});
         expect(snapshot.logs).toEqual({});
+        expect(snapshot.habits).toEqual({});
+        expect(snapshot.habitCompletions).toEqual({});
         expect(snapshot.settings).toEqual({ value: null, updatedAt: null });
         expect(snapshot.timerState).toEqual({ value: null, updatedAt: null, completed: false });
         expect(snapshot.pmState).toEqual({ value: null, updatedAt: null });
@@ -78,10 +104,14 @@ describe("SupabaseDataAccess transport", () => {
         const log = { id: LOG_ID, task_id: TASK_ID, duration_minutes: 25, finished_at: "2026-01-01T00:26:00.000Z", was_break: false, break_skipped: false };
         const settings = { work_minutes: 30, short_break_minutes: 6, long_break_minutes: 24, segment_length: 3 };
         const timerSlice = { active_task: TASK_ID, current_cycle_pomodoros: 1, timer: null };
+        const pushedHabit = habit(HABIT_ID, "Pushed habit");
+        const pushedCompletion = completion(COMPLETION_ID, HABIT_ID);
         const plan: PushPlan = {
             ...emptyPlan(),
             taskUpserts: [{ value: task, updatedAt: T0 }],
             logUpserts: [log],
+            habitUpserts: [{ value: pushedHabit, updatedAt: T0 }],
+            habitCompletionUpserts: [pushedCompletion],
             settings: { value: settings, updatedAt: T0 },
             timerState: { value: timerSlice, updatedAt: T0, newGeneration: false },
             pmState: { value: PM_STATE, updatedAt: T0 },
@@ -108,6 +138,24 @@ describe("SupabaseDataAccess transport", () => {
         expect(epoch(pulledLog.finished_at)).toBe(epoch(log.finished_at));
         expect(pulledLog.was_break).toBe(log.was_break);
         expect(pulledLog.break_skipped).toBe(log.break_skipped);
+        const pulledHabit = first.habits[HABIT_ID].value;
+        expect(pulledHabit.id).toBe(pushedHabit.id);
+        expect(pulledHabit.name).toBe(pushedHabit.name);
+        expect(pulledHabit.description).toBe(pushedHabit.description);
+        expect(pulledHabit.color).toBe(pushedHabit.color);
+        expect(pulledHabit.frequency).toBe(pushedHabit.frequency);
+        expect(pulledHabit.position).toBe(pushedHabit.position);
+        expect(pulledHabit.isArchived).toBe(pushedHabit.isArchived);
+        expect(epoch(pulledHabit.createdAt)).toBe(epoch(pushedHabit.createdAt));
+        expect(epoch(pulledHabit.updatedAt)).toBe(epoch(T0));
+        expect(epoch(first.habits[HABIT_ID].updatedAt)).toBe(epoch(T0));
+        const pulledCompletion = first.habitCompletions[COMPLETION_ID];
+        expect(pulledCompletion).toBeDefined();
+        expect(pulledCompletion.id).toBe(pushedCompletion.id);
+        expect(pulledCompletion.habitId).toBe(pushedCompletion.habitId);
+        expect(pulledCompletion.bucket).toBe(pushedCompletion.bucket);
+        expect(epoch(pulledCompletion.createdAt)).toBe(epoch(pushedCompletion.createdAt));
+        expect(epoch(pulledCompletion.updatedAt)).toBe(epoch(pushedCompletion.updatedAt));
         expect(first.settings.value).toEqual(settings);
         expect(epoch(first.settings.updatedAt)).toBe(epoch(T0));
         expect(first.timerState.value).toEqual(timerSlice);
@@ -116,7 +164,8 @@ describe("SupabaseDataAccess transport", () => {
         expect(first.pmState.value).toEqual(PM_STATE);
         expect(epoch(first.pmState.updatedAt)).toBe(epoch(T0));
 
-        // Replaying the same plan creates no duplicate tasks, logs, or singletons.
+        // Replaying the same plan creates no duplicate tasks, logs, habits, or
+        // completion rows.
         await remote.push(user.userId, plan);
         const logs = await user.client.from("pomodoro_logs").select("id");
         expect(logs.error).toBeNull();
@@ -124,6 +173,12 @@ describe("SupabaseDataAccess transport", () => {
         const tasks = await user.client.from("tasks").select("id");
         expect(tasks.error).toBeNull();
         expect(tasks.data).toHaveLength(1);
+        const habits = await user.client.from("habits").select("id");
+        expect(habits.error).toBeNull();
+        expect(habits.data).toHaveLength(1);
+        const completions = await user.client.from("habit_completions").select("id");
+        expect(completions.error).toBeNull();
+        expect(completions.data).toHaveLength(1);
         expect((await user.client.from("settings").select("owner_id")).data).toHaveLength(1);
         expect((await user.client.from("timer_state").select("owner_id")).data).toHaveLength(1);
         expect((await user.client.from("pm_state").select("owner_id")).data).toHaveLength(1);
@@ -142,13 +197,15 @@ describe("SupabaseDataAccess transport", () => {
         });
     });
 
-    it("applies a full wipe while preserving an independent PM upsert", async () => {
+    it("applies a full wipe while preserving an independent PM upsert and habit rows", async () => {
         user = await createLocalUser();
         const remote = new SupabaseDataAccess(user.client);
         const seed: PushPlan = {
             ...emptyPlan(),
             taskUpserts: [{ value: { id: TASK_ID, name: "Pre-wipe task", target_pomodoros: 2, completed_pomodoros: 1, created_at: T0, completed_at: null, break_skips: 0, archived: false }, updatedAt: T0 }],
             logUpserts: [{ id: LOG_ID, task_id: TASK_ID, duration_minutes: 25, finished_at: "2026-01-01T00:26:00.000Z", was_break: false, break_skipped: false }],
+            habitUpserts: [{ value: habit(HABIT_ID, "Survivor habit"), updatedAt: T0 }],
+            habitCompletionUpserts: [completion(COMPLETION_ID, HABIT_ID)],
             settings: { value: { work_minutes: 40, short_break_minutes: 7, long_break_minutes: 30, segment_length: 5 }, updatedAt: T0 },
             timerState: { value: { active_task: TASK_ID, current_cycle_pomodoros: 3, timer: null }, updatedAt: T0, newGeneration: false },
         };
@@ -172,6 +229,10 @@ describe("SupabaseDataAccess transport", () => {
         expect(epoch(snapshot.timerState.updatedAt)).toBe(epoch(LATER));
         expect(snapshot.timerState.completed).toBe(false);
         expect(snapshot.pmState.value).toEqual(PM_STATE);
+        // Habits and completions survive the wipe untouched.
+        expect(snapshot.habits[HABIT_ID].value.name).toBe("Survivor habit");
+        expect(epoch(snapshot.habits[HABIT_ID].updatedAt)).toBe(epoch(T0));
+        expect(snapshot.habitCompletions[COMPLETION_ID].id).toBe(COMPLETION_ID);
     });
 
     it("rolls back the whole transition when a gated write fails", async () => {

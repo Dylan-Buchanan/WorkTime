@@ -19,7 +19,7 @@ import {
     resumeTimer,
     skipBreak,
 } from "../engine";
-import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
+import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
 import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncOptions, SyncResult, SyncedPMState } from "./DataAccess";
 
 function clone<T>(value: T): T {
@@ -47,6 +47,8 @@ function randomId(): string {
 export interface InMemoryDataStore {
     state: AppStateData;
     pmState: SyncedPMState | null;
+    habits: Habit[];
+    habitCompletions: HabitCompletion[];
     completed: boolean;
 }
 
@@ -90,10 +92,14 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), pmState: null, completed: false };
+            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.pmState = this.store.pmState ? clone(this.store.pmState) : null;
+        this.store.habits = this.store.habits ? this.store.habits.map((habit) => clone(habit)) : [];
+        this.store.habitCompletions = this.store.habitCompletions
+            ? this.store.habitCompletions.map((completion) => clone(completion))
+            : [];
         this.now = options.now ?? (() => new Date());
         this.createTaskId = options.createTaskId ?? randomId;
         this.createLogId = options.createLogId ?? randomId;
@@ -214,6 +220,20 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.pmState ? clone(this.store.pmState) : null;
     }
 
+    async saveHabits(habits: Habit[], completions: HabitCompletion[]): Promise<void> {
+        this.store.habits = habits.map((habit) => clone(habit));
+        this.store.habitCompletions = completions.map((completion) => clone(completion));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }> {
+        return {
+            habits: this.store.habits.map((habit) => clone(habit)),
+            completions: this.store.habitCompletions.map((completion) => clone(completion)),
+        };
+    }
+
     async sync(options: SyncOptions): Promise<SyncResult> {
         this.syncCalls.push(options);
         if (this.onSync) await this.onSync(options);
@@ -257,6 +277,8 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
             current_cycle_pomodoros: 0, timer: null, ...(initial ?? {}),
         },
         pmState: null,
+        habits: [],
+        habitCompletions: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };

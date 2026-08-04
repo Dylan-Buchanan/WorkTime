@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeAppState } from "../../../test/mockTauri";
+import type { Habit, HabitCompletion } from "../../../state/types";
 import {
     LocalStagingStore,
     STAGING_STORAGE_PREFIX,
@@ -32,11 +33,39 @@ const BASE_LOG = {
     break_skipped: false,
 };
 
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
 function makeBaseline(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
     const state = makeAppState({ tasks: { t1: { ...BASE_TASK } }, logs: [{ ...BASE_LOG }] });
     return {
         tasks: { t1: { value: { ...BASE_TASK }, updatedAt: "2026-01-01T00:00:00.000Z" } },
         logs: { "log-0": { ...BASE_LOG } },
+        habits: {},
+        habitCompletions: {},
         settings: { value: { ...state.settings }, updatedAt: "2026-01-01T00:00:00.000Z" },
         timerState: {
             value: { active_task: null, current_cycle_pomodoros: 0, timer: null },
@@ -126,6 +155,11 @@ describe("LocalStagingStore", () => {
         expect(record.pmState).toBeNull();
         expect(record.pendingCompletions).toEqual([]);
         expect(record.lastSynced).toBeNull();
+        expect(record.habits).toEqual({});
+        expect(record.habitCompletions).toEqual({});
+        expect(record.habitUpdatedAt).toEqual({});
+        expect(record.habitTombstones).toEqual({});
+        expect(record.habitCompletionTombstones).toEqual({});
     });
 
     it("increments revision on every update and re-reads the latest record", async () => {
@@ -182,7 +216,13 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, "{not json");
         expect(() => store.read(OWNER_A)).toThrow(/not valid JSON/);
 
-        window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 999, ownerId: OWNER_A }));
+        // Only numeric literal versions 1 and 2 are accepted: 0, 3, missing,
+        // and arbitrary unknown values all fail closed before any v2 validation.
+        for (const version of [0, 3, 999]) {
+            window.localStorage.setItem(key, JSON.stringify({ schemaVersion: version, ownerId: OWNER_A }));
+            expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
+        }
+        window.localStorage.setItem(key, JSON.stringify({ ownerId: OWNER_A }));
         expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
 
         window.localStorage.clear();
@@ -279,9 +319,31 @@ describe("LocalStagingStore", () => {
         expect(store.pendingCount(OWNER_A)).toBe(7);
     });
 
-    it("counts a full wipe as one scoped change plus one only when PM differs", async () => {
+    it("counts a full wipe as one scoped change plus PM and each habit/completion delta", async () => {
         const store = new LocalStagingStore(window.localStorage);
-        await seedInitialized(store, OWNER_A);
+        const baseline = makeBaseline({
+            habits: {
+                h1: { value: H("h1", { name: "Base h1" }), updatedAt: "2026-01-01T00:00:00.000Z" },
+                doomed: { value: H("doomed", { name: "Doomed" }), updatedAt: "2026-01-01T00:00:00.000Z" },
+            },
+            habitCompletions: {
+                c1: HC("c1", "h1"),
+                doomedC: HC("doomedC", "doomed"),
+            },
+        });
+        await seedInitialized(store, OWNER_A, baseline);
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habits: {
+                h1: { ...baseline.habits.h1.value },
+                doomed: { ...baseline.habits.doomed.value },
+            },
+            habitCompletions: {
+                c1: { ...baseline.habitCompletions.c1 },
+                doomedC: { ...baseline.habitCompletions.doomedC },
+            },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(0);
 
         // Wipe replaces app state but must not be counted per removed row.
         await store.update(OWNER_A, (r) => ({
@@ -299,6 +361,165 @@ describe("LocalStagingStore", () => {
             pmUpdatedAt: "2026-01-11T00:00:00.000Z",
         }));
         expect(store.pendingCount(OWNER_A)).toBe(2);
+
+        // Two habit upserts each count as one item, not one collapsed habit.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habits: { h1: H("h1", { name: "Staged during wipe" }), h2: H("h2", { name: "Second habit" }) },
+            habitUpdatedAt: { h1: "2026-01-12T00:00:00.000Z", h2: "2026-01-12T00:00:00.000Z" },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(4);
+
+        // A habit tombstone over a baseline habit counts as one more item.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habitTombstones: { doomed: { id: "doomed", deletedAt: "2026-01-13T00:00:00.000Z" } },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(5);
+
+        // A completion upsert and a completion tombstone each add one item.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habitCompletions: { c1: HC("c1", "h1"), c2: HC("c2", "h1", { bucket: "2026-01-02" }) },
+            habitCompletionTombstones: { doomedC: { id: "doomedC", deletedAt: "2026-01-14T00:00:00.000Z" } },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(7);
+    });
+
+    it("counts habit upserts, tombstones, completion upserts, and completion tombstones as one item each", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        const baseline = makeBaseline({
+            habits: { h1: { value: H("h1", { name: "Base" }), updatedAt: "2026-01-01T00:00:00.000Z" } },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            initialized: true,
+            state: makeAppState(),
+            lastSynced: baseline,
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(0);
+
+        // A habit that differs from the baseline and carries a new stamp.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habits: { h1: H("h1", { name: "Changed" }) },
+            habitUpdatedAt: { h1: "2026-01-02T00:00:00.000Z" },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(1);
+
+        // Removing the baseline habit is represented only by its tombstone.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habits: {},
+            habitUpdatedAt: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: "2026-01-03T00:00:00.000Z" } },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(1);
+
+        // A new/changed completion value.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habitCompletions: { c1: HC("c1", "h1", { bucket: "2026-01-02" }) },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(2);
+
+        // Removing the baseline completion is represented only by its tombstone.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            habitCompletions: {},
+            habitCompletionTombstones: { c1: { id: "c1", deletedAt: "2026-01-04T00:00:00.000Z" } },
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(2);
+    });
+
+    it("round-trips a populated v2 record losslessly through serialize then parse", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        const baseline = makeBaseline({
+            habits: { h1: { value: H("h1"), updatedAt: "2026-01-01T00:00:00.000Z" } },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            initialized: true,
+            state: makeAppState(),
+            lastSynced: baseline,
+            habits: { h1: H("h1", { name: "Saved" }) },
+            habitUpdatedAt: { h1: "2026-01-02T00:00:00.000Z" },
+            habitCompletions: { c1: HC("c1", "h1", { bucket: "2026-01-02" }) },
+        }));
+
+        const record = store.read(OWNER_A);
+        expect(record.schemaVersion).toBe(2);
+        expect(record.habits.h1.name).toBe("Saved");
+        expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.habitCompletions.c1.bucket).toBe("2026-01-02");
+        expect(record.lastSynced?.habits.h1.value.name).toBe("Habit h1");
+        expect(record.lastSynced?.habitCompletions.c1.id).toBe("c1");
+
+        // Re-parsing the serialized bytes yields an identical record.
+        expect(store.read(OWNER_A)).toEqual(record);
+    });
+
+    it("migrates a complete v1 record in memory and never creates a v2 storage key", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        // Persist a fully-populated record, then degrade it to the legacy v1
+        // shape by stripping the five new top-level fields and both snapshot
+        // maps while keeping every legacy field populated.
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            initialized: true,
+            state: makeAppState({
+                tasks: { t1: { ...BASE_TASK, name: "Legacy task" } },
+                logs: [{ ...BASE_LOG }],
+                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 },
+            }),
+            settingsUpdatedAt: "2026-01-02T00:00:00.000Z",
+            timerUpdatedAt: "2026-01-02T00:00:00.000Z",
+            pmState: { projects: {}, tasks: {}, meta: { initializedAt: "2026-01-02T00:00:00.000Z" } },
+            pmUpdatedAt: "2026-01-02T00:00:00.000Z",
+            taskTombstones: { t1: { id: "t1", deletedAt: "2026-01-03T00:00:00.000Z" } },
+            logTombstones: { "log-0": { id: "log-0", deletedAt: "2026-01-03T00:00:00.000Z" } },
+            lastSynced: makeBaseline(),
+        }));
+        const key = stagingKey(OWNER_A);
+        const degraded = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
+        delete degraded.habits;
+        delete degraded.habitCompletions;
+        delete degraded.habitUpdatedAt;
+        delete degraded.habitTombstones;
+        delete degraded.habitCompletionTombstones;
+        delete (degraded.lastSynced as Record<string, unknown>).habits;
+        delete (degraded.lastSynced as Record<string, unknown>).habitCompletions;
+        degraded.schemaVersion = 1;
+        window.localStorage.setItem(key, JSON.stringify(degraded));
+
+        const migrated = store.read(OWNER_A);
+        expect(migrated.schemaVersion).toBe(2);
+        // Every legacy value survives the in-memory migration.
+        expect(migrated.state.tasks.t1.name).toBe("Legacy task");
+        expect(migrated.state.logs).toEqual([{ ...BASE_LOG }]);
+        expect(migrated.state.settings.work_minutes).toBe(50);
+        expect(migrated.settingsUpdatedAt).toBe("2026-01-02T00:00:00.000Z");
+        expect(migrated.pmState).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "2026-01-02T00:00:00.000Z" } });
+        expect(migrated.taskTombstones.t1).toEqual({ id: "t1", deletedAt: "2026-01-03T00:00:00.000Z" });
+        expect(migrated.logTombstones["log-0"]).toEqual({ id: "log-0", deletedAt: "2026-01-03T00:00:00.000Z" });
+        // The five new local fields and both snapshot maps are injected empty.
+        expect(migrated.habits).toEqual({});
+        expect(migrated.habitCompletions).toEqual({});
+        expect(migrated.habitUpdatedAt).toEqual({});
+        expect(migrated.habitTombstones).toEqual({});
+        expect(migrated.habitCompletionTombstones).toEqual({});
+        expect(migrated.lastSynced?.habits).toEqual({});
+        expect(migrated.lastSynced?.habitCompletions).toEqual({});
+
+        // One safe staged update stays schema 2 on the same v1-prefixed key and
+        // never creates a worktime:staging:v2:* key.
+        await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "t1" } }));
+        expect(store.read(OWNER_A).schemaVersion).toBe(2);
+        const keys: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i += 1) keys.push(window.localStorage.key(i) as string);
+        expect(keys.filter((candidate) => candidate.startsWith("worktime:staging:"))).toEqual([key]);
     });
 
     it("counts zero pending when an initialized record exactly matches its baseline", async () => {

@@ -18,7 +18,7 @@ import {
     updateSettings,
 } from "../engine";
 import { EngineError } from "../engine";
-import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
+import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
 import type { LocalStagingStore } from "./staging/LocalStagingStore";
 import { deepValuesEqual } from "./staging/serialization";
 import type { PendingTimerCompletion, StagedOwnerRecord } from "./staging/types";
@@ -377,6 +377,70 @@ export class StagedDataAccess implements DataAccess {
     async loadPMState(): Promise<SyncedPMState | null> {
         const record = this.store.read(this.ownerId);
         return record.pmState ? clone(record.pmState) : null;
+    }
+
+    /**
+     * Replaces the locally staged habit and completion collections in one
+     * store write using a single injected timestamp. The input arrays are the
+     * full desired set: new or deep-changed habits receive a fresh LWW stamp,
+     * unchanged habits keep their existing stamp, and omitted rows are removed
+     * and staged as tombstones. Completions carry no separate stamp map; their
+     * id-keyed identity is the transport key, and omitted rows get tombstones.
+     * This is a pure local persistence path and never touches the network.
+     */
+    async saveHabits(habits: Habit[], completions: HabitCompletion[]): Promise<void> {
+        const stamp = this.now().toISOString();
+        const nextHabits: Record<string, Habit> = {};
+        for (const habit of habits) {
+            nextHabits[habit.id] = clone(habit);
+        }
+        const nextCompletions: Record<string, HabitCompletion> = {};
+        for (const completion of completions) {
+            nextCompletions[completion.id] = clone(completion);
+        }
+        await this.store.update(this.ownerId, (current) => {
+            const habitUpdatedAt = { ...current.habitUpdatedAt };
+            const habitTombstones = { ...current.habitTombstones };
+            const habitCompletionTombstones = { ...current.habitCompletionTombstones };
+
+            for (const id of Object.keys(nextHabits)) {
+                const previous = current.habits[id];
+                if (previous === undefined || !equal(previous, nextHabits[id])) {
+                    habitUpdatedAt[id] = stamp;
+                }
+                delete habitTombstones[id];
+            }
+            for (const id of Object.keys(current.habits)) {
+                if (nextHabits[id]) continue;
+                delete habitUpdatedAt[id];
+                habitTombstones[id] = { id, deletedAt: stamp };
+            }
+
+            for (const id of Object.keys(nextCompletions)) {
+                delete habitCompletionTombstones[id];
+            }
+            for (const id of Object.keys(current.habitCompletions)) {
+                if (nextCompletions[id]) continue;
+                habitCompletionTombstones[id] = { id, deletedAt: stamp };
+            }
+
+            return {
+                ...current,
+                habits: nextHabits,
+                habitCompletions: nextCompletions,
+                habitUpdatedAt,
+                habitTombstones,
+                habitCompletionTombstones,
+            };
+        });
+    }
+
+    async loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }> {
+        const record = this.store.read(this.ownerId);
+        return {
+            habits: Object.values(record.habits).map((habit) => clone(habit)),
+            completions: Object.values(record.habitCompletions).map((completion) => clone(completion)),
+        };
     }
 
     async sync(options: SyncOptions): Promise<SyncResult> {

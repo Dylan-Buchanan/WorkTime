@@ -1,0 +1,141 @@
+import { describe, expect, it, vi } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { SupabaseDataAccess } from "./SupabaseDataAccess";
+import type { Habit, HabitCompletion } from "../../state/types";
+import type { PushPlan } from "./sync/types";
+
+const OWNER = "00000000-0000-4000-8000-000000000001";
+
+function H(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: `Habit ${id}`,
+        description: "",
+        color: "#ffffff",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {}): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket: "2026-01-01",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function mockClient(): { client: SupabaseClient; rpc: ReturnType<typeof vi.fn> } {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
+    const client = {
+        auth: {
+            getSession: vi.fn().mockResolvedValue({
+                data: { session: { user: { id: OWNER } } },
+                error: null,
+            }),
+        },
+        from: vi.fn(),
+        rpc,
+    } as unknown as SupabaseClient;
+    return { client, rpc };
+}
+
+function emptyPlan(): PushPlan {
+    return {
+        baseRevision: 1,
+        taskUpserts: [],
+        taskTombstones: [],
+        logUpserts: [],
+        logTombstones: [],
+        habitUpserts: [],
+        habitTombstones: [],
+        habitCompletionUpserts: [],
+        habitCompletionTombstones: [],
+        settings: null,
+        timerState: null,
+        pmState: null,
+        fullWipe: false,
+        acknowledged: {
+            taskUpserts: {},
+            taskTombstones: {},
+            logUpserts: {},
+            logTombstones: {},
+            habitUpserts: {},
+            habitTombstones: {},
+            habitCompletionUpserts: {},
+            habitCompletionTombstones: {},
+            settings: null,
+            timerState: null,
+            pmState: null,
+            fullWipe: null,
+        },
+    };
+}
+
+describe("SupabaseDataAccess habit transport mapping", () => {
+    it("maps habit deltas to apply_staged_sync and sends empty arrays as null", async () => {
+        const { client, rpc } = mockClient();
+        const data = new SupabaseDataAccess(client);
+        const habit = H("h1", { name: "Push", color: "#112233", frequency: "weekly", position: 3 });
+        const completion = HC("c1", "h1", { bucket: "2026-01-02" });
+        const plan: PushPlan = {
+            ...emptyPlan(),
+            habitUpserts: [{ value: habit, updatedAt: "2026-01-03T00:00:00.000Z" }],
+            habitTombstones: [{ id: "h1", deletedAt: "2026-01-03T00:00:00.000Z" }],
+            habitCompletionUpserts: [completion],
+            habitCompletionTombstones: [{ id: "c1", deletedAt: "2026-01-03T00:00:00.000Z" }],
+        };
+
+        await data.push(OWNER, plan);
+
+        expect(rpc).toHaveBeenCalledTimes(1);
+        const [name, args] = rpc.mock.calls[0];
+        expect(name).toBe("apply_staged_sync");
+
+        // Four populated arrays map camelCase to the exact snake_case DB shapes.
+        expect(args.p_habit_upserts).toEqual([
+            {
+                id: habit.id,
+                name: habit.name,
+                description: habit.description,
+                color: habit.color,
+                frequency: habit.frequency,
+                position: habit.position,
+                is_archived: habit.isArchived,
+                created_at: habit.createdAt,
+                updated_at: "2026-01-03T00:00:00.000Z",
+            },
+        ]);
+        expect(args.p_habit_tombstones).toEqual([{ id: "h1", deleted_at: "2026-01-03T00:00:00.000Z" }]);
+        expect(args.p_habit_completion_upserts).toEqual([
+            {
+                id: completion.id,
+                habit_id: completion.habitId,
+                bucket: completion.bucket,
+                created_at: completion.createdAt,
+                updated_at: completion.updatedAt,
+            },
+        ]);
+        expect(args.p_habit_completion_tombstones).toEqual([{ id: "c1", deleted_at: "2026-01-03T00:00:00.000Z" }]);
+
+        // Empty arrays are sent as null, never as [].
+        await data.push(OWNER, emptyPlan());
+        const args2 = rpc.mock.calls[1][1];
+        expect(args2.p_habit_upserts).toBeNull();
+        expect(args2.p_habit_tombstones).toBeNull();
+        expect(args2.p_habit_completion_upserts).toBeNull();
+        expect(args2.p_habit_completion_tombstones).toBeNull();
+
+        // No owner input is ever forwarded: the RPC derives it from auth.uid().
+        const ownerKeys = Object.keys(args).filter((key) => key.toLowerCase().includes("owner"));
+        expect(ownerKeys).toEqual([]);
+        expect(args.p_owner).toBeUndefined();
+    });
+});

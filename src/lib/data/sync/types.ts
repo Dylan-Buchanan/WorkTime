@@ -1,4 +1,4 @@
-import type { ActiveTimer, PomodoroLogEntry, Settings, Task } from "../../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
 import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue } from "../staging/types";
 
@@ -34,13 +34,18 @@ export interface SyncRemote {
  * acknowledge. `commitAcknowledgedPush` clears an item only when the current
  * stored value still equals the acknowledged value, so edits made while a sync
  * is in flight stay pending against the new baseline. Keys identify the exact
- * entity (task id, log id, ...) whose value/timestamp was acknowledged.
+ * entity (task id, log id, habit id, completion id, ...) whose value/timestamp
+ * was acknowledged.
  */
 export interface AcknowledgedChanges {
     taskUpserts: Record<string, { value: Task; updatedAt: string }>;
     taskTombstones: Record<string, { deletedAt: string }>;
     logUpserts: Record<string, PomodoroLogEntry>;
     logTombstones: Record<string, { deletedAt: string }>;
+    habitUpserts: Record<string, { value: Habit; updatedAt: string }>;
+    habitTombstones: Record<string, { deletedAt: string }>;
+    habitCompletionUpserts: Record<string, HabitCompletion>;
+    habitCompletionTombstones: Record<string, { deletedAt: string }>;
     settings: VersionedValue<Settings> | null;
     timerState: VersionedValue<TimerStateSlice> | null;
     pmState: VersionedValue<SyncedPMState> | null;
@@ -59,6 +64,10 @@ export interface PushPlan {
     taskTombstones: Array<{ id: string; deletedAt: string }>;
     logUpserts: PomodoroLogEntry[];
     logTombstones: Array<{ id: string; deletedAt: string }>;
+    habitUpserts: Array<{ value: Habit; updatedAt: string }>;
+    habitTombstones: Array<{ id: string; deletedAt: string }>;
+    habitCompletionUpserts: HabitCompletion[];
+    habitCompletionTombstones: Array<{ id: string; deletedAt: string }>;
     settings: VersionedValue<Settings> | null;
     timerState: (VersionedValue<TimerStateSlice> & { newGeneration: boolean }) | null;
     pmState: VersionedValue<SyncedPMState> | null;

@@ -17,6 +17,10 @@ function isPlanNonEmpty(plan: PushPlan): boolean {
         plan.taskTombstones.length > 0 ||
         plan.logUpserts.length > 0 ||
         plan.logTombstones.length > 0 ||
+        plan.habitUpserts.length > 0 ||
+        plan.habitTombstones.length > 0 ||
+        plan.habitCompletionUpserts.length > 0 ||
+        plan.habitCompletionTombstones.length > 0 ||
         plan.settings !== null ||
         plan.timerState !== null ||
         plan.pmState !== null ||
@@ -37,6 +41,8 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
     const pushed: SyncSnapshot = {
         tasks: { ...base.tasks },
         logs: { ...base.logs },
+        habits: { ...base.habits },
+        habitCompletions: { ...base.habitCompletions },
         settings: { ...base.settings },
         timerState: { ...base.timerState },
         pmState: { ...base.pmState },
@@ -55,6 +61,18 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
     for (const id of Object.keys(ack.logTombstones)) {
         delete pushed.logs[id];
     }
+    for (const [id, value] of Object.entries(ack.habitUpserts)) {
+        pushed.habits[id] = { value: clone(value.value), updatedAt: value.updatedAt };
+    }
+    for (const id of Object.keys(ack.habitTombstones)) {
+        delete pushed.habits[id];
+    }
+    for (const [id, completion] of Object.entries(ack.habitCompletionUpserts)) {
+        pushed.habitCompletions[id] = clone(completion);
+    }
+    for (const id of Object.keys(ack.habitCompletionTombstones)) {
+        delete pushed.habitCompletions[id];
+    }
     if (ack.settings) pushed.settings = clone(ack.settings);
     if (ack.timerState) {
         pushed.timerState = {
@@ -66,7 +84,8 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
     if (ack.pmState) pushed.pmState = clone(ack.pmState);
     if (ack.fullWipe) {
         // A successful wipe leaves only the default settings/timer rows and no
-        // tasks or logs; PM merges independently and is never synthesized.
+        // tasks or logs; PM, habits, and habit completions survive the wipe and
+        // are never synthesized.
         pushed.tasks = {};
         pushed.logs = {};
         if (plan.settings) pushed.settings = clone(plan.settings);

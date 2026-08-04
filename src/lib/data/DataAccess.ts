@@ -1,5 +1,15 @@
 import type { EngineResult } from "../engine";
-import type { ActiveTimer, AppStateData, PMTask, ProjectManagerState, Settings, Task, TimerKind } from "../../state/types";
+import type {
+    ActiveTimer,
+    AppStateData,
+    Habit,
+    HabitCompletion,
+    PMTask,
+    ProjectManagerState,
+    Settings,
+    Task,
+    TimerKind,
+} from "../../state/types";
 
 export type SyncedPMState = Pick<ProjectManagerState, "projects" | "tasks" | "meta">;
 
@@ -99,6 +109,8 @@ export interface DataAccess {
     resetAppState(): Promise<EngineResult<AppStateData>>;
     savePMState(state: SyncedPMState): Promise<void>;
     loadPMState(): Promise<SyncedPMState | null>;
+    saveHabits(habits: Habit[], completions: HabitCompletion[]): Promise<void>;
+    loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }>;
     sync(options: SyncOptions): Promise<SyncResult>;
     pendingCount(): number;
     isInitialized(): boolean;

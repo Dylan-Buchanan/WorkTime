@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ActiveTimer, PomodoroLogEntry, Settings, Task } from "../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../state/types";
 import { DataAccessAuthError } from "./DataAccess";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./staging/types";
 import type { PushPlan, SyncRemote } from "./sync/types";
@@ -45,6 +45,40 @@ function taskRow(ownerId: string, task: Task, updatedAt?: string) {
         break_skips: task.break_skips,
         archived: task.archived,
         updated_at: updatedAt,
+    };
+}
+
+/**
+ * Serializes a habit into the JSON row shape the staged-sync RPC expects. The
+ * RPC derives the owner from the caller's JWT and never accepts one. `updated_at`
+ * is the transport LWW stamp from the push-plan wrapper; the domain `updatedAt`
+ * is used only when no wrapper stamp is supplied.
+ */
+function habitRow(habit: Habit, updatedAt?: string) {
+    return {
+        id: habit.id,
+        name: habit.name,
+        description: habit.description,
+        color: habit.color,
+        frequency: habit.frequency,
+        position: habit.position,
+        is_archived: habit.isArchived,
+        created_at: habit.createdAt,
+        updated_at: updatedAt ?? habit.updatedAt,
+    };
+}
+
+/**
+ * Serializes a habit completion into the JSON row shape the staged-sync RPC
+ * expects, mapping the domain `habitId` to the `habit_id` column.
+ */
+function habitCompletionRow(completion: HabitCompletion) {
+    return {
+        id: completion.id,
+        habit_id: completion.habitId,
+        bucket: completion.bucket,
+        created_at: completion.createdAt,
+        updated_at: completion.updatedAt,
     };
 }
 
@@ -132,6 +166,54 @@ export class SupabaseDataAccess implements SyncRemote {
         };
     }
 
+    private validateHabit(row: any): Habit {
+        if (
+            !row ||
+            typeof row.id !== "string" ||
+            typeof row.name !== "string" ||
+            typeof row.description !== "string" ||
+            typeof row.color !== "string" ||
+            !["daily", "weekly", "monthly"].includes(String(row.frequency)) ||
+            typeof row.position !== "number" ||
+            typeof row.is_archived !== "boolean" ||
+            typeof row.created_at !== "string" ||
+            typeof row.updated_at !== "string"
+        ) {
+            this.fail("habits", new Error(`invalid habit row for ${row?.id ?? "unknown"}`));
+        }
+        return {
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            color: row.color,
+            frequency: row.frequency,
+            position: row.position,
+            isArchived: row.is_archived,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        };
+    }
+
+    private validateHabitCompletion(row: any): HabitCompletion {
+        if (
+            !row ||
+            typeof row.id !== "string" ||
+            typeof row.habit_id !== "string" ||
+            typeof row.bucket !== "string" ||
+            typeof row.created_at !== "string" ||
+            typeof row.updated_at !== "string"
+        ) {
+            this.fail("habit_completions", new Error(`invalid completion row for ${row?.id ?? "unknown"}`));
+        }
+        return {
+            id: row.id,
+            habitId: row.habit_id,
+            bucket: row.bucket,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        };
+    }
+
     private validateTimer(value: unknown): ActiveTimer | null {
         if (value === null || value === undefined) return null;
         if (!isRecord(value) || typeof value.task_id !== "string" || typeof value.started_at !== "string" || typeof value.ends_at !== "string" || !["Work", "ShortBreak", "LongBreak"].includes(String(value.kind))) {
@@ -154,9 +236,11 @@ export class SupabaseDataAccess implements SyncRemote {
     async pull(expectedOwnerId: string): Promise<SyncSnapshot> {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
 
-        const [taskRows, logRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
+        const [taskRows, logRows, habitRows, completionRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
             this.page("tasks", ownerId, [{ column: "id" }]),
             this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
+            this.page("habits", ownerId, [{ column: "id" }]),
+            this.page("habit_completions", ownerId, [{ column: "habit_id" }, { column: "bucket" }, { column: "id" }]),
             this.client.from("settings").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("timer_state").select("data, completed, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("pm_state").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
@@ -177,6 +261,18 @@ export class SupabaseDataAccess implements SyncRemote {
             logs[row.id] = log;
         }
 
+        const habits: SyncSnapshot["habits"] = {};
+        for (const row of habitRows) {
+            const habit = this.validateHabit(row);
+            habits[row.id] = { value: habit, updatedAt: row.updated_at };
+        }
+
+        const habitCompletions: SyncSnapshot["habitCompletions"] = {};
+        for (const row of completionRows) {
+            const completion = this.validateHabitCompletion(row);
+            habitCompletions[row.id] = completion;
+        }
+
         const settingsData = settingsResponse.data?.data;
         if (settingsData !== undefined && !isSettings(settingsData)) {
             this.fail("settings", new Error(`invalid settings row for ${ownerId}`));
@@ -193,6 +289,8 @@ export class SupabaseDataAccess implements SyncRemote {
         const snapshot: SyncSnapshot = {
             tasks,
             logs,
+            habits,
+            habitCompletions,
             settings: {
                 value: settingsResponse.data ? clone(settingsData) : null,
                 updatedAt: settingsResponse.data?.updated_at ?? null,
@@ -278,6 +376,18 @@ export class SupabaseDataAccess implements SyncRemote {
             p_log_upserts: plan.logUpserts.length ? plan.logUpserts.map((log) => ({ ...log })) : null,
             p_log_tombstones: plan.logTombstones.length
                 ? plan.logTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
+                : null,
+            p_habit_upserts: plan.habitUpserts.length
+                ? plan.habitUpserts.map(({ value, updatedAt }) => habitRow(value, updatedAt))
+                : null,
+            p_habit_tombstones: plan.habitTombstones.length
+                ? plan.habitTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
+                : null,
+            p_habit_completion_upserts: plan.habitCompletionUpserts.length
+                ? plan.habitCompletionUpserts.map(habitCompletionRow)
+                : null,
+            p_habit_completion_tombstones: plan.habitCompletionTombstones.length
+                ? plan.habitCompletionTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
                 : null,
             p_settings_data: plan.settings?.value ?? null,
             p_settings_updated_at: plan.settings?.updatedAt ?? null,

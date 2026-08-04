@@ -1,4 +1,4 @@
-import type { ActiveTimer, AppStateData, PomodoroLogEntry, Settings, Task } from "../../../state/types";
+import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
 import { defaultAppState } from "../../engine";
 import { deepValuesEqual } from "../staging/serialization";
@@ -26,6 +26,8 @@ export class MergeError extends Error {
 const EMPTY_SNAPSHOT: SyncSnapshot = {
     tasks: {},
     logs: {},
+    habits: {},
+    habitCompletions: {},
     settings: { value: null, updatedAt: null },
     timerState: { value: null, updatedAt: null, completed: false },
     pmState: { value: null, updatedAt: null },
@@ -39,6 +41,21 @@ const TASK_FIELDS: ReadonlyArray<keyof Task> = [
     "completed_at",
     "break_skips",
     "archived",
+];
+
+/**
+ * Persisted habit fields used for the field-level three-way merge. `id` is the
+ * identity key and `updatedAt` is derived from the merged row timestamp, so
+ * neither participates in the per-field decisions.
+ */
+const HABIT_FIELDS: ReadonlyArray<keyof Habit> = [
+    "name",
+    "description",
+    "color",
+    "frequency",
+    "position",
+    "isArchived",
+    "createdAt",
 ];
 
 function valuesEqual(a: unknown, b: unknown): boolean {
@@ -81,6 +98,18 @@ export function timestampMs(value: string): number {
         throw new MergeError(`Invalid timestamp "${value}" cannot be ordered safely`);
     }
     return ms;
+}
+
+/**
+ * The smallest deterministic timestamp strictly later than `value`. ISO
+ * timestamps carry millisecond precision, so one millisecond is enough to
+ * satisfy the RPC's strict `excluded.updated_at > stored.updated_at` LWW gate
+ * without depending on the wall clock. Used when a synthesized habit row that
+ * must be re-pushed would otherwise carry a stamp equal to the pulled remote
+ * row's timestamp, which the server would reject as a no-op.
+ */
+function strictlyAfter(value: string): string {
+    return new Date(timestampMs(value) + 1).toISOString();
 }
 
 /**
@@ -271,6 +300,221 @@ function mergeLogs(
     return { logs, tombstones };
 }
 
+interface MergedHabits {
+    habits: Record<string, Habit>;
+    stamps: Record<string, string>;
+    tombstones: Record<string, { id: string; deletedAt: string }>;
+}
+
+/**
+ * Field-level three-way merge for a habit present on both branches, parallel to
+ * `mergeTaskRow`. For each persisted field a change on only one branch is kept
+ * from that branch; when both changed it, the row with the later timestamp wins
+ * and the remote value wins an exact tie. `Habit.updatedAt` is domain data that
+ * mirrors the transport LWW stamp, so the merged value carries the authored
+ * timestamp while the caller records the same value as the pending push stamp.
+ *
+ * A synthesized row that differs from the pulled remote row must be re-pushed,
+ * but the RPC LWW gate rejects an equal (or older) stamp as a no-op the client
+ * would otherwise acknowledge as successful. When the merged stamp is not
+ * strictly later than the remote timestamp, it is bumped deterministically so
+ * the re-push is accepted and the next pull observes a converged row.
+ */
+function mergeHabitRow(
+    localHabit: Habit,
+    localStamp: string | undefined,
+    remoteRow: { value: Habit; updatedAt: string },
+    baseRow: { value: Habit; updatedAt: string } | undefined,
+    now: Date,
+): { value: Habit; updatedAt: string } {
+    const base = baseRow?.value;
+    const localTs = localStamp ?? baseRow?.updatedAt;
+    const remoteTs = remoteRow.updatedAt;
+
+    const merged: Record<string, unknown> = { ...localHabit };
+    for (const field of HABIT_FIELDS) {
+        const localChanged = base === undefined || localHabit[field] !== base[field];
+        const remoteChanged = base === undefined || remoteRow.value[field] !== base[field];
+        if (remoteChanged && localChanged) {
+            // Both branches changed this field: later updated_at wins, remote wins ties.
+            if (remoteTs !== undefined && (localTs === undefined || timestampMs(remoteTs) >= timestampMs(localTs))) {
+                merged[field] = remoteRow.value[field];
+            }
+        } else if (remoteChanged) {
+            merged[field] = remoteRow.value[field];
+        }
+        // Local-only or no change keeps the local (== baseline) value.
+    }
+
+    let updatedAt =
+        localTs !== undefined && remoteTs !== undefined
+            ? timestampMs(localTs) >= timestampMs(remoteTs)
+                ? localTs
+                : remoteTs
+            : (localTs ?? remoteTs ?? now.toISOString());
+    merged.updatedAt = updatedAt;
+    const mergedHabit = merged as unknown as Habit;
+
+    // Compare against the remote row while `mergedHabit.updatedAt` still equals
+    // the un-bumped value so only genuine field divergence re-pushes.
+    if (!valuesEqual(mergedHabit, remoteRow.value) && timestampMs(updatedAt) <= timestampMs(remoteTs)) {
+        updatedAt = strictlyAfter(remoteTs);
+        mergedHabit.updatedAt = updatedAt;
+    }
+    return { value: mergedHabit, updatedAt };
+}
+
+/**
+ * Merges every habit id in the union of baseline/local/remote/tombstones using
+ * the same rules as tasks: remote absence of a baseline row is a remote
+ * deletion, a locally created habit (never in the baseline) survives it, and a
+ * local tombstone competes with a remote row by `deletedAt` versus `updatedAt`
+ * so a newer remote update revives the habit while the remote already lacking
+ * the row clears the tombstone.
+ */
+function mergeHabits(
+    localHabits: Record<string, Habit>,
+    habitUpdatedAt: Record<string, string>,
+    habitTombstones: Record<string, { id: string; deletedAt: string }>,
+    base: SyncSnapshot,
+    remote: SyncSnapshot,
+    now: Date,
+): MergedHabits {
+    const habits: Record<string, Habit> = {};
+    const stamps: Record<string, string> = {};
+    const tombstones: Record<string, { id: string; deletedAt: string }> = {};
+
+    const ids = new Set<string>([
+        ...Object.keys(base.habits),
+        ...Object.keys(localHabits),
+        ...Object.keys(habitTombstones),
+        ...Object.keys(remote.habits),
+    ]);
+
+    for (const id of ids) {
+        const baseRow = base.habits[id];
+        const localHabit = localHabits[id];
+        const localTombstone = habitTombstones[id];
+        const remoteRow = remote.habits[id];
+
+        if (localTombstone) {
+            if (remoteRow && timestampMs(remoteRow.updatedAt) > timestampMs(localTombstone.deletedAt)) {
+                // A newer remote update revives the habit and clears the tombstone.
+                habits[id] = { ...remoteRow.value };
+            } else if (remoteRow) {
+                // The newer deletion wins and remains pending against the pull.
+                tombstones[id] = { id, deletedAt: localTombstone.deletedAt };
+            }
+            // No remote row: the remote already deleted it (or never had it),
+            // so the tombstone is no longer pending work.
+            continue;
+        }
+
+        if (!localHabit) {
+            if (remoteRow) {
+                habits[id] = { ...remoteRow.value };
+            }
+            continue;
+        }
+
+        if (!remoteRow) {
+            if (!baseRow) {
+                // Locally created after the baseline; remote never had it.
+                const stamp = habitUpdatedAt[id];
+                if (stamp === undefined) {
+                    throw new MergeError(`Locally-created habit "${id}" has no updated_at stamp`);
+                }
+                habits[id] = { ...localHabit };
+                stamps[id] = stamp;
+            } else {
+                // A remote deletion only wins over the unchanged baseline. If
+                // this device edited the habit after that baseline, preserve the
+                // newer local value and re-send it as an upsert.
+                const localStamp = habitUpdatedAt[id];
+                if (
+                    localStamp !== undefined &&
+                    timestampMs(localStamp) > timestampMs(baseRow.updatedAt) &&
+                    !valuesEqual(localHabit, baseRow.value)
+                ) {
+                    habits[id] = { ...localHabit };
+                    stamps[id] = localStamp;
+                }
+            }
+            // Remote absence of a baseline row is a remote deletion; adopt it.
+            continue;
+        }
+
+        // Both branches present: field-level three-way merge.
+        const merged = mergeHabitRow(localHabit, habitUpdatedAt[id], remoteRow, baseRow, now);
+        habits[id] = merged.value;
+        if (!valuesEqual(merged.value, remoteRow.value)) {
+            stamps[id] = merged.updatedAt;
+        }
+    }
+
+    return { habits, stamps, tombstones };
+}
+
+interface MergedHabitCompletions {
+    habitCompletions: Record<string, HabitCompletion>;
+    tombstones: Record<string, { id: string; deletedAt: string }>;
+}
+
+/**
+ * Habit completions merge by the database idempotency key as well as by row
+ * id. A completion present on both branches with the same id collapses to one
+ * (the remote value wins). A local completion whose `(habitId, bucket)` is
+ * already occupied by a different remote completion id is dropped in favor of
+ * the pulled/server row, because the RPC replays a second id for that bucket
+ * as a no-op through the `(habit_id, bucket)` unique constraint; keeping the
+ * local id would leave a permanent ghost upsert that can never converge. A
+ * tombstoned id is excluded, and a tombstone remains pending only while the
+ * pulled remote snapshot still carries that completion id.
+ */
+function mergeHabitCompletions(
+    localCompletions: Record<string, HabitCompletion>,
+    habitCompletionTombstones: Record<string, { id: string; deletedAt: string }>,
+    remote: SyncSnapshot,
+): MergedHabitCompletions {
+    const merged = new Map<string, HabitCompletion>();
+    for (const [id, completion] of Object.entries(localCompletions)) {
+        if (!habitCompletionTombstones[id]) merged.set(id, completion);
+    }
+
+    // Track which id owns each (habitId, bucket) in the running merged set so a
+    // conflicting local id can be dropped when the server's row claims the key.
+    const bucketOwner = new Map<string, string>();
+    for (const [id, completion] of merged) {
+        bucketOwner.set(`${completion.habitId}\u0000${completion.bucket}`, id);
+    }
+
+    for (const [id, completion] of Object.entries(remote.habitCompletions)) {
+        if (habitCompletionTombstones[id]) continue;
+        const key = `${completion.habitId}\u0000${completion.bucket}`;
+        if (merged.has(id)) {
+            // Same id on both branches: the pulled row wins the value.
+            merged.set(id, completion);
+            continue;
+        }
+        const occupant = bucketOwner.get(key);
+        if (occupant !== undefined && occupant !== id) {
+            // This bucket is already held by a local id the database could
+            // never insert; prefer the pulled/server completion and drop the
+            // local ghost entirely so pending state can converge.
+            merged.delete(occupant);
+        }
+        merged.set(id, completion);
+        bucketOwner.set(key, id);
+    }
+
+    const tombstones: Record<string, { id: string; deletedAt: string }> = {};
+    for (const [id, tombstone] of Object.entries(habitCompletionTombstones)) {
+        if (remote.habitCompletions[id]) tombstones[id] = { id, deletedAt: tombstone.deletedAt };
+    }
+
+    return { habitCompletions: Object.fromEntries(merged), tombstones };
+}
+
 /**
  * Whole-row three-way merge for settings/timer/PM singleton rows. An unchanged
  * branch yields to the changed branch; a true conflict uses `updatedAt` with
@@ -324,14 +568,72 @@ function mergeSingletonValue<T>(
 }
 
 /**
+ * Habit deltas relative to the baseline, mirroring the staging store's counter:
+ * each current habit that differs from `base.habits` and carries a new/different
+ * `habitUpdatedAt` stamp counts as one item; each habit tombstone counts only
+ * while the baseline still carries that habit.
+ */
+function countHabitDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const habitIds = new Set<string>([...Object.keys(record.habits), ...Object.keys(base.habits)]);
+    for (const id of habitIds) {
+        const current = record.habits[id];
+        if (!current) continue; // local removal is represented by its tombstone below.
+        const baseline = base.habits[id];
+        const localStamp = record.habitUpdatedAt[id];
+        const baselineStamp = baseline?.updatedAt;
+        const valueUnchanged = baseline !== undefined && deepValuesEqual(current, baseline.value);
+        const neverTouchedLocally = baseline !== undefined && localStamp === undefined;
+        const stampUnchanged = baseline !== undefined && localStamp === baselineStamp;
+        if (valueUnchanged && (neverTouchedLocally || stampUnchanged)) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.habitTombstones)) {
+        if (base.habits[id]) count += 1;
+    }
+    return count;
+}
+
+/**
+ * Habit completion deltas relative to the baseline, mirroring the staging
+ * store's counter: each current completion whose value differs from
+ * `base.habitCompletions[id]` counts as one item; each completion tombstone
+ * counts only while the baseline still carries it.
+ */
+function countHabitCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const completionIds = new Set<string>([
+        ...Object.keys(record.habitCompletions),
+        ...Object.keys(base.habitCompletions),
+    ]);
+    for (const id of completionIds) {
+        const current = record.habitCompletions[id];
+        if (!current) continue;
+        const baseline = base.habitCompletions[id] ?? null;
+        if (baseline !== null && deepValuesEqual(current, baseline)) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.habitCompletionTombstones)) {
+        if (base.habitCompletions[id]) count += 1;
+    }
+    return count;
+}
+
+/**
  * Pending work in a record relative to `base`, mirroring the staging store's
  * entity-based counting so `MergeResult.pendingCount` matches the persisted
- * record's `pendingCount()`.
+ * record's `pendingCount()`. A full wipe counts as one scoped change plus one
+ * more for PM when it differs plus every habit/completion delta, instead of
+ * counting every removed row.
  */
 function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
     if (!record.initialized) return 0;
     if (record.fullWipe) {
-        return pmDiffers(record, base) ? 2 : 1;
+        let count = 1;
+        if (pmDiffers(record, base)) count += 1;
+        count += countHabitDeltas(record, base);
+        count += countHabitCompletionDeltas(record, base);
+        return count;
     }
 
     let count = 0;
@@ -381,6 +683,9 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
     }
     if (pmDiffers(record, base)) count += 1;
 
+    count += countHabitDeltas(record, base);
+    count += countHabitCompletionDeltas(record, base);
+
     return count;
 }
 
@@ -397,7 +702,11 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
     if (record.fullWipe) {
         // A scoped full wipe overrides remote tasks/logs/settings/timer with
         // engine defaults, retains the wipe marker, and merges PM normally.
+        // Habits and completions are outside the wipe scope and merge against
+        // base and remote exactly like an ordinary pull.
         const pm = mergeSingletonValue(record.pmState, record.pmUpdatedAt, remote.pmState, base.pmState, now);
+        const habits = mergeHabits(record.habits, record.habitUpdatedAt, record.habitTombstones, base, remote, now);
+        const completions = mergeHabitCompletions(record.habitCompletions, record.habitCompletionTombstones, remote);
         const merged: StagedOwnerRecord = {
             ...record,
             initialized: true,
@@ -410,6 +719,11 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             timerUpdatedAt: record.fullWipe.createdAt,
             pmState: pm.value,
             pmUpdatedAt: pm.stamp,
+            habits: habits.habits,
+            habitCompletions: completions.habitCompletions,
+            habitUpdatedAt: habits.stamps,
+            habitTombstones: habits.tombstones,
+            habitCompletionTombstones: completions.tombstones,
             unbootstrapped: false,
         };
         return { record: merged, remoteBaseline: remote, pendingCount: countPending(merged, remote) };
@@ -417,6 +731,8 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
 
     const tasks = mergeTasks(record.state, record.taskUpdatedAt, record.taskTombstones, base, remote, now);
     const logs = mergeLogs(record.state.logs, record.logTombstones, remote);
+    const habits = mergeHabits(record.habits, record.habitUpdatedAt, record.habitTombstones, base, remote, now);
+    const completions = mergeHabitCompletions(record.habitCompletions, record.habitCompletionTombstones, remote);
     const settings = mergeSingletonValue<Settings>(
         record.state.settings,
         record.settingsUpdatedAt,
@@ -464,10 +780,92 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         timerCompleted,
         pmState: pm.value,
         pmUpdatedAt: pm.stamp,
+        habits: habits.habits,
+        habitCompletions: completions.habitCompletions,
+        habitUpdatedAt: habits.stamps,
+        habitTombstones: habits.tombstones,
+        habitCompletionTombstones: completions.tombstones,
         unbootstrapped: false,
     };
 
     return { record: merged, remoteBaseline: remote, pendingCount: countPending(merged, remote) };
+}
+
+interface HabitDeltas {
+    upserts: PushPlan["habitUpserts"];
+    upsertAcks: AcknowledgedChanges["habitUpserts"];
+    tombstones: PushPlan["habitTombstones"];
+    tombstoneAcks: AcknowledgedChanges["habitTombstones"];
+}
+
+/**
+ * Habit deltas relative to `base`. An upsert is emitted only when the current
+ * value differs from the baseline row and the id carries a `habitUpdatedAt`
+ * stamp (a changed unstamped habit is a corruption error). Tombstones are
+ * emitted only while the baseline still carries the habit. These deltas are
+ * independent of `completionMask` and of any full-wipe scope.
+ */
+function habitDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot): HabitDeltas {
+    const upserts: PushPlan["habitUpserts"] = [];
+    const upsertAcks: AcknowledgedChanges["habitUpserts"] = {};
+    const habitIds = new Set<string>([...Object.keys(record.habits), ...Object.keys(base.habits)]);
+    for (const id of habitIds) {
+        const current = record.habits[id];
+        if (!current) continue;
+        const baseline = base.habits[id];
+        if (baseline !== undefined && valuesEqual(current, baseline.value)) continue;
+        const updatedAt = record.habitUpdatedAt[id];
+        if (updatedAt === undefined) {
+            throw new MergeError(`Habit "${id}" differs from the baseline but has no updated_at stamp`);
+        }
+        upserts.push({ value: { ...current }, updatedAt });
+        upsertAcks[id] = { value: { ...current }, updatedAt };
+    }
+
+    const tombstones: PushPlan["habitTombstones"] = [];
+    const tombstoneAcks: AcknowledgedChanges["habitTombstones"] = {};
+    for (const [id, tombstone] of Object.entries(record.habitTombstones)) {
+        if (!base.habits[id]) continue; // redundant tombstone: nothing to delete on the server
+        tombstones.push({ id, deletedAt: tombstone.deletedAt });
+        tombstoneAcks[id] = { deletedAt: tombstone.deletedAt };
+    }
+
+    return { upserts, upsertAcks, tombstones, tombstoneAcks };
+}
+
+interface CompletionDeltas {
+    upserts: PushPlan["habitCompletionUpserts"];
+    upsertAcks: AcknowledgedChanges["habitCompletionUpserts"];
+    tombstones: PushPlan["habitCompletionTombstones"];
+    tombstoneAcks: AcknowledgedChanges["habitCompletionTombstones"];
+}
+
+/**
+ * Habit completion deltas relative to `base`. An upsert is emitted when the
+ * current completion differs from its baseline row; the exact row is
+ * acknowledged. Tombstones are emitted only while the baseline still carries
+ * the completion id. These deltas are independent of `completionMask` and of
+ * any full-wipe scope.
+ */
+function completionDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot): CompletionDeltas {
+    const upserts: PushPlan["habitCompletionUpserts"] = [];
+    const upsertAcks: AcknowledgedChanges["habitCompletionUpserts"] = {};
+    for (const [id, completion] of Object.entries(record.habitCompletions)) {
+        const baseline = base.habitCompletions[id];
+        if (baseline !== undefined && valuesEqual(completion, baseline)) continue;
+        upserts.push({ ...completion });
+        upsertAcks[id] = { ...completion };
+    }
+
+    const tombstones: PushPlan["habitCompletionTombstones"] = [];
+    const tombstoneAcks: AcknowledgedChanges["habitCompletionTombstones"] = {};
+    for (const [id, tombstone] of Object.entries(record.habitCompletionTombstones)) {
+        if (!base.habitCompletions[id]) continue;
+        tombstones.push({ id, deletedAt: tombstone.deletedAt });
+        tombstoneAcks[id] = { deletedAt: tombstone.deletedAt };
+    }
+
+    return { upserts, upsertAcks, tombstones, tombstoneAcks };
 }
 
 /**
@@ -496,6 +894,10 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         taskTombstones: {},
         logUpserts: {},
         logTombstones: {},
+        habitUpserts: {},
+        habitTombstones: {},
+        habitCompletionUpserts: {},
+        habitCompletionTombstones: {},
         settings: null,
         timerState: null,
         pmState: null,
@@ -519,18 +921,30 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         if (record.pmState !== null && pmDiffers(record, base)) {
             pmState = { value: record.pmState, updatedAt: record.pmUpdatedAt ?? record.fullWipe.createdAt };
         }
+        // Habit/completion deltas are outside the wipe scope and still ride the
+        // wipe request so durable habit work is never dropped by a reset.
+        const habits = habitDeltasOf(record, base);
+        const completions = completionDeltasOf(record, base);
         return {
             baseRevision: record.revision,
             taskUpserts: [],
             taskTombstones: [],
             logUpserts: [],
             logTombstones: [],
+            habitUpserts: habits.upserts,
+            habitTombstones: habits.tombstones,
+            habitCompletionUpserts: completions.upserts,
+            habitCompletionTombstones: completions.tombstones,
             settings,
             timerState,
             pmState,
             fullWipe: true,
             acknowledged: {
                 ...acknowledged,
+                habitUpserts: habits.upsertAcks,
+                habitTombstones: habits.tombstoneAcks,
+                habitCompletionUpserts: completions.upsertAcks,
+                habitCompletionTombstones: completions.tombstoneAcks,
                 settings,
                 timerState,
                 pmState,
@@ -620,12 +1034,22 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         acknowledged.pmState = pmState;
     }
 
+    // Habit/completion deltas never depend on the completion mask, so they are
+    // built outside the masked task/log/timer section and always travel with the
+    // ordinary plan.
+    const habits = habitDeltasOf(record, base);
+    const completions = completionDeltasOf(record, base);
+
     return {
         baseRevision: record.revision,
         taskUpserts,
         taskTombstones,
         logUpserts,
         logTombstones,
+        habitUpserts: habits.upserts,
+        habitTombstones: habits.tombstones,
+        habitCompletionUpserts: completions.upserts,
+        habitCompletionTombstones: completions.tombstones,
         settings,
         timerState,
         pmState,
@@ -636,6 +1060,10 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             taskTombstones: taskTombstoneAcks,
             logUpserts: logUpsertAcks,
             logTombstones: logTombstoneAcks,
+            habitUpserts: habits.upsertAcks,
+            habitTombstones: habits.tombstoneAcks,
+            habitCompletionUpserts: completions.upsertAcks,
+            habitCompletionTombstones: completions.tombstoneAcks,
         },
     };
 }
@@ -692,8 +1120,36 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
     }
     next = { ...next, logTombstones };
 
-    // Log upserts have no marker to clear; once `pushed` contains them the
-    // entity-based pending detection stops counting them.
+    let habitUpdatedAt = next.habitUpdatedAt;
+    for (const [id, acknowledged] of Object.entries(ack.habitUpserts)) {
+        const current = next.habits[id];
+        if (current && valuesEqual(current, acknowledged.value) && habitUpdatedAt[id] === acknowledged.updatedAt) {
+            habitUpdatedAt = omitStamp(habitUpdatedAt, id);
+        }
+    }
+    next = { ...next, habitUpdatedAt };
+
+    let habitTombstones = next.habitTombstones;
+    for (const [id, acknowledged] of Object.entries(ack.habitTombstones)) {
+        const current = habitTombstones[id];
+        if (current && current.deletedAt === acknowledged.deletedAt) {
+            habitTombstones = omitTombstone(habitTombstones, id);
+        }
+    }
+    next = { ...next, habitTombstones };
+
+    let habitCompletionTombstones = next.habitCompletionTombstones;
+    for (const [id, acknowledged] of Object.entries(ack.habitCompletionTombstones)) {
+        const current = habitCompletionTombstones[id];
+        if (current && current.deletedAt === acknowledged.deletedAt) {
+            habitCompletionTombstones = omitTombstone(habitCompletionTombstones, id);
+        }
+    }
+    next = { ...next, habitCompletionTombstones };
+
+    // Log upserts and habit completion upserts have no marker to clear; once
+    // `pushed` contains them the entity-based pending detection stops counting
+    // them.
 
     if (ack.settings) {
         if (

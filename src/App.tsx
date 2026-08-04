@@ -7,6 +7,7 @@ import { TimerPanel } from "./components/TimerPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useSounds } from "./hooks/useSounds";
 import { ProjectManagerProvider } from "./state/ProjectManagerContext";
+import { HabitProvider } from "./state/HabitContext";
 import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPage";
 import { AppStateProvider } from "./state/AppStateContext";
 import AnalyticsPage from "./components/AnalyticsPage";
@@ -62,12 +63,14 @@ const AuthenticatedShell: React.FC = () => {
             <SyncProvider ownerId={session!.user.id}>
                 <AppStateProvider>
                     <ProjectManagerProvider>
-                        <StateSyncBridge />
-                        <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
-                            <TopNav />
-                            <UnsyncedBanner />
-                            <div className="flex-1 min-h-0"><Outlet /></div>
-                        </div>
+                        <HabitProvider>
+                            <StateSyncBridge />
+                            <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
+                                <TopNav />
+                                <UnsyncedBanner />
+                                <div className="flex-1 min-h-0"><Outlet /></div>
+                            </div>
+                        </HabitProvider>
                     </ProjectManagerProvider>
                 </AppStateProvider>
             </SyncProvider>
