@@ -2,7 +2,7 @@ import { Browser, BrowserContext, expect, Page } from "@playwright/test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAuthStorageKey } from "../src/lib/supabaseAuthStorage";
 import { createLocalUser, localSupabaseConfig, type LocalUser } from "../tests/supabase/localSupabase";
-import { AppStateData, Settings } from "../src/state/types";
+import { AppStateData, Habit, HabitCompletion, Settings } from "../src/state/types";
 
 export interface TestApp {
     context: BrowserContext;
@@ -74,6 +74,39 @@ export async function backendPMState(app: TestApp) {
     return response.data?.data ?? null;
 }
 
+export async function backendHabitState(app: TestApp): Promise<{
+    habits: Record<string, Habit>;
+    completions: Record<string, HabitCompletion>;
+}> {
+    const [habits, completions] = await Promise.all([
+        app.client.from("habits").select("*").order("position").order("id"),
+        app.client.from("habit_completions").select("*").order("habit_id").order("bucket").order("id"),
+    ]);
+    if (habits.error) throw habits.error;
+    if (completions.error) throw completions.error;
+
+    return {
+        habits: Object.fromEntries((habits.data ?? []).map((habit: any) => [habit.id, {
+            id: habit.id,
+            name: habit.name,
+            description: habit.description,
+            color: habit.color,
+            frequency: habit.frequency,
+            position: habit.position,
+            isArchived: habit.is_archived,
+            createdAt: habit.created_at,
+            updatedAt: habit.updated_at,
+        } satisfies Habit])),
+        completions: Object.fromEntries((completions.data ?? []).map((completion: any) => [completion.id, {
+            id: completion.id,
+            habitId: completion.habit_id,
+            bucket: completion.bucket,
+            createdAt: completion.created_at,
+            updatedAt: completion.updated_at,
+        } satisfies HabitCompletion])),
+    };
+}
+
 /** Push staged browser state before an assertion reads Supabase. */
 export async function syncData(page: Page): Promise<void> {
     const button = page.getByRole("button", { name: /Sync data/ });
@@ -81,10 +114,11 @@ export async function syncData(page: Page): Promise<void> {
     // Sync until the staged store drains. A single sync can succeed while a
     // same-tab write (the estimate/PM bridge) lands during the sync and stays
     // pending, so retry a bounded number of times. Each attempt waits for the
-    // button to cycle, proving that sync's coordinator attempt settled.
+    // button to cycle when the request is still in flight. Very small pushes
+    // can settle before Playwright observes the transient disabled state.
     for (let attempt = 0; attempt < 5; attempt += 1) {
         await button.click();
-        await expect(button).toBeDisabled();
+        try { await expect(button).toBeDisabled({ timeout: 1000 }); } catch { /* Sync settled before the disabled state was observed. */ }
         await expect(button).toBeEnabled();
         try {
             await expect(badge).toHaveCount(0, { timeout: 2000 });
@@ -98,7 +132,7 @@ export async function syncData(page: Page): Promise<void> {
     // write or focus event fires during the assertion window, so accept either
     // settled text rather than asserting the exact success string.
     await expect(badge).toHaveCount(0);
-    await expect(page.getByRole("status")).toHaveText(/Synced|Ready/);
+    await expect(page.getByTestId("sync-status")).toHaveText(/Synced|Ready/);
 }
 
 export const defaultSettings: Settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };

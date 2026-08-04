@@ -184,6 +184,44 @@ describe("SupabaseDataAccess transport", () => {
         expect((await user.client.from("pm_state").select("owner_id")).data).toHaveLength(1);
     });
 
+    it("applies habit tombstones and completion identity through the staged-sync RPC", async () => {
+        user = await createLocalUser();
+        const remote = new SupabaseDataAccess(user.client);
+        const pushedHabit = habit(HABIT_ID, "Tombstone habit");
+        const pushedCompletion = completion(COMPLETION_ID, HABIT_ID);
+        const plan: PushPlan = {
+            ...emptyPlan(),
+            habitUpserts: [{ value: pushedHabit, updatedAt: T0 }],
+            habitCompletionUpserts: [pushedCompletion],
+        };
+
+        await remote.push(user.userId, plan);
+        await remote.push(user.userId, plan);
+        expect((await user.client.from("habits").select("id")).data).toHaveLength(1);
+        expect((await user.client.from("habit_completions").select("id")).data).toHaveLength(1);
+
+        // The (habit_id, bucket) identity makes a replay with another client id
+        // idempotent and preserves the first completion identity.
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            habitCompletionUpserts: [completion("00000000-0000-4000-8000-100000000005", HABIT_ID)],
+        });
+        const replayed = await user.client.from("habit_completions").select("id").single();
+        expect(replayed.error).toBeNull();
+        expect(replayed.data!.id).toBe(COMPLETION_ID);
+
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            habitTombstones: [{ id: HABIT_ID, deletedAt: LATER }],
+            habitCompletionTombstones: [{ id: COMPLETION_ID, deletedAt: LATER }],
+        });
+        expect((await user.client.from("habits").select("id")).data).toHaveLength(0);
+        expect((await user.client.from("habit_completions").select("id")).data).toHaveLength(0);
+        const pulled = await remote.pull(user.userId);
+        expect(pulled.habits).toEqual({});
+        expect(pulled.habitCompletions).toEqual({});
+    });
+
     it("refreshes an active session and rejects a refresh without a session", async () => {
         user = await createLocalUser();
         const remote = new SupabaseDataAccess(user.client);
