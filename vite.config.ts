@@ -1,7 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
-import { readPublicAppEnv } from "./src/lib/supabaseEnv";
+import { readPublicAppEnv } from "./src/lib/supabaseEnv.ts";
 
 // https://vite.dev/config/
 export default defineConfig(({ mode, command }) => {

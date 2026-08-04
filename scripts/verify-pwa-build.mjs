@@ -38,9 +38,11 @@ const generatedFiles = filesUnder(dist);
 if (!generatedFiles.some((path) => /^sw(?:-[\w-]+)?\.js$/.test(path.slice(dist.length + 1)))) failures.push("generated service worker is missing");
 // Assert registration behavior rather than minified formatting: workbox-window's `navigator.serviceWorker.register`
 // call and the absolute "/sw.js" URL the plugin substitutes for `__SW__` when `base: "/"`.
-// Both are property/string literals (never renamed by esbuild); pinned to vite-plugin-pwa ^1.3.0.
+// The substituted URL is a literal (never renamed by the minifier), but the minifier may emit it
+// as a double-quoted string or a template literal depending on the bundler in use.
 const generatedJs = generatedFiles.filter((path) => path.endsWith(".js")).map((path) => readFileSync(path, "utf8")).join("\n");
-if (!generatedJs.includes("navigator.serviceWorker.register") || !generatedJs.includes('"/sw.js"')) failures.push("generated service-worker registration code is missing");
+const registersAbsoluteSwUrl = generatedJs.includes('"/sw.js"') || generatedJs.includes("`/sw.js`");
+if (!generatedJs.includes("navigator.serviceWorker.register") || !registersAbsoluteSwUrl) failures.push("generated service-worker registration code is missing");
 
 if (failures.length) {
     console.error("PWA verification failed:");
