@@ -2,9 +2,9 @@
 
 ## Updating
 
-1. Run `npm version <patch|minor|major>` to bump the app version (automatically updates `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`).
+1. Run `pnpm version <patch|minor|major>` to bump the app version (automatically updates `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`).
 2. Run `pnpm install` to make sure dependencies are up to date.
-3. Run `npm run build`.
-4. Run `npm run tauri dev` to ensure the changes worked
-5. Run `npm run tauri build`.
+3. Run `pnpm build`.
+4. Run `pnpm app` to ensure the changes worked
+5. Run `pnpm tauri build`.
 6. Run the new MSI file in `target/release/bundle/msi`.
