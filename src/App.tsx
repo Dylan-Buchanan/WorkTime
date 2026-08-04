@@ -24,6 +24,7 @@ import { LoginPage } from "./components/auth/LoginPage";
 import { SignupPage } from "./components/auth/SignupPage";
 import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
 import { TauriCloseProvider } from "./state/TauriCloseContext";
+import { HabitsPage } from "./components/HabitsPage";
 
 const App: React.FC = () => (
     <BrowserRouter>
@@ -40,6 +41,7 @@ const App: React.FC = () => (
                         <Route path="/" element={<MainLayout />} />
                         <Route path="/projects" element={<ErrorBoundary><ProjectManagerPage /></ErrorBoundary>} />
                         <Route path="/analytics" element={<AnalyticsPage />} />
+                        <Route path="/habits" element={<HabitsPage />} />
                     </Route>
                 </Route>
                 <Route path="*" element={<UnknownRoute />} />
@@ -101,6 +103,7 @@ const TopNav: React.FC = () => {
             <Link to="/" onClick={() => handleClick("/")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname === "/")}>Timer</Link>
             <Link to="/projects" onClick={() => handleClick("/projects")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/projects"))}>Projects</Link>
             <Link to="/analytics" onClick={() => handleClick("/analytics")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/analytics"))}>Analytics</Link>
+            <Link to="/habits" onClick={() => handleClick("/habits")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/habits"))}>Habits</Link>
             <div className="ml-auto flex items-center gap-2">
                 {error && <span role="alert" className="text-red-300">{error}</span>}
                 <SyncControls />
