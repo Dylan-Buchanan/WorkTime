@@ -2,8 +2,8 @@ import type { HabitFrequency } from "../../state/types";
 
 export type { Habit, HabitCompletion, HabitFrequency } from "../../state/types";
 
-export type HabitWindow = "week" | "month" | "year";
-export type HabitWindowInput = HabitWindow | "day" | "7" | "30" | "365";
+export type HabitWindow = "day" | "week" | "month" | "year";
+export type HabitWindowInput = HabitWindow | "7" | "30" | "365";
 
 export interface HabitGridCell {
     bucket: string;

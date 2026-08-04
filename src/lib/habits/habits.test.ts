@@ -96,6 +96,16 @@ describe("habit windows and visibility", () => {
         expect(filterVisibleHabits(habits, "30").map(({ id }) => id)).toEqual(["daily", "weekly"]);
         expect(filterVisibleHabits(habits, "365").map(({ id }) => id)).toEqual(["daily", "weekly", "monthly"]);
     });
+
+    it("renders a single today bucket for the day window, distinct from the week", () => {
+        // The Day selector is not a duplicate of Week: it shows only today's
+        // daily cell, while Week shows the full Sunday-through-Saturday window.
+        expect(getWindowBuckets("day", "daily", now)).toEqual(["2026-07-15"]);
+        expect(getWindowBuckets("day", "weekly", now)).toEqual([]);
+        expect(getWindowBuckets("week", "daily", now)).toHaveLength(7);
+        expect(visibleFrequencies("day")).toEqual(["daily"]);
+        expect(filterVisibleHabits([habit("weekly", "weekly")], "day")).toEqual([]);
+    });
 });
 
 describe("habit checkability and grids", () => {

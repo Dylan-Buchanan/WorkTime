@@ -2,7 +2,7 @@ import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PomodoroLogEntr
 import type { SyncedPMState } from "../DataAccess";
 import { defaultAppState } from "../../engine";
 import { deepValuesEqual } from "../staging/serialization";
-import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue } from "../staging/types";
+import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone } from "../staging/types";
 import type { AcknowledgedChanges, MergeResult, PushPlan } from "./types";
 import { completionMask } from "./timerCompletions";
 
@@ -457,7 +457,7 @@ function mergeHabits(
 
 interface MergedHabitCompletions {
     habitCompletions: Record<string, HabitCompletion>;
-    tombstones: Record<string, { id: string; deletedAt: string }>;
+    tombstones: Record<string, HabitCompletionTombstone>;
 }
 
 /**
@@ -470,15 +470,31 @@ interface MergedHabitCompletions {
  * local id would leave a permanent ghost upsert that can never converge. A
  * tombstoned id is excluded, and a tombstone remains pending only while the
  * pulled remote snapshot still carries that completion id.
+ *
+ * Cascaded completion tombstones carry the parent habit id as provenance and
+ * are suppressed when that habit survived the merge: a newer remote habit
+ * update that revives the parent means the hard-delete intent lost, so the
+ * completion history must survive instead of being pushed as an identity
+ * delete. Unprovenanced tombstones (individual unchecks) keep the plain
+ * identity-delete rule regardless of the habit's fate.
  */
 function mergeHabitCompletions(
     localCompletions: Record<string, HabitCompletion>,
-    habitCompletionTombstones: Record<string, { id: string; deletedAt: string }>,
+    habitCompletionTombstones: Record<string, HabitCompletionTombstone>,
     remote: SyncSnapshot,
+    mergedHabits: Record<string, Habit>,
 ): MergedHabitCompletions {
+    // Compute the effective tombstone set once so both the merged union and the
+    // pending-tombstone output agree about which completions are deleted.
+    const effective: Record<string, HabitCompletionTombstone> = {};
+    for (const [id, tombstone] of Object.entries(habitCompletionTombstones)) {
+        if (tombstone.habitId !== undefined && mergedHabits[tombstone.habitId]) continue;
+        effective[id] = tombstone;
+    }
+
     const merged = new Map<string, HabitCompletion>();
     for (const [id, completion] of Object.entries(localCompletions)) {
-        if (!habitCompletionTombstones[id]) merged.set(id, completion);
+        if (!effective[id]) merged.set(id, completion);
     }
 
     // Track which id owns each (habitId, bucket) in the running merged set so a
@@ -489,7 +505,7 @@ function mergeHabitCompletions(
     }
 
     for (const [id, completion] of Object.entries(remote.habitCompletions)) {
-        if (habitCompletionTombstones[id]) continue;
+        if (effective[id]) continue;
         const key = `${completion.habitId}\u0000${completion.bucket}`;
         if (merged.has(id)) {
             // Same id on both branches: the pulled row wins the value.
@@ -507,9 +523,9 @@ function mergeHabitCompletions(
         bucketOwner.set(key, id);
     }
 
-    const tombstones: Record<string, { id: string; deletedAt: string }> = {};
-    for (const [id, tombstone] of Object.entries(habitCompletionTombstones)) {
-        if (remote.habitCompletions[id]) tombstones[id] = { id, deletedAt: tombstone.deletedAt };
+    const tombstones: Record<string, HabitCompletionTombstone> = {};
+    for (const [id, tombstone] of Object.entries(effective)) {
+        if (remote.habitCompletions[id]) tombstones[id] = { ...tombstone };
     }
 
     return { habitCompletions: Object.fromEntries(merged), tombstones };
@@ -706,7 +722,12 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         // base and remote exactly like an ordinary pull.
         const pm = mergeSingletonValue(record.pmState, record.pmUpdatedAt, remote.pmState, base.pmState, now);
         const habits = mergeHabits(record.habits, record.habitUpdatedAt, record.habitTombstones, base, remote, now);
-        const completions = mergeHabitCompletions(record.habitCompletions, record.habitCompletionTombstones, remote);
+        const completions = mergeHabitCompletions(
+            record.habitCompletions,
+            record.habitCompletionTombstones,
+            remote,
+            habits.habits,
+        );
         const merged: StagedOwnerRecord = {
             ...record,
             initialized: true,
@@ -732,7 +753,12 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
     const tasks = mergeTasks(record.state, record.taskUpdatedAt, record.taskTombstones, base, remote, now);
     const logs = mergeLogs(record.state.logs, record.logTombstones, remote);
     const habits = mergeHabits(record.habits, record.habitUpdatedAt, record.habitTombstones, base, remote, now);
-    const completions = mergeHabitCompletions(record.habitCompletions, record.habitCompletionTombstones, remote);
+    const completions = mergeHabitCompletions(
+        record.habitCompletions,
+        record.habitCompletionTombstones,
+        remote,
+        habits.habits,
+    );
     const settings = mergeSingletonValue<Settings>(
         record.state.settings,
         record.settingsUpdatedAt,
@@ -861,8 +887,11 @@ function completionDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot): Comp
     const tombstoneAcks: AcknowledgedChanges["habitCompletionTombstones"] = {};
     for (const [id, tombstone] of Object.entries(record.habitCompletionTombstones)) {
         if (!base.habitCompletions[id]) continue;
-        tombstones.push({ id, deletedAt: tombstone.deletedAt });
-        tombstoneAcks[id] = { deletedAt: tombstone.deletedAt };
+        tombstones.push({ ...tombstone });
+        tombstoneAcks[id] =
+            tombstone.habitId === undefined
+                ? { deletedAt: tombstone.deletedAt }
+                : { deletedAt: tombstone.deletedAt, habitId: tombstone.habitId };
     }
 
     return { upserts, upsertAcks, tombstones, tombstoneAcks };

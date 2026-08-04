@@ -138,4 +138,24 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         expect(ownerKeys).toEqual([]);
         expect(args.p_owner).toBeUndefined();
     });
+
+    it("maps cascade provenance on completion tombstones to the habit_id column", async () => {
+        const { client, rpc } = mockClient();
+        const data = new SupabaseDataAccess(client);
+        const plan: PushPlan = {
+            ...emptyPlan(),
+            habitCompletionTombstones: [
+                { id: "c1", deletedAt: "2026-01-03T00:00:00.000Z" },
+                { id: "c2", deletedAt: "2026-01-03T00:00:00.000Z", habitId: "h1" },
+            ],
+        };
+
+        await data.push(OWNER, plan);
+
+        const args = rpc.mock.calls[0][1];
+        expect(args.p_habit_completion_tombstones).toEqual([
+            { id: "c1", deleted_at: "2026-01-03T00:00:00.000Z" },
+            { id: "c2", deleted_at: "2026-01-03T00:00:00.000Z", habit_id: "h1" },
+        ]);
+    });
 });

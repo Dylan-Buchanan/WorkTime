@@ -627,6 +627,94 @@ describe("habit completion union", () => {
         expect(merged.pendingCount).toBe(0);
         expect(buildPushPlan(merged.record).habitCompletionTombstones).toEqual([]);
     });
+
+    it("clears cascaded completion tombstones when a newer remote habit update revives the habit", () => {
+        const base = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Base" }), T1) },
+            habitCompletions: { c1: HC("c1", "h1"), c2: HC("c2", "h1", { bucket: "2026-01-02" }) },
+        });
+        const record = recordFromBaseline(base, {
+            habits: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: T2 } },
+            habitCompletions: {},
+            habitCompletionTombstones: {
+                c1: { id: "c1", deletedAt: T2, habitId: "h1" },
+                c2: { id: "c2", deletedAt: T2, habitId: "h1" },
+            },
+        });
+        const remote = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Revived" }), T3) },
+            habitCompletions: { c1: HC("c1", "h1"), c2: HC("c2", "h1", { bucket: "2026-01-02" }) },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        // The newer remote update revives the habit...
+        expect(merged.record.habits.h1.name).toBe("Revived");
+        expect(merged.record.habitTombstones.h1).toBeUndefined();
+        // ...and the cascaded completion tombstones are suppressed so the
+        // history survives instead of being pushed as identity deletes.
+        expect(merged.record.habitCompletions.c1.id).toBe("c1");
+        expect(merged.record.habitCompletions.c2.id).toBe("c2");
+        expect(merged.record.habitCompletionTombstones).toEqual({});
+        expect(merged.pendingCount).toBe(0);
+
+        const plan = buildPushPlan(merged.record);
+        expect(plan.habitTombstones).toEqual([]);
+        expect(plan.habitCompletionTombstones).toEqual([]);
+    });
+
+    it("keeps cascaded completion tombstones pending while the habit deletion still wins", () => {
+        const base = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Base" }), T1) },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        const record = recordFromBaseline(base, {
+            habits: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: T2 } },
+            habitCompletions: {},
+            habitCompletionTombstones: { c1: { id: "c1", deletedAt: T2, habitId: "h1" } },
+        });
+        const remote = base;
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.habits.h1).toBeUndefined();
+        expect(merged.record.habitTombstones.h1).toEqual({ id: "h1", deletedAt: T2 });
+        // The cascade provenance survives the merge so the RPC can gate the
+        // identity delete against the parent habit.
+        expect(merged.record.habitCompletionTombstones.c1).toEqual({ id: "c1", deletedAt: T2, habitId: "h1" });
+        expect(merged.pendingCount).toBe(2); // habit tombstone + completion tombstone
+
+        const plan = buildPushPlan(merged.record);
+        expect(plan.habitTombstones).toEqual([{ id: "h1", deletedAt: T2 }]);
+        expect(plan.habitCompletionTombstones).toEqual([{ id: "c1", deletedAt: T2, habitId: "h1" }]);
+        expect(plan.acknowledged.habitCompletionTombstones.c1).toEqual({ deletedAt: T2, habitId: "h1" });
+    });
+
+    it("keeps an individual uncheck tombstone pending even when the habit survives", () => {
+        const base = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Base" }), T1) },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        const record = recordFromBaseline(base, {
+            habits: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: T2 } },
+            habitCompletions: {},
+            habitCompletionTombstones: { c1: { id: "c1", deletedAt: T2 } },
+        });
+        const remote = snapshot({
+            habits: { h1: HROW(H("h1", { name: "Revived" }), T3) },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.habits.h1.name).toBe("Revived");
+        // An unprovenanced tombstone has no cascade provenance, so it stays
+        // pending even though the habit survived.
+        expect(merged.record.habitCompletionTombstones.c1).toEqual({ id: "c1", deletedAt: T2 });
+        expect(merged.record.habitCompletions.c1).toBeUndefined();
+        expect(merged.pendingCount).toBe(1);
+        expect(buildPushPlan(merged.record).habitCompletionTombstones).toEqual([{ id: "c1", deletedAt: T2 }]);
+    });
 });
 
 describe("singleton whole-row merges", () => {

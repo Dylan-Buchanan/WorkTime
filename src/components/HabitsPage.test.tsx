@@ -56,6 +56,18 @@ describe("HabitsPage", () => {
         await user.click(todayCell);
         await waitFor(() => expect(screen.getByRole("button", { name: /today, completed/ })).toHaveAttribute("aria-pressed", "true"));
 
+        // Day and Week are genuinely distinct windows: Day renders today's
+        // single daily cell while Week renders the seven-day window, so the
+        // selector is not a duplicate control.
+        await user.click(screen.getByRole("button", { name: "Day" }));
+        expect(screen.getByRole("button", { name: "Day" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByLabelText("Morning walk day completion cells")).toBeInTheDocument();
+        expect(screen.getByText(/1 cell/)).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Week" }));
+        expect(screen.getByRole("button", { name: "Week" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByLabelText("Morning walk week completion cells")).toBeInTheDocument();
+        expect(screen.getByText(/7 cells/)).toBeInTheDocument();
+
         await user.click(screen.getByRole("button", { name: "Month" }));
         expect(screen.getByRole("button", { name: "Month" })).toHaveAttribute("aria-pressed", "true");
         expect(screen.getByLabelText("Morning walk month completion cells")).toBeInTheDocument();

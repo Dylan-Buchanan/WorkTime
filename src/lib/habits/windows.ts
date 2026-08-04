@@ -5,6 +5,7 @@ import type { HabitWindow, HabitWindowInput } from "./types";
 function normalizeWindow(window: HabitWindowInput): HabitWindow {
     switch (window) {
         case "day":
+            return "day";
         case "7":
         case "week":
             return "week";
@@ -23,6 +24,8 @@ export function normalizeHabitWindow(window: HabitWindowInput): HabitWindow {
 
 export function visibleFrequencies(window: HabitWindowInput): readonly HabitFrequency[] {
     switch (normalizeWindow(window)) {
+        case "day":
+            return ["daily"];
         case "week":
             return ["daily"];
         case "month":
@@ -118,6 +121,8 @@ export function getWindowBuckets(
         : [first, second as HabitFrequency, third as Date];
 
     switch (normalizeWindow(window)) {
+        case "day":
+            return frequency === "daily" ? [dayBucket(now)] : [];
         case "week":
             return frequency === "daily" ? currentWeekBuckets(now) : [];
         case "month":

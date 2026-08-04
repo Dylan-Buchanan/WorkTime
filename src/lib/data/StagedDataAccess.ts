@@ -421,7 +421,16 @@ export class StagedDataAccess implements DataAccess {
             }
             for (const id of Object.keys(current.habitCompletions)) {
                 if (nextCompletions[id]) continue;
-                habitCompletionTombstones[id] = { id, deletedAt: stamp };
+                const removed = current.habitCompletions[id];
+                // A completion removed because its habit is absent from the
+                // desired set is part of that habit's hard-delete cascade and
+                // records the parent id as provenance so the merge and RPC can
+                // keep the history when a newer remote habit update revives the
+                // parent. An uncheck of a habit that stays in the set has no
+                // provenance and remains an unconditional identity delete.
+                const habitId = nextHabits[removed.habitId] ? undefined : removed.habitId;
+                habitCompletionTombstones[id] =
+                    habitId === undefined ? { id, deletedAt: stamp } : { id, deletedAt: stamp, habitId };
             }
 
             return {

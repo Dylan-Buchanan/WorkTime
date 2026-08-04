@@ -66,6 +66,19 @@ export interface PendingTimerCompletion {
     completedAt: string;
 }
 
+/**
+ * A tombstoned habit completion. `habitId` records deletion provenance: it is
+ * set only when the completion was removed as part of a habit hard-delete
+ * cascade, so a merge that revives the parent habit can also suppress the
+ * completion tombstone instead of silently erasing the history. Individual
+ * unchecks of a surviving habit carry no provenance and stay unconditional.
+ */
+export interface HabitCompletionTombstone {
+    id: string;
+    deletedAt: string;
+    habitId?: string;
+}
+
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
     schemaVersion: 2;
@@ -103,7 +116,7 @@ export interface StagedOwnerRecord {
     /** `updated_at` LWW transport stamps per locally-changed habit. */
     habitUpdatedAt: Record<string, string>;
     habitTombstones: Record<string, { id: string; deletedAt: string }>;
-    habitCompletionTombstones: Record<string, { id: string; deletedAt: string }>;
+    habitCompletionTombstones: Record<string, HabitCompletionTombstone>;
 }
 
 export const STAGING_SCHEMA_VERSION = 2 as const;
@@ -217,6 +230,16 @@ function isTombstoneMap(value: unknown): boolean {
     return isObject(value) && Object.values(value).every(isTombstone);
 }
 
+/** A completion tombstone may carry an optional habitId provenance string. */
+function isCompletionTombstone(value: unknown): boolean {
+    if (!isObject(value) || typeof value.id !== "string" || typeof value.deletedAt !== "string") return false;
+    return value.habitId === undefined || typeof value.habitId === "string";
+}
+
+function isCompletionTombstoneMap(value: unknown): boolean {
+    return isObject(value) && Object.values(value).every(isCompletionTombstone);
+}
+
 function isAppState(value: unknown): boolean {
     return (
         isObject(value) &&
@@ -298,7 +321,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["habitCompletions", (v): boolean => isObject(v) && Object.values(v).every(isHabitCompletion)],
     ["habitUpdatedAt", (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string")],
     ["habitTombstones", isTombstoneMap],
-    ["habitCompletionTombstones", isTombstoneMap],
+    ["habitCompletionTombstones", isCompletionTombstoneMap],
 ];
 
 /**

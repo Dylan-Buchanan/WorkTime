@@ -413,8 +413,8 @@ describe("StagedDataAccess", () => {
         expect(removed.habitUpdatedAt).toEqual({});
         expect(removed.habitTombstones.h1).toEqual({ id: "h1", deletedAt: "2026-01-02T00:00:00.000Z" });
         expect(removed.habitTombstones.h2).toEqual({ id: "h2", deletedAt: "2026-01-02T00:00:00.000Z" });
-        expect(removed.habitCompletionTombstones.c1).toEqual({ id: "c1", deletedAt: "2026-01-02T00:00:00.000Z" });
-        expect(removed.habitCompletionTombstones.c2).toEqual({ id: "c2", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(removed.habitCompletionTombstones.c1).toEqual({ id: "c1", deletedAt: "2026-01-02T00:00:00.000Z", habitId: "h1" });
+        expect(removed.habitCompletionTombstones.c2).toEqual({ id: "c2", deletedAt: "2026-01-02T00:00:00.000Z", habitId: "h1" });
 
         // Reintroducing an id clears its tombstone and re-stamps it.
         await data.saveHabits([H("h1", { name: "Back" })], [HC("c1", "h1")]);
@@ -431,6 +431,47 @@ describe("StagedDataAccess", () => {
         expect(loaded.completions.map((completion) => completion.id)).toEqual(["c1"]);
         loaded.habits[0].name = "mutated";
         expect((await data.loadHabits()).habits[0].name).toBe("Back");
+    });
+
+    it("records cascade provenance only when a completion is removed with its habit", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            initialized: true,
+            lastSynced: makeBaseline(null, {
+                habits: { h1: { value: H("h1", { name: "Original" }), updatedAt: "2026-01-01T00:00:00.000Z" } },
+                habitCompletions: { c1: HC("c1", "h1") },
+            }),
+            habits: { h1: H("h1", { name: "Original" }) },
+            habitCompletions: { c1: HC("c1", "h1") },
+        }));
+
+        // Unchecking one completion while the habit stays in the desired set is
+        // an individual delete with no cascade provenance.
+        await data.saveHabits([H("h1", { name: "Original" })], []);
+        const unchecked = store.read(OWNER_A);
+        expect(unchecked.habitCompletionTombstones.c1).toEqual({
+            id: "c1",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+        });
+        expect(unchecked.habitTombstones.h1).toBeUndefined();
+
+        // Deleting the habit later does not retroactively tag the already-staged
+        // uncheck: the completion was removed while the habit was still live, so
+        // its tombstone must stay an unconditional identity delete even if the
+        // habit is revived by another device.
+        await data.saveHabits([], []);
+        const deleted = store.read(OWNER_A);
+        expect(deleted.habitTombstones.h1).toEqual({ id: "h1", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(deleted.habitCompletionTombstones.c1).toEqual({
+            id: "c1",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+        });
     });
 
     it("isolates owners sharing one store and reads local writes immediately", async () => {

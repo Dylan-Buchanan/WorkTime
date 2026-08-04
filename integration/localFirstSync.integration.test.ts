@@ -398,6 +398,51 @@ describe("local-first staged sync transport", () => {
         expect(snapshot.habitCompletions).toEqual({});
     });
 
+    it("keeps completion history when a newer remote habit edit beats the hard-delete cascade", async () => {
+        const owner = track(await createLocalUser());
+        const data = remote(owner);
+
+        // Seed a habit and one completion with an old client timestamp.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitUpserts: [{ value: habit(HABIT_A, "Original"), updatedAt: T0 }],
+            habitCompletionUpserts: [completion(COMPLETION_A, HABIT_A)],
+        });
+
+        // A concurrent remote habit edit stamps updated_at with now() (newer
+        // than any stale deletion stamp), reviving the habit.
+        await owner.client
+            .from("habits")
+            .update({ name: "Concurrent rename" })
+            .eq("owner_id", owner.userId)
+            .eq("id", HABIT_A);
+        const habitRow = await owner.client.from("habits").select("name, updated_at").eq("id", HABIT_A).single();
+        expect(habitRow.error).toBeNull();
+        expect(new Date(habitRow.data!.updated_at).getTime()).toBeGreaterThan(new Date(LATER).getTime());
+
+        // The losing device pushes its hard-delete cascade: the habit tombstone
+        // is LWW-gated and rejected, and the provenanced completion tombstone
+        // must be skipped too so the completion history survives the revival.
+        await data.push(owner.userId, {
+            ...emptyPlan(),
+            habitTombstones: [{ id: HABIT_A, deletedAt: LATER }],
+            habitCompletionTombstones: [{ id: COMPLETION_A, deletedAt: LATER, habitId: HABIT_A }],
+        });
+
+        const survivor = await owner.client.from("habits").select("name").eq("id", HABIT_A).single();
+        expect(survivor.error).toBeNull();
+        expect(survivor.data!.name).toBe("Concurrent rename");
+        const completions = await owner.client.from("habit_completions").select("id");
+        expect(completions.error).toBeNull();
+        expect(completions.data).toHaveLength(1);
+        expect(completions.data![0].id).toBe(COMPLETION_A);
+
+        // The next pull still carries the habit and its completion.
+        const pulled = await data.pull(owner.userId);
+        expect(pulled.habits[HABIT_A].value.name).toBe("Concurrent rename");
+        expect(pulled.habitCompletions[COMPLETION_A].id).toBe(COMPLETION_A);
+    });
+
     it("re-pushes a different-field habit merge with a strictly-later stamp through the real RPC", async () => {
         const owner = track(await createLocalUser());
         const data = remote(owner);

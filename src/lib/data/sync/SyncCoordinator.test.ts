@@ -151,7 +151,14 @@ function applyPlanToServer(server: SyncSnapshot, plan: PushPlan): void {
         );
         if (!occupied) server.habitCompletions[id] = clone(completion);
     }
-    for (const id of Object.keys(ack.habitCompletionTombstones)) {
+    for (const [id, tombstone] of Object.entries(ack.habitCompletionTombstones)) {
+        // Mirror the RPC guard: a provenanced (cascaded) completion tombstone
+        // is skipped when the parent habit was updated after the deletion stamp,
+        // so a revived habit keeps its completion history.
+        if (tombstone.habitId !== undefined) {
+            const habit = server.habits[tombstone.habitId];
+            if (habit && timestampMs(habit.updatedAt) > timestampMs(tombstone.deletedAt)) continue;
+        }
         delete server.habitCompletions[id];
     }
     if (ack.settings) server.settings = clone(ack.settings);

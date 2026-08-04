@@ -1,6 +1,6 @@
 import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
-import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue } from "../staging/types";
+import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone } from "../staging/types";
 
 /**
  * The authenticated remote transport consumed by the sync coordinator. Every
@@ -45,7 +45,7 @@ export interface AcknowledgedChanges {
     habitUpserts: Record<string, { value: Habit; updatedAt: string }>;
     habitTombstones: Record<string, { deletedAt: string }>;
     habitCompletionUpserts: Record<string, HabitCompletion>;
-    habitCompletionTombstones: Record<string, { deletedAt: string }>;
+    habitCompletionTombstones: Record<string, Omit<HabitCompletionTombstone, "id">>;
     settings: VersionedValue<Settings> | null;
     timerState: VersionedValue<TimerStateSlice> | null;
     pmState: VersionedValue<SyncedPMState> | null;
@@ -67,7 +67,7 @@ export interface PushPlan {
     habitUpserts: Array<{ value: Habit; updatedAt: string }>;
     habitTombstones: Array<{ id: string; deletedAt: string }>;
     habitCompletionUpserts: HabitCompletion[];
-    habitCompletionTombstones: Array<{ id: string; deletedAt: string }>;
+    habitCompletionTombstones: Array<HabitCompletionTombstone>;
     settings: VersionedValue<Settings> | null;
     timerState: (VersionedValue<TimerStateSlice> & { newGeneration: boolean }) | null;
     pmState: VersionedValue<SyncedPMState> | null;

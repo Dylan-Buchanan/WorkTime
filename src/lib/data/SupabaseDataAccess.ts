@@ -387,7 +387,11 @@ export class SupabaseDataAccess implements SyncRemote {
                 ? plan.habitCompletionUpserts.map(habitCompletionRow)
                 : null,
             p_habit_completion_tombstones: plan.habitCompletionTombstones.length
-                ? plan.habitCompletionTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
+                ? plan.habitCompletionTombstones.map(({ id, deletedAt, habitId }) => ({
+                      id,
+                      deleted_at: deletedAt,
+                      ...(habitId !== undefined ? { habit_id: habitId } : {}),
+                  }))
                 : null,
             p_settings_data: plan.settings?.value ?? null,
             p_settings_updated_at: plan.settings?.updatedAt ?? null,
