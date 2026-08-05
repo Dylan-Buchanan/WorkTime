@@ -15,7 +15,6 @@ export default defineConfig(({ mode, command }) => {
             react(),
             VitePWA({
                 registerType: "autoUpdate",
-                injectRegister: false,
                 manifest: {
                     name: "WorkTime",
                     short_name: "WorkTime",
