@@ -12,6 +12,7 @@ import {
     isHabitVisible,
 } from "../lib/habits";
 import type { Habit, HabitFrequency } from "../state/types";
+import type { HabitGridCell } from "../lib/habits";
 import type { HabitPeriod } from "../state/HabitContext";
 import { useHabits } from "../state/HabitContext";
 
@@ -337,11 +338,12 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
                         </div>
                     </div>
                     {grid && <Habit365Grid habit={habit} grid={grid} todayBucket={todayBucket} onCheck={onCheck} />}
-                    <div className={grid ? "hidden" : "mt-3 flex min-w-0 gap-1 overflow-x-auto pb-1"} aria-label={`${habit.name} ${period} completion cells`}>
+                    <div className={grid ? "hidden" : "habit-scroll mt-3 flex min-w-0 gap-1.5 overflow-x-auto px-2 py-2"} aria-label={`${habit.name} ${period} completion cells`}>
                         {buckets.map((bucket) => {
                             const checked = isHabitCompleted(completions, habit.id, bucket);
                             const checkable = isHabitCellCheckable(habit, bucket, now);
                             const isToday = bucket === todayBucket;
+                            const label = cellDateLabel(bucket, habit.frequency);
                             return (
                                 <button
                                     key={bucket}
@@ -351,10 +353,12 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
                                     aria-label={`${formatBucket(bucket, habit.frequency)}${isToday ? " today" : ""}${checked ? ", completed" : ", not completed"}`}
                                     title={`${formatBucket(bucket, habit.frequency)}${!checkable ? " — future" : ""}`}
                                     onClick={(event) => { event.stopPropagation(); onCheck(bucket, checked); }}
-                                    className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded border text-[11px] transition ${checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-600 hover:border-neutral-500"} ${isToday ? "ring-2 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
+                                    className={`relative flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md border leading-none transition ${checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-600 hover:border-neutral-500"} ${isToday ? "ring-2 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
                                     style={checked ? { backgroundColor: habit.color, borderColor: habit.color } : undefined}
                                 >
-                                    {checked ? "✓" : ""}
+                                    <span className={`${checked ? "text-[12px] font-semibold" : "text-[12px] font-medium"} leading-none`}>{label.top}</span>
+                                    <span className={`${checked ? "text-white/90" : "text-neutral-500"} text-[8px] uppercase leading-none`}>{label.bottom}</span>
+                                    {checked && <span className="absolute right-1 top-1 text-[8px] leading-none text-white/90" aria-hidden="true">✓</span>}
                                 </button>
                             );
                         })}
@@ -390,27 +394,34 @@ const Habit365Grid: React.FC<{
     todayBucket: string;
     onCheck: (bucket: string, checked: boolean) => void;
 }> = ({ habit, grid, todayBucket, onCheck }) => (
-    <div className="mt-3 max-h-80 overflow-y-auto rounded border border-neutral-800 bg-neutral-950/50 p-1" aria-label={`${habit.name} ${habit.frequency} 365 completion grid`}>
-        <div className="grid grid-cols-7 gap-1">
-            {grid.cells.map((cell) => {
-                const label = `${formatBucket(cell.bucket, habit.frequency)}${cell.bucket === todayBucket ? " today" : ""}${cell.checked ? ", completed" : ", not completed"}`;
-                return (
-                    <button
-                        key={cell.bucket}
-                        type="button"
-                        disabled={!cell.checkable}
-                        aria-pressed={cell.checked}
-                        aria-label={label}
-                        title={`${formatBucket(cell.bucket, habit.frequency)}${!cell.checkable ? " - future" : ""}`}
-                        onClick={(event) => { event.stopPropagation(); onCheck(cell.bucket, cell.checked); }}
-                        className={`relative flex h-7 w-full shrink-0 items-center justify-center rounded border text-[10px] transition ${cell.checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-600 hover:border-neutral-500"} ${cell.bucket === todayBucket ? "ring-2 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
-                        style={cell.checked ? { backgroundColor: habit.color, borderColor: habit.color } : undefined}
-                    >
-                        {cell.checked ? "\u2713" : ""}
-                    </button>
-                );
-            })}
-        </div>
+    <div className="habit-scroll mt-3 max-h-80 space-y-3 overflow-y-auto rounded border border-neutral-800 bg-neutral-950/50 p-2" aria-label={`${habit.name} ${habit.frequency} 365 completion grid`}>
+        {groupCellsByMonth(grid.cells).map((month) => (
+            <section key={month.key}>
+                <h3 className="mb-1 text-[10px] font-medium uppercase tracking-wider text-neutral-500">{month.label}</h3>
+                <div className="grid grid-cols-7 gap-1">
+                    {month.cells.map((cell) => {
+                        const date = dateFromBucket(cell.bucket);
+                        const label = `${formatBucket(cell.bucket, habit.frequency)}${cell.bucket === todayBucket ? " today" : ""}${cell.checked ? ", completed" : ", not completed"}`;
+                        return (
+                            <button
+                                key={cell.bucket}
+                                type="button"
+                                disabled={!cell.checkable}
+                                aria-pressed={cell.checked}
+                                aria-label={label}
+                                title={`${formatBucket(cell.bucket, habit.frequency)}${!cell.checkable ? " - future" : ""}`}
+                                onClick={(event) => { event.stopPropagation(); onCheck(cell.bucket, cell.checked); }}
+                                className={`relative flex aspect-square w-full items-center justify-center rounded border text-[10px] transition ${cell.checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-400 hover:border-neutral-500"} ${cell.bucket === todayBucket ? "ring-1 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
+                                style={cell.checked ? { backgroundColor: habit.color, borderColor: habit.color } : undefined}
+                            >
+                                <span className="font-medium leading-none">{date.getDate()}</span>
+                                {cell.checked && <span className="absolute right-0.5 top-0.5 text-[7px] leading-none text-white/80" aria-hidden="true">✓</span>}
+                            </button>
+                        );
+                    })}
+                </div>
+            </section>
+        ))}
     </div>
 );
 
@@ -419,4 +430,33 @@ function formatBucket(bucket: string, frequency: HabitFrequency): string {
     if (frequency === "daily") return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
     if (frequency === "weekly") return `Week of ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
     return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function cellDateLabel(bucket: string, frequency: HabitFrequency): { top: string; bottom: string } {
+    const date = dateFromBucket(bucket);
+    if (frequency === "monthly") {
+        return {
+            top: date.toLocaleDateString(undefined, { month: "short" }),
+            bottom: String(date.getFullYear()).slice(-2),
+        };
+    }
+    return {
+        top: String(date.getDate()),
+        bottom: date.toLocaleDateString(undefined, { weekday: "short" }),
+    };
+}
+
+function groupCellsByMonth(cells: readonly HabitGridCell[]): Array<{ key: string; label: string; cells: HabitGridCell[] }> {
+    const groups: Array<{ key: string; label: string; cells: HabitGridCell[] }> = [];
+    for (const cell of cells) {
+        const date = dateFromBucket(cell.bucket);
+        const key = `${date.getFullYear()}-${date.getMonth()}`;
+        let group = groups[groups.length - 1];
+        if (!group || group.key !== key) {
+            group = { key, label: date.toLocaleDateString(undefined, { month: "long", year: "numeric" }), cells: [] };
+            groups.push(group);
+        }
+        group.cells.push(cell);
+    }
+    return groups;
 }
