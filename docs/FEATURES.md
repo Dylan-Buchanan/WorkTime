@@ -14,7 +14,7 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Task panel & sidebar** — `src/components/TaskPanel.tsx`, `src/components/ProjectManager/ProjectsSidebar.tsx` (quick add tasks, select active task)
 -   **Project Manager** — `src/components/ProjectManager/*` (includes `ProjectManagerPage.tsx`, `TasksBoardView.tsx`, `TasksListView.tsx`, `TaskInspector.tsx`)
 -   **Analytics** — `src/components/AnalyticsPage.tsx` (charts and metrics powered by `recharts`)
--   **Settings** — `src/components/SettingsPanel.tsx` (reset, preferences)
+-   **Settings** — `src/components/SettingsPanel.tsx` (reset, preferences, agent BYOK key)
 -   **Hooks & assets** — `src/hooks/useSounds.ts`, `src/assets/audio/`
 
 ---
@@ -35,6 +35,7 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Task estimate & sync** between PM and underlying task store — `StateSyncBridge.tsx`, `ProjectManagerContext.tsx`
 -   **Analytics & reports** (time distribution, trends, filters) — `AnalyticsPage.tsx`
 -   **Settings & reset** — `SettingsPanel.tsx`
+-   **Agent BYOK settings** — `src/lib/agent/` and `SettingsPanel.tsx`; the frontend-only key uses the intentional `worktime:agent:apiKey` localStorage exception, while the selected OpenAI/DeepSeek provider uses `worktime:agent:provider`. Both are entered/configured separately in PWA and Tauri.
 -   **Sounds & notifications** — `useSounds.ts`, `@tauri-apps/plugin-notification`
 -   **Dev sample data** — `dev-data/data.json`
 

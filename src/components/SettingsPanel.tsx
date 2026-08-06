@@ -2,6 +2,16 @@ import React, { useState } from "react";
 import { useAppState } from "../state/AppStateContext";
 import { Settings } from "../state/types";
 import { useSounds } from "../hooks/useSounds";
+import {
+    clearAgentApiKey,
+    AGENT_PROVIDER_OPTIONS,
+    getAgentApiKey,
+    getAgentProvider,
+    setAgentApiKey,
+    setAgentProvider,
+    subscribeToAgentApiKey,
+    subscribeToAgentProvider,
+} from "../lib/agent";
 
 export const SettingsPanel: React.FC = () => {
     const { state, updateSettings, resetAll } = useAppState();
@@ -10,9 +20,19 @@ export const SettingsPanel: React.FC = () => {
     const [local, setLocal] = useState<Settings | null>(s || null);
     const [showReset, setShowReset] = useState(false);
     const [confirm, setConfirm] = useState("");
+    const [agentApiKey, setAgentApiKeyDraft] = useState(() => getAgentApiKey() ?? "");
+    const [hasAgentApiKey, setHasAgentApiKey] = useState(() => Boolean(getAgentApiKey()));
+    const [agentProvider, setAgentProviderChoice] = useState(() => getAgentProvider());
+    const [agentSaveStatus, setAgentSaveStatus] = useState<"success" | "error" | null>(null);
+    const [agentSaveMessage, setAgentSaveMessage] = useState("");
     React.useEffect(() => {
         setLocal(s || null);
     }, [s]);
+    React.useEffect(() => subscribeToAgentApiKey((next) => {
+        setAgentApiKeyDraft(next ?? "");
+        setHasAgentApiKey(Boolean(next));
+    }), []);
+    React.useEffect(() => subscribeToAgentProvider(setAgentProviderChoice), []);
     const onChange = (k: keyof Settings, v: number) =>
         setLocal((prev) => (prev ? { ...prev, [k]: v } : prev));
     const fields: (keyof Settings)[] = [
@@ -63,6 +83,102 @@ export const SettingsPanel: React.FC = () => {
                     Save
                 </button>
             )}
+            <div className="pt-1 border-t border-neutral-800" />
+            <div className="space-y-2">
+                <div>
+                    <h4 className="text-[11px] font-semibold text-neutral-300">
+                        Agent API key
+                    </h4>
+                    <p className="text-[10px] text-neutral-500 leading-relaxed">
+                        Stored only in this browser or Tauri webview. Enter it once per surface.
+                    </p>
+                </div>
+                <label className="sr-only" htmlFor="agent-api-key">
+                    Agent API key
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-medium text-neutral-400" htmlFor="agent-provider">
+                    <span>Provider</span>
+                    <select
+                        id="agent-provider"
+                        value={agentProvider}
+                        onChange={(event) => {
+                            setAgentProviderChoice(event.target.value as typeof agentProvider);
+                            setAgentSaveStatus(null);
+                        }}
+                        className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    >
+                        {AGENT_PROVIDER_OPTIONS.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                                {provider.label}
+                            </option>
+                        ))}
+                    </select>
+                    <span className="font-normal text-neutral-600">
+                        {AGENT_PROVIDER_OPTIONS.find((provider) => provider.id === agentProvider)?.baseUrl}
+                    </span>
+                </label>
+                <input
+                    id="agent-api-key"
+                    type="password"
+                    autoComplete="off"
+                    value={agentApiKey}
+                    onChange={(event) => {
+                        setAgentApiKeyDraft(event.target.value);
+                        setAgentSaveStatus(null);
+                    }}
+                    placeholder="sk-…"
+                    className="w-full bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <div className="flex gap-2">
+                    <button
+                        type="button"
+                        onMouseEnter={() => play("hover")}
+                        onClick={() => {
+                            try {
+                                setAgentProvider(agentProvider);
+                                setAgentApiKey(agentApiKey);
+                                setAgentSaveStatus("success");
+                                setAgentSaveMessage("API key saved locally for the selected provider.");
+                                play("pressSide");
+                            } catch {
+                                setAgentSaveStatus("error");
+                                setAgentSaveMessage("Unable to save the API key locally. Check browser storage permissions and try again.");
+                            }
+                        }}
+                        className="flex-1 px-2 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-[11px] font-medium"
+                    >
+                        Save API key
+                    </button>
+                    <button
+                        type="button"
+                        disabled={!hasAgentApiKey}
+                        onMouseEnter={() => hasAgentApiKey && play("hover")}
+                        onClick={() => {
+                            try {
+                                clearAgentApiKey();
+                                setAgentSaveStatus("success");
+                                setAgentSaveMessage("API key cleared from this surface.");
+                                play("pressSide");
+                            } catch {
+                                setAgentSaveStatus("error");
+                                setAgentSaveMessage("Unable to clear the API key from local storage. Try again.");
+                            }
+                        }}
+                        className="px-2 py-1.5 rounded border border-neutral-700 bg-neutral-800/60 hover:bg-neutral-800 text-[11px] text-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        Clear
+                    </button>
+                </div>
+                {agentSaveStatus && (
+                    <p
+                        role="status"
+                        aria-live="polite"
+                        className={agentSaveStatus === "success" ? "text-[10px] text-emerald-400" : "text-[10px] text-red-400"}
+                    >
+                        {agentSaveMessage}
+                    </p>
+                )}
+            </div>
             <div className="pt-1 border-t border-neutral-800" />
             <button
                 type="button"

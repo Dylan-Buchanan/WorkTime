@@ -8,6 +8,11 @@ import { DataProvider } from "../state/DataContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
+import {
+    AGENT_API_KEY_STORAGE_KEY,
+    AGENT_PROVIDER_STORAGE_KEY,
+    getAgentApiKey,
+} from "../lib/agent";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -78,5 +83,39 @@ describe("SettingsPanel reset scope", () => {
         expect(resetSpy).toHaveBeenCalledTimes(1);
         expect(await data.loadPMState()).toEqual(pmBefore);
         expect(savePMSpy).not.toHaveBeenCalled();
+    });
+
+    it("stores and clears the agent API key locally", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <SettingsPanel />));
+
+        const input = await screen.findByLabelText("Agent API key");
+        fireEvent.change(screen.getByRole("combobox", { name: /Provider/ }), { target: { value: "deepseek" } });
+        fireEvent.change(input, { target: { value: "  secret-key  " } });
+        fireEvent.click(screen.getByText("Save API key"));
+
+        expect(localStorage.getItem(AGENT_API_KEY_STORAGE_KEY)).toBe("secret-key");
+        expect(localStorage.getItem(AGENT_PROVIDER_STORAGE_KEY)).toBe("deepseek");
+        expect(getAgentApiKey()).toBe("secret-key");
+        expect(screen.getByRole("status")).toHaveTextContent("API key saved locally");
+
+        fireEvent.click(screen.getByText("Clear"));
+        expect(localStorage.getItem(AGENT_API_KEY_STORAGE_KEY)).toBeNull();
+        expect(getAgentApiKey()).toBeNull();
+        expect(screen.getByRole("status")).toHaveTextContent("API key cleared");
+    });
+
+    it("shows a failure indicator when browser storage rejects the save", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <SettingsPanel />));
+        const input = await screen.findByLabelText("Agent API key");
+        fireEvent.change(input, { target: { value: "secret-key" } });
+        vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+            throw new Error("storage quota exceeded");
+        });
+
+        fireEvent.click(screen.getByText("Save API key"));
+
+        expect(screen.getByRole("status")).toHaveTextContent("Unable to save the API key locally");
     });
 });

@@ -22,23 +22,21 @@ Production web and Tauri builds require all three public Vite variables. Develop
 Docker Desktop is required for local Supabase:
 
 ```powershell
-npm run supabase:start
-npx supabase status
-npx supabase functions serve invite-signup --no-verify-jwt --env-file supabase/.env.local
+pnpm supabase:start
+pnpm supabase:status
+pnpm supabase:serve
 ```
-
-Use an ignored `supabase/.env.local` containing a temporary server-side `SIGNUP_INVITE_CODE`. Never run `npm run supabase:reset` against a hosted project. Hosted Supabase must keep public email signup disabled, deploy the invite function with its server-side secret, and allow the exact `${VITE_PUBLIC_APP_URL}/reset-password` redirect.
 
 ## Updating and testing
 
 After dependency or source changes, run `pnpm install` and `pnpm run build`. Before completion, use the smallest relevant checks:
 
-- `npm run test:unit` — Vitest frontend, auth, context, and pure-engine tests.
-- `npm run test:pwa` — production build plus generated manifest/service-worker/mobile metadata checks; provide the required public env.
-- `npm run test:platform` — static checks for the slim native shell, retained capabilities, local `dist` packaging, and workflow cleanup.
-- `npm run test:integration` — local Supabase configuration/data checks; requires the local stack.
-- `npm run test:e2e` — Playwright against local Supabase and the served invite function; requires Chromium and the local stack.
-- `npm run test:all` — unit, PWA, platform, integration, and E2E coverage.
-- `npm run tauri build` — explicit Windows packaging smoke gate; requires all public Vite variables and should produce an MSI under `src-tauri/target/release/bundle/msi/`.
+- `pnpm test:unit` — Vitest frontend, auth, context, and pure-engine tests.
+- `pnpm test:pwa` — production build plus generated manifest/service-worker/mobile metadata checks; provide the required public env.
+- `pnpm test:platform` — static checks for the slim native shell, retained capabilities, local `dist` packaging, and workflow cleanup.
+- `pnpm test:integration` — local Supabase configuration/data checks; requires the local stack.
+- `pnpm test:e2e` — Playwright against local Supabase and the served invite function; requires Chromium and the local stack.
+- `pnpm test:all` — unit, PWA, platform, integration, and E2E coverage.
+- `pnpm tauri build` — explicit Windows packaging smoke gate; requires all public Vite variables and should produce an MSI under `src-tauri/target/release/bundle/msi/`.
 
 Keep `DataProvider`, `AppStateProvider`, `ProjectManagerProvider`, and `StateSyncBridge` behind the authenticated route shell. Public auth pages must not trigger authenticated data reads. Preserve the existing notification entry point and its Web Notification fallback, and do not change timer/task semantics without updating the TypeScript engine tests.
