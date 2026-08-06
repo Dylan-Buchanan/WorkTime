@@ -19,6 +19,18 @@ export type {
     PlannerTaskContext,
 } from "./plannerContext";
 
+export { diffPlannerTasks, diffProposedTasks } from "./diffEngine";
+export type {
+    DiffPlannerTasksInput,
+    GuardrailFlags,
+    TaskChange,
+    TaskChangeAction,
+    TaskChangeType,
+    TaskDiffResult,
+    TaskSnapshot,
+    ProposedTask,
+} from "./diffEngine";
+
 // State: get_state, create_task, update_settings, reset_app_state.
 export { createTask, getState, resetAppState, updateSettings } from "./stateCommands";
 // Task lifecycle: set_active_task, delete_task, archive_task, finalize_task, set_task_target.

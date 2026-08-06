@@ -56,7 +56,7 @@ function collectPropagationTargets(
 }
 
 export const StateSyncBridge: React.FC = () => {
-    const { state: appState, refresh, createTask: createAppTask, setActiveTask } = useAppState();
+    const { state: appState, refresh } = useAppState();
     const { state: pmState, updateTask, ensureMetadataForAppTask } = usePM();
     const { sync } = useSync();
     const data = useData();
@@ -68,6 +68,12 @@ export const StateSyncBridge: React.FC = () => {
     }, [updateTask]);
 
     const pendingTargetsRef = useRef<Record<string, number>>({});
+    // Linking a legacy PM task creates a backend task, which changes
+    // appState.tasks and reruns this effect before the PM appTaskId patch has
+    // necessarily landed. Keep the PM id in flight across effect reruns so
+    // that state transition cannot create a second backend task.
+    const linkingTaskIdsRef = useRef(new Set<string>());
+    const pendingAppTaskLinksRef = useRef(new Map<string, string>());
     // Non-null while an estimate propagation batch is running. New effect runs
     // return early so staged writes can never start a second overlapping batch.
     const batchInFlightRef = useRef<Promise<void> | null>(null);
@@ -187,6 +193,9 @@ export const StateSyncBridge: React.FC = () => {
     useEffect(() => {
         if (!appState) return;
         Object.values(appState.tasks).forEach((task) => {
+            // The legacy-linking effect has created this backend UUID and will
+            // attach it to its original PM row. It is not missing metadata.
+            if (pendingAppTaskLinksRef.current.has(task.id)) return;
             const pending = pendingTargetsRef.current[task.id];
             const includeEstimate = pending === undefined || pending === task.target_pomodoros;
             ensureMetadataForAppTask(task.id, {
@@ -199,30 +208,63 @@ export const StateSyncBridge: React.FC = () => {
     // Auto-create backend tasks for PM entries missing linkage (legacy data).
     useEffect(() => {
         if (!pmState || !appState) return;
-        const unlinked = Object.values(pmState.tasks).filter((t) => !t.isArchived && !t.appTaskId);
+        // A reservation lives until React observes the completed PM link. Store
+        // revision notifications can otherwise expose the old unlinked snapshot
+        // between the backend write and the PM provider's state update.
+        for (const pmTaskId of linkingTaskIdsRef.current) {
+            const appTaskId = pmState.tasks[pmTaskId]?.appTaskId;
+            if (!pmState.tasks[pmTaskId] || appTaskId) {
+                linkingTaskIdsRef.current.delete(pmTaskId);
+                if (appTaskId) pendingAppTaskLinksRef.current.delete(appTaskId);
+            }
+        }
+        const unlinked = Object.values(pmState.tasks).filter(
+            (t) => !t.isArchived && !t.appTaskId && !linkingTaskIdsRef.current.has(t.id),
+        );
         if (unlinked.length === 0) return;
-        let cancelled = false;
+        // Reserve the entire snapshot before the first await. Creating one task
+        // can rerender the bridge while the rest of this batch is still queued;
+        // per-item reservation lets those later entries be claimed again.
+        unlinked.forEach((task) => linkingTaskIdsRef.current.add(task.id));
         (async () => {
-            const activeBefore = appState.active_task;
             for (const pmTask of unlinked) {
-                if (cancelled) return;
+                let backendCreated = false;
                 try {
-                    const created = await createAppTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
-                    if (cancelled) return;
-                    updateTaskRef.current(pmTask.id, { appTaskId: created.id });
-                    if (activeBefore && activeBefore !== created.id) {
-                        try {
-                            await setActiveTask(activeBefore);
-                        } catch {}
-                    }
+                    // Stage directly through the data layer. Updating AppState
+                    // here would run the metadata effect before this PM row is
+                    // linked and create a second PM entry for the same task.
+                    const result = await data.createTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
+                    if (!mountedRef.current) return;
+                    backendCreated = true;
+                    pendingAppTaskLinksRef.current.set(result.value.id, pmTask.id);
+                    // Persist the relationship before creating the next backend
+                    // task. Task staging emits a store revision; relying only on
+                    // a React state patch lets that revision reload the previous
+                    // unlinked PM snapshot and discard the relationship.
+                    const latestPM = await data.loadPMState();
+                    const latestTask = latestPM?.tasks[pmTask.id];
+                    if (!latestPM || !latestTask) throw new Error(`PM task ${pmTask.id} disappeared while linking`);
+                    await data.savePMState({
+                        ...latestPM,
+                        tasks: {
+                            ...latestPM.tasks,
+                            [pmTask.id]: {
+                                ...latestTask,
+                                appTaskId: result.value.id,
+                                updatedAt: new Date().toISOString(),
+                            },
+                        },
+                    });
                 } catch (err) {
-                    console.warn("Failed to create backend task for PM entry", pmTask.id, err);
+                    console.warn("Failed to create or link backend task for PM entry", pmTask.id, err);
+                } finally {
+                    if (!backendCreated) linkingTaskIdsRef.current.delete(pmTask.id);
                 }
             }
             // Commands are local and adopt their staged results, so collapse the
             // repeated per-item refreshes into one post-loop view refresh. No
             // per-item sync; the explicit sync action remains the only write path.
-            if (!cancelled) {
+            if (mountedRef.current) {
                 try {
                     await refresh();
                 } catch (err) {
@@ -232,10 +274,7 @@ export const StateSyncBridge: React.FC = () => {
         })().catch((err) => {
             console.warn("[bridge] unexpected metadata propagation failure", err);
         });
-        return () => {
-            cancelled = true;
-        };
-    }, [pmState?.tasks, appState?.active_task, createAppTask, setActiveTask, refresh, updateTask]);
+    }, [pmState?.tasks, appState, data, refresh, updateTask]);
 
     // Sync time spent & worked pomodoros to PM metadata.
     useEffect(() => {

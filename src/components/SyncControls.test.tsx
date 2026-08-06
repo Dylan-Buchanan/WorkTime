@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SyncControls, UnsyncedBanner } from "./SyncControls";
 import { SyncProvider } from "../state/SyncContext";
 import { DataProvider } from "../state/DataContext";
@@ -99,6 +99,49 @@ describe("SyncControls", () => {
         const button = screen.getByRole("button", { name: /sync data/i });
         act(() => button.click());
         await waitFor(() => expect(screen.getByTestId("sync-status")).toHaveTextContent("Synced"));
+    });
+
+    it("requires typed confirmation before deleting staged changes", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <SyncControls />));
+        await waitFor(() => expect(screen.getByTestId("sync-status")).toHaveTextContent("Synced"));
+        await act(async () => {
+            await data.createTask("Pending", 1);
+        });
+
+        const openButton = screen.getByRole("button", { name: "Delete Changes" });
+        expect(openButton).toBeEnabled();
+        act(() => openButton.click());
+
+        const dialog = screen.getByRole("dialog", { name: "Delete staged changes?" });
+        const deleteButton = screen.getAllByRole("button", { name: "Delete Changes" })[1];
+        expect(dialog).toBeInTheDocument();
+        expect(deleteButton).toBeDisabled();
+
+        fireEvent.change(screen.getByLabelText("Confirmation"), { target: { value: "confirm" } });
+        expect(deleteButton).toBeEnabled();
+        await act(async () => deleteButton.click());
+
+        expect(screen.queryByRole("dialog", { name: "Delete staged changes?" })).not.toBeInTheDocument();
+        expect(data.pendingCount()).toBe(0);
+        expect(data.store.state.tasks).toEqual(makeAppState().tasks);
+        expect(openButton).toBeDisabled();
+    });
+
+    it("cancels deletion without removing staged changes", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <SyncControls />));
+        await waitFor(() => expect(screen.getByTestId("sync-status")).toHaveTextContent("Synced"));
+        await act(async () => {
+            await data.createTask("Pending", 1);
+        });
+
+        act(() => screen.getByRole("button", { name: "Delete Changes" }).click());
+        expect(screen.getByRole("dialog").parentElement).toBe(document.body);
+        act(() => screen.getByRole("button", { name: "Cancel" }).click());
+
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(data.pendingCount()).toBe(1);
     });
 });
 

@@ -112,6 +112,7 @@ export interface DataAccess {
     saveHabits(habits: Habit[], completions: HabitCompletion[]): Promise<void>;
     loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }>;
     sync(options: SyncOptions): Promise<SyncResult>;
+    discardPendingChanges(): Promise<void>;
     pendingCount(): number;
     isInitialized(): boolean;
     reloadFromStorage(): void;

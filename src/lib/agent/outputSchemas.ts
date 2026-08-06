@@ -1,3 +1,5 @@
+import type { ProposedTask } from "../../state/types";
+
 export type JsonSchema = {
     type: ("object" | "array" | "string" | "number" | "integer" | "boolean" | "null") | readonly ("object" | "array" | "string" | "number" | "integer" | "boolean" | "null")[];
     properties?: Record<string, JsonSchema>;
@@ -80,20 +82,7 @@ export const writerOutputSchema: JsonSchema = {
     },
 };
 
-export interface PlannerTaskOutput {
-    id?: string;
-    title: string;
-    projectId?: string | null;
-    status: (typeof taskStatus)[number];
-    priority: (typeof taskPriority)[number];
-    dueDate?: string;
-    estimatePomos?: number;
-    description?: string;
-    checklist: { id: string; title: string; done: boolean }[];
-    relatedTo: string[];
-    splitsFrom?: string;
-    rationale?: string;
-}
+export type PlannerTaskOutput = ProposedTask;
 
 export interface PlannerOutput {
     summary: string;

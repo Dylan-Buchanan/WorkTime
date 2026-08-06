@@ -456,6 +456,10 @@ export class StagedDataAccess implements DataAccess {
         return this.syncExecutor.sync(options);
     }
 
+    async discardPendingChanges(): Promise<void> {
+        await this.store.discardPendingChanges(this.ownerId);
+    }
+
     pendingCount(): number {
         return this.store.pendingCount(this.ownerId);
     }

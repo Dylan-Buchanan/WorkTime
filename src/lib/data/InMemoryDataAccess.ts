@@ -78,6 +78,7 @@ export class InMemoryDataAccess implements DataAccess {
     private readonly pendingAfterSync?: number;
     private readonly listeners = new Set<() => void>();
     private pending = 0;
+    private baseline: InMemoryDataStore;
 
     constructor(initial?: Partial<AppStateData> | InMemoryDataStore, options: InMemoryDataAccessOptions = {}) {
         if (initial && "state" in initial && "completed" in initial && "pmState" in initial) {
@@ -100,6 +101,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.habitCompletions = this.store.habitCompletions
             ? this.store.habitCompletions.map((completion) => clone(completion))
             : [];
+        this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
         this.createTaskId = options.createTaskId ?? randomId;
         this.createLogId = options.createLogId ?? randomId;
@@ -242,12 +244,23 @@ export class InMemoryDataAccess implements DataAccess {
         } else {
             this.pending = 0;
         }
+        if (this.pending === 0) this.baseline = clone(this.store);
         return {
             state: cloneAppState(this.store.state),
             pmState: this.store.pmState ? clone(this.store.pmState) : null,
             pendingCount: this.pending,
             initialized: true,
         };
+    }
+
+    async discardPendingChanges(): Promise<void> {
+        this.store.state = cloneAppState(this.baseline.state);
+        this.store.pmState = this.baseline.pmState ? clone(this.baseline.pmState) : null;
+        this.store.habits = this.baseline.habits.map((habit) => clone(habit));
+        this.store.habitCompletions = this.baseline.habitCompletions.map((completion) => clone(completion));
+        this.store.completed = this.baseline.completed;
+        this.pending = 0;
+        this.notify();
     }
 
     pendingCount(): number {

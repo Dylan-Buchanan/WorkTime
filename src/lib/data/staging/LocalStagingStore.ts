@@ -301,6 +301,61 @@ export class LocalStagingStore {
     }
 
     /**
+     * Replaces the local view with the last synced snapshot and removes every
+     * pending marker. Before the first successful pull there is no baseline to
+     * restore, so discarding returns the owner to a fresh uninitialized record.
+     */
+    async discardPendingChanges(ownerId: string): Promise<StagedOwnerRecord> {
+        const persisted = await this.withOwnerLock(ownerId, () => {
+            const current = this.read(ownerId);
+            const baseline = current.lastSynced;
+            const defaults = defaultAppState();
+            const timer = baseline?.timerState.value ?? {
+                active_task: defaults.active_task,
+                current_cycle_pomodoros: defaults.current_cycle_pomodoros,
+                timer: defaults.timer,
+            };
+            const next: StagedOwnerRecord = baseline === null
+                ? freshRecord(ownerId)
+                : {
+                    ...freshRecord(ownerId),
+                    ownerId,
+                    initialized: true,
+                    state: {
+                        tasks: Object.fromEntries(
+                            Object.entries(baseline.tasks).map(([id, row]) => [id, row.value]),
+                        ),
+                        logs: Object.values(baseline.logs),
+                        settings: baseline.settings.value ?? defaults.settings,
+                        active_task: timer.active_task,
+                        current_cycle_pomodoros: timer.current_cycle_pomodoros,
+                        timer: timer.timer,
+                    },
+                    pmState: baseline.pmState.value,
+                    timerCompleted: baseline.timerState.completed,
+                    lastSynced: baseline,
+                    habits: Object.fromEntries(
+                        Object.entries(baseline.habits).map(([id, row]) => [id, row.value]),
+                    ),
+                    habitCompletions: { ...baseline.habitCompletions },
+                };
+            const stored = { ...next, revision: current.revision + 1 };
+            try {
+                this.storage.setItem(stagingKey(ownerId), JSON.stringify(stored));
+            } catch (error) {
+                throw new StagingStorageError(
+                    `Unable to discard pending changes for owner "${ownerId}": ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            }
+            return stored;
+        });
+        this.notify(ownerId);
+        return persisted;
+    }
+
+    /**
      * Runs the read-modify-write inside the owner-scoped cross-context lock.
      * The lock name is derived from the staging key so unrelated owners never
      * serialize against each other. Any lock-API failure falls back to the

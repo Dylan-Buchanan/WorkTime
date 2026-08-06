@@ -300,6 +300,39 @@ describe("StateSyncBridge", () => {
         await waitFor(() => expect(screen.getByTestId("task-count")).toHaveTextContent("1"));
     });
 
+    it("links a batch of unlinked PM tasks without creating backend or PM duplicates", async () => {
+        const ids = ["generated-task-1", "generated-task-2", "generated-task-3"];
+        const data = new InMemoryDataAccess(makeAppState(), { createTaskId: () => ids.shift()! });
+        await data.savePMState({
+            projects: {},
+            tasks: {
+                pt1: makePMTask({ id: "pt1", title: "Schedule stakeholder demo", estimatePomos: 2 }),
+                pt2: makePMTask({ id: "pt2", title: "Read one technical chapter", estimatePomos: 2 }),
+                pt3: makePMTask({ id: "pt3", title: "Replace air filter", estimatePomos: 1 }),
+            },
+            meta: { initializedAt: "2026-01-01T00:00:00Z" },
+        });
+        const createTaskSpy = vi.spyOn(data, "createTask");
+
+        render(wrap(data, <PMProbe />));
+
+        await waitFor(async () => {
+            const tasks = (await data.loadPMState())?.tasks;
+            expect(Object.values(tasks ?? {}).map((task) => task.appTaskId).sort()).toEqual([
+                "generated-task-1",
+                "generated-task-2",
+                "generated-task-3",
+            ]);
+        });
+        expect(createTaskSpy).toHaveBeenCalledTimes(3);
+        expect(Object.keys(data.store.state.tasks).sort()).toEqual([
+            "generated-task-1",
+            "generated-task-2",
+            "generated-task-3",
+        ]);
+        expect(Object.keys((await data.loadPMState())?.tasks ?? {})).toEqual(["pt1", "pt2", "pt3"]);
+    });
+
     it("marks PM tasks Done when the backend task completes", async () => {
         const data = new InMemoryDataAccess(makeAppState({ tasks: { bt1: { id: "bt1", name: "Done task", target_pomodoros: 2, completed_pomodoros: 2, created_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-05T00:00:00Z", break_skips: 0, archived: false } } }));
         await data.savePMState({ projects: {}, tasks: { pt1: { id: "pt1", title: "Done task", projectId: null, status: "In Progress", priority: "Medium", timeSpentMinutes: 0, workedPomos: 0, tags: [], links: [], checklist: [], sortOrder: 0, isArchived: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", appTaskId: "bt1", relatedTo: [] } }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });

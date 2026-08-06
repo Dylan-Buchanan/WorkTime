@@ -143,6 +143,67 @@ describe("LocalStagingStore", () => {
         expect(record.lastSynced).toBeNull();
     });
 
+    it("discards every local delta and restores the last synced baseline", async () => {
+        const baseline = makeBaseline({
+            habits: { h1: { value: H("h1", { name: "Baseline habit" }), updatedAt: "2026-01-01T00:00:00.000Z" } },
+            habitCompletions: { c1: HC("c1", "h1") },
+        });
+        const store = new LocalStagingStore(window.localStorage);
+        await seedInitialized(store, OWNER_A, baseline);
+        await store.update(OWNER_A, (record) => ({
+            ...record,
+            state: makeAppState({ tasks: {}, logs: [], active_task: null }),
+            pmState: { projects: {}, tasks: {}, meta: { initializedAt: "2026-01-02T00:00:00.000Z" } },
+            taskUpdatedAt: { local: "2026-01-02T00:00:00.000Z" },
+            settingsUpdatedAt: "2026-01-02T00:00:00.000Z",
+            timerUpdatedAt: "2026-01-02T00:00:00.000Z",
+            pmUpdatedAt: "2026-01-02T00:00:00.000Z",
+            taskTombstones: { t1: { id: "t1", deletedAt: "2026-01-02T00:00:00.000Z" } },
+            logTombstones: { "log-0": { id: "log-0", deletedAt: "2026-01-02T00:00:00.000Z" } },
+            fullWipe: { createdAt: "2026-01-02T00:00:00.000Z" },
+            pendingCompletions: [],
+            habits: {},
+            habitCompletions: {},
+            habitUpdatedAt: {},
+            habitTombstones: { h1: { id: "h1", deletedAt: "2026-01-02T00:00:00.000Z" } },
+            habitCompletionTombstones: { c1: { id: "c1", deletedAt: "2026-01-02T00:00:00.000Z" } },
+        }));
+
+        const beforeRevision = store.read(OWNER_A).revision;
+        const restored = await store.discardPendingChanges(OWNER_A);
+
+        expect(restored.revision).toBe(beforeRevision + 1);
+        expect(restored.state.tasks).toEqual({ t1: BASE_TASK });
+        expect(restored.state.logs).toEqual([BASE_LOG]);
+        expect(restored.habits).toEqual({ h1: baseline.habits.h1.value });
+        expect(restored.habitCompletions).toEqual({ c1: baseline.habitCompletions.c1 });
+        expect(restored.pmState).toBeNull();
+        expect(restored.taskTombstones).toEqual({});
+        expect(restored.logTombstones).toEqual({});
+        expect(restored.habitTombstones).toEqual({});
+        expect(restored.habitCompletionTombstones).toEqual({});
+        expect(restored.fullWipe).toBeNull();
+        expect(restored.pendingCompletions).toEqual([]);
+        expect(store.pendingCount(OWNER_A)).toBe(0);
+    });
+
+    it("returns pre-bootstrap edits to a fresh uninitialized record", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        await store.update(OWNER_A, (record) => ({
+            ...record,
+            state: makeAppState({ tasks: { t1: BASE_TASK } }),
+        }));
+        expect(store.pendingCount(OWNER_A)).toBe(1);
+
+        const restored = await store.discardPendingChanges(OWNER_A);
+
+        expect(restored.initialized).toBe(false);
+        expect(restored.unbootstrapped).toBe(false);
+        expect(restored.lastSynced).toBeNull();
+        expect(restored.state).toEqual(makeAppState());
+        expect(store.pendingCount(OWNER_A)).toBe(0);
+    });
+
     it("returns a fresh non-initialized default for an absent record", () => {
         const store = new LocalStagingStore(window.localStorage);
         const record = store.read(OWNER_A);

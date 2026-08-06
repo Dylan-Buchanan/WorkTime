@@ -14,6 +14,7 @@ export interface SyncContextValue {
     revision: number;
     showUnsyncedBanner: boolean;
     sync(options?: Partial<SyncOptions>): Promise<SyncResult>;
+    discardPendingChanges(): Promise<void>;
     dismissUnsyncedBanner(): void;
 }
 
@@ -181,6 +182,14 @@ export const SyncProvider: React.FC<{ ownerId: string; children: React.ReactNode
 
     const dismissUnsyncedBanner = useCallback(() => setShowUnsyncedBanner(false), []);
 
+    const discardPendingChanges = useCallback(async (): Promise<void> => {
+        await data.discardPendingChanges();
+        setShowUnsyncedBanner(false);
+        setError(null);
+        setErrorKind(null);
+        setStatus("idle");
+    }, [data]);
+
     const value: SyncContextValue = {
         status,
         error,
@@ -190,6 +199,7 @@ export const SyncProvider: React.FC<{ ownerId: string; children: React.ReactNode
         revision,
         showUnsyncedBanner,
         sync,
+        discardPendingChanges,
         dismissUnsyncedBanner,
     };
 

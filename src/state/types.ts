@@ -47,6 +47,26 @@ export interface PMTask {
     relatedTo: string[]; // array of task IDs that must be done before this task
 }
 
+/**
+ * The task shape accepted from an agent planner. Proposal-only metadata such
+ * as `splitsFrom` and `rationale` intentionally does not belong on PMTask,
+ * because neither field is persisted as task state.
+ */
+export interface ProposedTask {
+    id?: string;
+    title: string;
+    projectId?: string | null;
+    status: TaskStatus;
+    priority: TaskPriority;
+    dueDate?: string;
+    estimatePomos?: number;
+    description?: string;
+    checklist: PMTask["checklist"];
+    relatedTo: string[];
+    splitsFrom?: string;
+    rationale?: string;
+}
+
 export interface ProjectManagerState {
     projects: Record<string, Project>;
     tasks: Record<string, PMTask>;
