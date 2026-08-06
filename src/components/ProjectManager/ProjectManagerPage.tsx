@@ -4,6 +4,7 @@ import { TasksListView } from "./TasksListView";
 import { TasksBoardView } from "./TasksBoardView";
 import { TaskInspector } from "./TaskInspector";
 import { usePM } from "../../state/ProjectManagerContext";
+import { AgentPanel } from "./AgentPanel";
 
 export const ProjectManagerPage: React.FC = () => {
     const { state, createTask, quickAddParse, setFilters, setView } = usePM();
@@ -129,6 +130,7 @@ export const ProjectManagerPage: React.FC = () => {
                 </div>
             </div>
             <DebugInfo />
+            {activeProjectId && <AgentPanel />}
         </div>
     );
 };

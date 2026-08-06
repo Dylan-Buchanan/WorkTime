@@ -25,6 +25,7 @@ import { SignupPage } from "./components/auth/SignupPage";
 import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
 import { TauriCloseProvider } from "./state/TauriCloseContext";
 import { HabitsPage } from "./components/HabitsPage";
+import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 
 const App: React.FC = () => (
     <BrowserRouter>
@@ -65,14 +66,16 @@ const AuthenticatedShell: React.FC = () => {
             <SyncProvider ownerId={session!.user.id}>
                 <AppStateProvider>
                     <ProjectManagerProvider>
-                        <HabitProvider>
-                            <StateSyncBridge />
-                            <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
-                                <TopNav />
-                                <UnsyncedBanner />
-                                <div className="flex-1 min-h-0"><Outlet /></div>
-                            </div>
-                        </HabitProvider>
+                        <AgentApprovalProvider>
+                            <HabitProvider>
+                                <StateSyncBridge />
+                                <div className="flex flex-col h-screen bg-neutral-950 text-neutral-200 text-xs">
+                                    <TopNav />
+                                    <UnsyncedBanner />
+                                    <div className="flex-1 min-h-0"><Outlet /></div>
+                                </div>
+                            </HabitProvider>
+                        </AgentApprovalProvider>
                     </ProjectManagerProvider>
                 </AppStateProvider>
             </SyncProvider>
