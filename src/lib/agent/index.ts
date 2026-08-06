@@ -53,3 +53,12 @@ export {
     requestWriterOutput,
 } from "./agentClient";
 export type { ValidatedJsonOptions } from "./agentClient";
+
+export { buildPlannerContext, calculatePomodoroBudget } from "../engine/plannerContext";
+export type {
+    AccuracyAggregate,
+    PlannerAccuracyAggregates,
+    PlannerContext,
+    PlannerContextInput,
+    PlannerTaskContext,
+} from "../engine/plannerContext";

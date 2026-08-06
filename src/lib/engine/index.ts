@@ -10,6 +10,15 @@ export {
 } from "./core";
 export type { EngineResult } from "./core";
 
+export { buildPlannerContext, calculatePomodoroBudget } from "./plannerContext";
+export type {
+    AccuracyAggregate,
+    PlannerAccuracyAggregates,
+    PlannerContext,
+    PlannerContextInput,
+    PlannerTaskContext,
+} from "./plannerContext";
+
 // State: get_state, create_task, update_settings, reset_app_state.
 export { createTask, getState, resetAppState, updateSettings } from "./stateCommands";
 // Task lifecycle: set_active_task, delete_task, archive_task, finalize_task, set_task_target.
