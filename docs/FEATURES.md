@@ -36,6 +36,7 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Analytics & reports** (time distribution, trends, filters) — `AnalyticsPage.tsx`
 -   **Settings & reset** — `SettingsPanel.tsx`
 -   **Agent BYOK settings** — `src/lib/agent/` and `SettingsPanel.tsx`; the frontend-only key uses the intentional `worktime:agent:apiKey` localStorage exception, while the selected OpenAI/DeepSeek provider uses `worktime:agent:provider`. Both are entered/configured separately in PWA and Tauri.
+-   **Agent workflow undo snapshot** — `worktime:agent:projectSnapshot:v1` is an intentional surface-local localStorage exception outside the synced staging store. It keeps only the latest selected-project pre-workflow task snapshot for manual revert; deployed PWA and Tauri surfaces retain separate copies by origin.
 -   **Sounds & notifications** — `useSounds.ts`, `@tauri-apps/plugin-notification`
 -   **Dev sample data** — `dev-data/data.json`
 

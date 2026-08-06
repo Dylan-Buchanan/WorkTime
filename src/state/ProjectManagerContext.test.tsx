@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { ProjectManagerProvider, usePM } from "./ProjectManagerContext";
 import { AppStateProvider } from "./AppStateContext";
 import { SyncProvider } from "./SyncContext";
@@ -40,6 +41,20 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
                 <SyncProvider ownerId={OWNER}>
                     <AppStateProvider>
                         <ProjectManagerProvider><StateSyncBridge />{children}</ProjectManagerProvider>
+                    </AppStateProvider>
+                </SyncProvider>
+            </DataProvider>
+        </TauriCloseProvider>
+    );
+}
+
+function wrapWithoutBridge(data: InMemoryDataAccess, children: React.ReactNode) {
+    return (
+        <TauriCloseProvider>
+            <DataProvider dataAccess={data}>
+                <SyncProvider ownerId={OWNER}>
+                    <AppStateProvider>
+                        <ProjectManagerProvider>{children}</ProjectManagerProvider>
                     </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
@@ -186,6 +201,60 @@ describe("ProjectManagerContext", () => {
         await waitForPMSettled(loadSpy);
         await act(async () => screen.getByText("quick").click());
         await waitFor(() => expect(Number(screen.getByTestId("task-count").textContent)).toBeGreaterThan(0));
+    });
+});
+
+function SnapshotProbe() {
+    const {
+        state,
+        captureAgentSnapshot,
+        getAgentSnapshot,
+        revertAgentSnapshot,
+        updateTask,
+    } = usePM();
+    const [confirmationToken, setConfirmationToken] = useState<string>();
+    const [result, setResult] = useState("none");
+    const current = state.tasks.pt1;
+    return <div>
+        <div data-testid="snapshot-title">{current?.title ?? "missing"}</div>
+        <div data-testid="snapshot-result">{result}</div>
+        <div data-testid="stored-snapshot">{getAgentSnapshot()?.projectId ?? "none"}</div>
+        <button onClick={() => captureAgentSnapshot()}>capture-snapshot</button>
+        <button onClick={() => updateTask("pt1", { title: "Changed" })}>change-snapshot-task</button>
+        <button onClick={() => {
+            const next = revertAgentSnapshot();
+            setResult(next.status);
+            if (next.status === "conflicts") setConfirmationToken(next.confirmationToken);
+        }}>preview-revert</button>
+        <button onClick={() => setResult(revertAgentSnapshot(confirmationToken).status)}>confirm-revert</button>
+    </div>;
+}
+
+describe("ProjectManagerContext agent snapshot revert", () => {
+    it("surfaces timestamp conflicts before restoring through the staged PM state", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({
+            projects: serverState(["p1"]).projects,
+            tasks: { pt1: makePMTask({ id: "pt1", title: "Original", projectId: "p1" }) },
+            meta: { initializedAt: "2026-01-01T00:00:00Z" },
+        });
+        render(wrapWithoutBridge(data, <SnapshotProbe />));
+        await waitFor(() => expect(screen.getByTestId("snapshot-title")).toHaveTextContent("Original"));
+
+        await act(async () => screen.getByText("capture-snapshot").click());
+        expect(screen.getByTestId("stored-snapshot")).toHaveTextContent("p1");
+        expect(localStorage.getItem("worktime:agent:projectSnapshot:v1")).not.toBeNull();
+
+        await act(async () => screen.getByText("change-snapshot-task").click());
+        expect(screen.getByTestId("snapshot-title")).toHaveTextContent("Changed");
+        await act(async () => screen.getByText("preview-revert").click());
+        expect(screen.getByTestId("snapshot-result")).toHaveTextContent("conflicts");
+        expect(screen.getByTestId("snapshot-title")).toHaveTextContent("Changed");
+
+        await act(async () => screen.getByText("confirm-revert").click());
+        expect(screen.getByTestId("snapshot-result")).toHaveTextContent("reverted");
+        expect(screen.getByTestId("snapshot-title")).toHaveTextContent("Original");
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1?.title).toBe("Original"));
     });
 });
 

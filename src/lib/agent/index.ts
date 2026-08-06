@@ -16,6 +16,20 @@ export {
 export type { AgentApiKeyStore, AgentProvider } from "./apiKey";
 
 export {
+    AGENT_PROJECT_SNAPSHOT_STORAGE_KEY,
+    clearAgentProjectSnapshot,
+    getAgentProjectSnapshot,
+    planAgentSnapshotRevert,
+    saveAgentProjectSnapshot,
+} from "./snapshotStore";
+export type {
+    AgentProjectSnapshot,
+    AgentSnapshotConflict,
+    AgentSnapshotConflictKind,
+    AgentSnapshotRevertPlan,
+} from "./snapshotStore";
+
+export {
     createChatCompletionsClient,
     createLLMTransport,
     createStoredAgentClient,

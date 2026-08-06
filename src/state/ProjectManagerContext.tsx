@@ -4,6 +4,13 @@ import { useAppState } from "./AppStateContext";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
 import type { SyncedPMState } from "../lib/data/DataAccess";
+import {
+    clearAgentProjectSnapshot,
+    getAgentProjectSnapshot,
+    planAgentSnapshotRevert,
+    saveAgentProjectSnapshot,
+} from "../lib/agent/snapshotStore";
+import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/snapshotStore";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -65,6 +72,12 @@ function buildDefaultState(): ProjectManagerState {
     };
 }
 
+export type AgentSnapshotRevertResult =
+    | { status: "no-snapshot" }
+    | { status: "project-missing"; projectId: string }
+    | { status: "conflicts"; snapshot: AgentProjectSnapshot; conflicts: AgentSnapshotConflict[]; confirmationToken: string }
+    | { status: "reverted"; snapshot: AgentProjectSnapshot; conflicts: AgentSnapshotConflict[]; restoredTaskIds: string[]; archivedTaskIds: string[] };
+
 interface PMContextShape {
     state: ProjectManagerState;
     createProject: (name: string, color?: string) => Project;
@@ -87,6 +100,10 @@ interface PMContextShape {
     setListGrouping: (g: ProjectManagerState["ui"]["listGrouping"]) => void;
     setFilters: (patch: Partial<ProjectManagerState["ui"]>) => void;
     refreshPM: () => Promise<void>;
+    captureAgentSnapshot: (projectId?: string) => AgentProjectSnapshot | null;
+    getAgentSnapshot: () => AgentProjectSnapshot | null;
+    clearAgentSnapshot: () => void;
+    revertAgentSnapshot: (confirmationToken?: string) => AgentSnapshotRevertResult;
 }
 
 const PMContext = createContext<PMContextShape | undefined>(undefined);
@@ -333,6 +350,58 @@ export const ProjectManagerProvider: React.FC<{
     const persist = useCallback((next: ProjectManagerState | ((prev: ProjectManagerState) => ProjectManagerState)) => {
         setState((prev) => (typeof next === "function" ? (next as any)(prev) : next));
     }, []);
+
+    const captureAgentSnapshot = useCallback((projectId?: string): AgentProjectSnapshot | null => {
+        const current = stateRef.current;
+        const selectedProjectId = projectId ?? current.ui.selectedProjectIds[0];
+        if (!selectedProjectId || !current.projects[selectedProjectId]) return null;
+        return saveAgentProjectSnapshot(selectedProjectId, Object.values(current.tasks));
+    }, []);
+
+    const getAgentSnapshot = useCallback(() => getAgentProjectSnapshot(), []);
+    const clearAgentSnapshot = useCallback(() => clearAgentProjectSnapshot(), []);
+
+    const revertAgentSnapshot = useCallback((confirmationToken?: string): AgentSnapshotRevertResult => {
+        const snapshot = getAgentProjectSnapshot();
+        if (!snapshot) return { status: "no-snapshot" };
+
+        const current = stateRef.current;
+        if (!current.projects[snapshot.projectId]) {
+            return { status: "project-missing", projectId: snapshot.projectId };
+        }
+        const plan = planAgentSnapshotRevert(snapshot, current.tasks);
+        if (plan.conflicts.length > 0 && confirmationToken !== plan.confirmationToken) {
+            return {
+                status: "conflicts",
+                snapshot,
+                conflicts: plan.conflicts,
+                confirmationToken: plan.confirmationToken,
+            };
+        }
+
+        if (plan.restoreTasks.length > 0 || plan.archiveTaskIds.length > 0) {
+            const revertedAt = now();
+            persist((prev) => {
+                const tasks = { ...prev.tasks };
+                for (const task of plan.restoreTasks) {
+                    tasks[task.id] = { ...task, updatedAt: revertedAt };
+                }
+                for (const taskId of plan.archiveTaskIds) {
+                    const task = tasks[taskId];
+                    if (task) tasks[taskId] = { ...task, isArchived: true, updatedAt: revertedAt };
+                }
+                return { ...prev, tasks };
+            });
+        }
+
+        return {
+            status: "reverted",
+            snapshot,
+            conflicts: plan.conflicts,
+            restoredTaskIds: plan.restoreTasks.map((task) => task.id),
+            archivedTaskIds: plan.archiveTaskIds,
+        };
+    }, [persist]);
 
     const createProject = (name: string, color?: string): Project => {
         const id = uuid();
@@ -686,6 +755,10 @@ export const ProjectManagerProvider: React.FC<{
                 setListGrouping,
                 setFilters,
                 refreshPM,
+                captureAgentSnapshot,
+                getAgentSnapshot,
+                clearAgentSnapshot,
+                revertAgentSnapshot,
             }}
         >
             {children}
