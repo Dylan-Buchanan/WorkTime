@@ -46,12 +46,16 @@ export type {
 } from "./llmTransport";
 
 export {
+    chatOutputSchema,
     parseStrictJson,
+    plannerTaskSchema,
     plannerOutputSchema,
     validateJsonAgainstSchema,
     writerOutputSchema,
 } from "./outputSchemas";
 export type {
+    ChatCreateOutput,
+    ChatOutput,
     JsonSchema,
     PlannerOutput,
     PlannerTaskOutput,
@@ -59,6 +63,9 @@ export type {
     WriterOutput,
     WriterTaskOutput,
 } from "./outputSchemas";
+
+export { runChatWorkflow } from "./chatWorkflow";
+export type { AgentChatMessage, ChatWorkflowInput, ChatWorkflowResult } from "./chatWorkflow";
 
 export {
     AgentOutputValidationError,

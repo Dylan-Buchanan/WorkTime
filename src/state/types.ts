@@ -61,6 +61,8 @@ export interface ProposedTask {
     dueDate?: string;
     estimatePomos?: number;
     description?: string;
+    /** Optional quick-add metadata used by chat task creation. */
+    tags?: string[];
     checklist: PMTask["checklist"];
     relatedTo: string[];
     splitsFrom?: string;

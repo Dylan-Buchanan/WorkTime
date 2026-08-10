@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronDown, RotateCcw, Settings2, Sparkles, X } from "lucide-react";
+import { Bot, ChevronDown, RotateCcw, Send, Settings2, Sparkles, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { getAgentApiKey, subscribeToAgentApiKey } from "../../lib/agent/apiKey";
 import { saveAgentStartOfDayPlan } from "../../lib/agent/startOfDayPlanStore";
@@ -14,9 +14,14 @@ import {
     type StartOfDayProgressEvent,
     type StartOfDayWorkflowResult,
 } from "../../lib/agent/startOfDayWorkflow";
+import {
+    runChatWorkflow,
+    type AgentChatMessage,
+} from "../../lib/agent/chatWorkflow";
 import { type AgentMode, useAgentApproval } from "../../state/AgentApprovalContext";
 import { useAppState } from "../../state/AppStateContext";
 import { usePM } from "../../state/ProjectManagerContext";
+import { useHabits } from "../../state/HabitContext";
 import type { TaskChange } from "../../lib/engine/diffEngine";
 import { AgentApprovalCard } from "./AgentApprovalCard";
 
@@ -170,10 +175,12 @@ function rejectionFeedback(change: TaskChange): string {
 export const AgentPanel: React.FC<{
     runStartOfDay?: typeof runStartOfDayWorkflow;
     runEndOfDay?: typeof runEndOfDayWorkflow;
-}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow }) => {
+    runChat?: typeof runChatWorkflow;
+}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow, runChat = runChatWorkflow }) => {
     const agent = useAgentApproval();
     const pm = usePM();
     const app = useAppState();
+    const habits = useHabits();
     const [open, setOpen] = useState(false);
     const [hasKey, setHasKey] = useState(() => Boolean(getAgentApiKey()));
     const [confirmationToken, setConfirmationToken] = useState<string | null>(null);
@@ -185,17 +192,23 @@ export const AgentPanel: React.FC<{
     const [progressEvents, setProgressEvents] = useState<StartOfDayProgressEvent[]>([]);
     const [planPreview, setPlanPreview] = useState<StartOfDayWorkflowResult | null>(null);
     const [endOfDayPreview, setEndOfDayPreview] = useState<EndOfDayWorkflowResult | null>(null);
+    const [chatDraft, setChatDraft] = useState("");
+    const [chatMessages, setChatMessages] = useState<AgentChatMessage[]>([]);
     const latestWorkflow = useRef<StartOfDayWorkflowResult | null>(null);
     const latestEndOfDayWorkflow = useRef<EndOfDayWorkflowResult | null>(null);
     const generationInFlightRef = useRef(false);
     const pmStateRef = useRef(pm.state);
     const appStateRef = useRef(app.state);
     const workUntilRef = useRef(workUntil);
+    const chatMessagesRef = useRef(chatMessages);
+    const habitStateRef = useRef(habits.state);
     const approveCurrentRef = useRef(agent.approveCurrent);
     const rejectCurrentRef = useRef(agent.rejectCurrent);
     pmStateRef.current = pm.state;
     appStateRef.current = app.state;
     workUntilRef.current = workUntil;
+    chatMessagesRef.current = chatMessages;
+    habitStateRef.current = habits.state;
     approveCurrentRef.current = agent.approveCurrent;
     rejectCurrentRef.current = agent.rejectCurrent;
     const appendProgress = useCallback((event: StartOfDayProgressEvent) => {
@@ -360,6 +373,71 @@ export const AgentPanel: React.FC<{
         }
     };
 
+    const handleChat = async () => {
+        if (generationInFlightRef.current) return;
+        const message = chatDraft.trim();
+        if (!message) return;
+        const projectId = pm.state.ui.selectedProjectIds[0];
+        if (!projectId) {
+            setGenerationError("Select a project before chatting with the agent.");
+            return;
+        }
+        const nextMessages: AgentChatMessage[] = [...chatMessagesRef.current, { role: "user", content: message }];
+        setChatDraft("");
+        setChatMessages(nextMessages);
+        chatMessagesRef.current = nextMessages;
+        generationInFlightRef.current = true;
+        setGenerating(true);
+        setGenerationError(null);
+        try {
+            const result = await runChat({
+                projectId,
+                pmState: pm.state,
+                habits: Object.values(habits.state.habits),
+                completions: Object.values(habits.state.completions),
+                messages: nextMessages,
+            });
+            const withReply: AgentChatMessage[] = [...nextMessages, { role: "assistant", content: result.reply }];
+            setChatMessages(withReply);
+            chatMessagesRef.current = withReply;
+            if (result.changes.length > 0) {
+                const started = agent.startReview({
+                    projectId,
+                    mode: "chat",
+                    changes: result.changes,
+                    summary: result.reply,
+                    replan: async ({ workingTasks, rejectedChange }) => {
+                        const currentPmState = pmStateRef.current;
+                        const replanned = await runChat({
+                            projectId,
+                            pmState: {
+                                projects: currentPmState.projects,
+                                tasks: Object.fromEntries([
+                                    ...Object.values(currentPmState.tasks).filter((task) => task.projectId !== projectId || task.isArchived),
+                                    ...workingTasks,
+                                ].map((task) => [task.id, task])),
+                            },
+                            habits: Object.values(habitStateRef.current.habits),
+                            completions: Object.values(habitStateRef.current.completions),
+                            messages: chatMessagesRef.current,
+                            rejectionFeedback: rejectionFeedback(rejectedChange),
+                        });
+                        const replannedMessages: AgentChatMessage[] = [...chatMessagesRef.current, { role: "assistant", content: replanned.reply }];
+                        setChatMessages(replannedMessages);
+                        chatMessagesRef.current = replannedMessages;
+                        return replanned.changes;
+                    },
+                });
+                if (!started) setGenerationError("The review could not start. Finish any active review before sending another proposal.");
+            }
+        } catch (error) {
+            setGenerationError(error instanceof Error ? error.message : "The chat response could not be generated.");
+        } finally {
+            generationInFlightRef.current = false;
+            setGenerating(false);
+        }
+    };
+
     const orderLabels = useMemo(() => agent.currentChange?.type === "reorder"
         ? {
             before: (agent.currentChange.beforeTaskIds ?? []).map((id) => pm.state.tasks[id]?.title ?? id),
@@ -424,7 +502,25 @@ export const AgentPanel: React.FC<{
                                 {generating && <p role="status" className="mt-2 text-[11px] text-emerald-300">Comparing progress and preparing tomorrow…</p>}
                                 {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
                             </div>
-                        ) : agent.mode ? <p role="status" className="mt-3 rounded-lg bg-neutral-900 p-2 text-[11px] text-neutral-400">{MODES.find((mode) => mode.id === agent.mode)?.label} selected. The workflow will present each proposed change here for approval.</p> : null}
+                        ) : agent.mode === "chat" ? (
+                            <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-900 p-3">
+                                <div aria-label="Agent chat messages" className="max-h-52 space-y-2 overflow-y-auto">
+                                    {chatMessages.length === 0 && <p className="text-[11px] leading-relaxed text-neutral-400">Ask about the selected project or your habits, or request task changes. Any changes will wait for your approval.</p>}
+                                    {chatMessages.map((message, index) => (
+                                        <div key={`${message.role}-${index}`} className={`rounded-lg px-2.5 py-2 text-[11px] leading-relaxed ${message.role === "user" ? "ml-6 bg-violet-600/20 text-violet-100" : "mr-6 bg-neutral-950 text-neutral-200"}`}>
+                                            <span className="sr-only">{message.role === "user" ? "You" : "Agent"}: </span>{message.content}
+                                        </div>
+                                    ))}
+                                </div>
+                                <label htmlFor="agent-chat-message" className="sr-only">Message the planning agent</label>
+                                <div className="mt-3 flex items-end gap-2">
+                                    <textarea id="agent-chat-message" aria-label="Message the planning agent" rows={2} value={chatDraft} onChange={(event) => { setChatDraft(event.target.value); setGenerationError(null); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void handleChat(); } }} placeholder="Ask or propose a change…" className="min-w-0 flex-1 resize-none rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-2 text-[11px] text-neutral-100 placeholder:text-neutral-600" />
+                                    <button type="button" aria-label="Send message" disabled={generating || !chatDraft.trim()} onClick={() => void handleChat()} className="rounded-lg bg-violet-600 p-2 text-white hover:bg-violet-500 disabled:opacity-50"><Send size={15} /></button>
+                                </div>
+                                {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Thinking with your project and habit context…</p>}
+                                {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
+                            </div>
+                        ) : null}
                     </>
                 )}
 

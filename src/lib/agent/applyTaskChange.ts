@@ -19,6 +19,7 @@ function proposedTaskPatch(change: TaskChange, fallbackProjectId: string): Parti
         dueDate: after.dueDate,
         estimatePomos: after.estimatePomos,
         description: after.description,
+        ...(after.tags ? { tags: [...after.tags] } : {}),
         checklist: after.checklist.map((item) => ({ ...item })),
         relatedTo: [...after.relatedTo],
     };

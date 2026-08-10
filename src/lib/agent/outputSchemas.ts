@@ -30,7 +30,7 @@ const checklistItemSchema: JsonSchema = {
     },
 };
 
-const plannerTaskSchema: JsonSchema = {
+export const plannerTaskSchema: JsonSchema = {
     type: "object",
     additionalProperties: false,
     required: ["title", "status", "priority", "checklist", "relatedTo"],
@@ -43,6 +43,7 @@ const plannerTaskSchema: JsonSchema = {
         dueDate: { type: "string", minLength: 1 },
         estimatePomos: { type: "integer", minimum: 1 },
         description: { type: "string" },
+        tags: { type: "array", items: { type: "string", minLength: 1 } },
         checklist: { type: "array", items: checklistItemSchema },
         relatedTo: { type: "array", items: { type: "string", minLength: 1 } },
         splitsFrom: { type: "string", minLength: 1 },
@@ -93,6 +94,33 @@ export const endOfDayOutputSchema: JsonSchema = {
     },
 };
 
+const chatCreateSchema: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["quickAdd", "scope"],
+    properties: {
+        quickAdd: { type: "string", minLength: 1 },
+        scope: { type: "string", enum: ["selected-project", "general"] },
+        description: { type: "string" },
+        checklist: { type: "array", items: checklistItemSchema },
+        relatedTo: { type: "array", items: { type: "string", minLength: 1 } },
+        rationale: { type: "string", minLength: 1 },
+    },
+};
+
+/** Incremental chat output. Omitted current tasks remain untouched. */
+export const chatOutputSchema: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["reply", "creates", "updates", "removeTaskIds"],
+    properties: {
+        reply: { type: "string", minLength: 1 },
+        creates: { type: "array", items: chatCreateSchema },
+        updates: { type: "array", items: plannerTaskSchema },
+        removeTaskIds: { type: "array", items: { type: "string", minLength: 1 } },
+    },
+};
+
 export type PlannerTaskOutput = ProposedTask;
 
 export interface PlannerOutput {
@@ -115,6 +143,22 @@ export interface WriterOutput {
 export interface EndOfDayOutput {
     summary: string;
     orderedTaskIds: string[];
+}
+
+export interface ChatCreateOutput {
+    quickAdd: string;
+    scope: "selected-project" | "general";
+    description?: string;
+    checklist?: { id: string; title: string; done: boolean }[];
+    relatedTo?: string[];
+    rationale?: string;
+}
+
+export interface ChatOutput {
+    reply: string;
+    creates: ChatCreateOutput[];
+    updates: PlannerTaskOutput[];
+    removeTaskIds: string[];
 }
 
 function typeMatches(value: unknown, type: JsonSchema["type"]): boolean {

@@ -6,6 +6,7 @@ import { DataProvider } from "./DataContext";
 import { SyncProvider } from "./SyncContext";
 import { AppStateProvider } from "./AppStateContext";
 import { ProjectManagerProvider, usePM } from "./ProjectManagerContext";
+import { HabitProvider } from "./HabitContext";
 import { AgentApprovalProvider, type AgentReplanInput, type AgentReviewCompletionInput, useAgentApproval } from "./AgentApprovalContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
@@ -15,6 +16,7 @@ import { AgentPanel } from "../components/ProjectManager/AgentPanel";
 import { setAgentApiKey } from "../lib/agent/apiKey";
 import type { StartOfDayWorkflowInput, StartOfDayWorkflowResult } from "../lib/agent/startOfDayWorkflow";
 import type { EndOfDayWorkflowInput, EndOfDayWorkflowResult } from "../lib/agent/endOfDayWorkflow";
+import type { ChatWorkflowInput } from "../lib/agent/chatWorkflow";
 
 const OWNER = "agent-owner";
 const guardrails = {
@@ -64,7 +66,7 @@ async function dataWithProject() {
 }
 
 function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
-    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId={OWNER}><AppStateProvider><ProjectManagerProvider><AgentApprovalProvider>{children}</AgentApprovalProvider></ProjectManagerProvider></AppStateProvider></SyncProvider></DataProvider></TauriCloseProvider>;
+    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId={OWNER}><AppStateProvider><ProjectManagerProvider><AgentApprovalProvider><HabitProvider>{children}</HabitProvider></AgentApprovalProvider></ProjectManagerProvider></AppStateProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
 
 const Probe: React.FC<{ replan: (input: AgentReplanInput) => Promise<TaskChange[]>; changes?: TaskChange[]; onComplete?: (input: AgentReviewCompletionInput) => void | Promise<void> }> = ({ replan, changes = [updateChange("Rewritten")], onComplete }) => {
@@ -265,6 +267,39 @@ describe("AgentApprovalProvider", () => {
         expect(runEndOfDay).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p1" }));
         fireEvent.click(screen.getByRole("button", { name: "Approve" }));
         await waitFor(() => expect(screen.getByTestId("tomorrow-order")).toHaveTextContent("Second,First"));
+    });
+
+    it("runs a multi-turn chat with project and habit context and reviews proposed changes", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const runChat = vi.fn(async (_input: ChatWorkflowInput) => ({
+            projectId: "p1",
+            reply: "I can clarify the next action for you.",
+            changes: [updateChange("Draft the launch outline")],
+        }));
+        const PanelProbe = () => {
+            const pm = usePM();
+            return <><span data-testid="chat-task-title">{pm.state.tasks.t1?.title ?? "loading"}</span><AgentPanel runChat={runChat} /></>;
+        };
+        render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
+        await screen.findByText("Original");
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /^Chat/ }));
+        fireEvent.change(screen.getByLabelText("Message the planning agent"), { target: { value: "Make the first task actionable" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+        expect(await screen.findByLabelText("Update task proposal")).toBeInTheDocument();
+        expect(screen.getByText("I can clarify the next action for you.")).toBeInTheDocument();
+        expect(runChat).toHaveBeenCalledWith(expect.objectContaining({
+            projectId: "p1",
+            messages: [{ role: "user", content: "Make the first task actionable" }],
+            habits: expect.any(Array),
+            completions: expect.any(Array),
+        }));
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(screen.getByTestId("chat-task-title")).toHaveTextContent("Draft the launch outline"));
+        expect(screen.getByLabelText("Agent chat messages")).toHaveTextContent("Make the first task actionable");
+        expect(screen.getByLabelText("Agent chat messages")).toHaveTextContent("I can clarify the next action for you.");
     });
 
     it("explains when End-of-Day has no saved Start-of-Day handoff", async () => {
