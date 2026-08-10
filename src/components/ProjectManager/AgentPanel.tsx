@@ -4,6 +4,10 @@ import { Link } from "react-router-dom";
 import { getAgentApiKey, subscribeToAgentApiKey } from "../../lib/agent/apiKey";
 import { saveAgentStartOfDayPlan } from "../../lib/agent/startOfDayPlanStore";
 import {
+    runEndOfDayWorkflow,
+    type EndOfDayWorkflowResult,
+} from "../../lib/agent/endOfDayWorkflow";
+import {
     runStartOfDayWorkflow,
     summarizeStartOfDayApprovedChanges,
     type StartOfDayPhase,
@@ -62,6 +66,24 @@ const StartOfDayPlanPreview: React.FC<{ plan: StartOfDayWorkflowResult }> = ({ p
                 </li>
             ))}
         </ol>
+    </section>
+);
+
+const EndOfDayPreview: React.FC<{ result: EndOfDayWorkflowResult }> = ({ result }) => (
+    <section aria-label="Tomorrow overview" className="mb-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3">
+        <div className="flex items-start justify-between gap-3">
+            <div>
+                <h2 className="font-semibold text-emerald-100">Tomorrow overview</h2>
+                <p className="mt-0.5 text-[10px] text-emerald-200/70">
+                    {result.comparison.completedCount} completed, {result.comparison.partialCount} partial, {result.comparison.notStartedCount} not started from today&apos;s plan.
+                </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-emerald-400/15 px-2 py-1 text-[10px] font-medium text-emerald-100">{result.tomorrowTasks.length} remaining</span>
+        </div>
+        <p className="mt-2 rounded-lg bg-neutral-950/40 p-2 text-[11px] leading-relaxed text-neutral-200">{result.summary}</p>
+        {result.tomorrowTasks.length > 0 && <ol className="mt-3 space-y-1.5">
+            {result.tomorrowTasks.map((task, index) => <li key={task.taskId} className="flex items-center gap-2 rounded-lg bg-neutral-950/50 px-2.5 py-2"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-400/20 text-[10px] font-semibold text-emerald-100">{index + 1}</span><span className="min-w-0 flex-1 truncate font-medium text-neutral-100">{task.title}</span><span className="text-[10px] text-neutral-500">{task.priority}</span></li>)}
+        </ol>}
     </section>
 );
 
@@ -145,7 +167,10 @@ function rejectionFeedback(change: TaskChange): string {
     return `The user rejected the ${change.type} change for "${title}". Keep already applied work and produce a different valid target.`;
 }
 
-export const AgentPanel: React.FC<{ runStartOfDay?: typeof runStartOfDayWorkflow }> = ({ runStartOfDay = runStartOfDayWorkflow }) => {
+export const AgentPanel: React.FC<{
+    runStartOfDay?: typeof runStartOfDayWorkflow;
+    runEndOfDay?: typeof runEndOfDayWorkflow;
+}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow }) => {
     const agent = useAgentApproval();
     const pm = usePM();
     const app = useAppState();
@@ -159,7 +184,9 @@ export const AgentPanel: React.FC<{ runStartOfDay?: typeof runStartOfDayWorkflow
     const [generationError, setGenerationError] = useState<string | null>(null);
     const [progressEvents, setProgressEvents] = useState<StartOfDayProgressEvent[]>([]);
     const [planPreview, setPlanPreview] = useState<StartOfDayWorkflowResult | null>(null);
+    const [endOfDayPreview, setEndOfDayPreview] = useState<EndOfDayWorkflowResult | null>(null);
     const latestWorkflow = useRef<StartOfDayWorkflowResult | null>(null);
+    const latestEndOfDayWorkflow = useRef<EndOfDayWorkflowResult | null>(null);
     const generationInFlightRef = useRef(false);
     const pmStateRef = useRef(pm.state);
     const appStateRef = useRef(app.state);
@@ -278,6 +305,61 @@ export const AgentPanel: React.FC<{ runStartOfDay?: typeof runStartOfDayWorkflow
         }
     };
 
+    const handleEndOfDay = async () => {
+        if (generationInFlightRef.current) return;
+        const projectId = pm.state.ui.selectedProjectIds[0];
+        if (!projectId) {
+            setGenerationError("Select a project before wrapping up the day.");
+            return;
+        }
+        generationInFlightRef.current = true;
+        setGenerating(true);
+        setGenerationError(null);
+        setProgressEvents([]);
+        setEndOfDayPreview(null);
+        try {
+            const result = await runEndOfDay({ projectId, pmState: pm.state, now: new Date(), onProgress: appendProgress });
+            const previousWorkflow = latestEndOfDayWorkflow.current;
+            latestEndOfDayWorkflow.current = result;
+            setEndOfDayPreview(result);
+            const started = agent.startReview({
+                projectId,
+                mode: "end-of-day",
+                changes: result.changes,
+                summary: result.summary,
+                replan: async ({ workingTasks, rejectedChange }) => {
+                    const currentPmState = pmStateRef.current;
+                    const replanned = await runEndOfDay({
+                        projectId,
+                        pmState: {
+                            tasks: Object.fromEntries([
+                                ...Object.values(currentPmState.tasks).filter((task) => task.isArchived),
+                                ...workingTasks,
+                            ].map((task) => [task.id, task])),
+                            ui: { ...currentPmState.ui, selectedProjectIds: [projectId] },
+                        },
+                        now: new Date(),
+                        rejectionFeedback: rejectionFeedback(rejectedChange),
+                        onProgress: appendProgress,
+                    });
+                    latestEndOfDayWorkflow.current = replanned;
+                    setEndOfDayPreview(replanned);
+                    return replanned.changes;
+                },
+            });
+            if (!started) {
+                latestEndOfDayWorkflow.current = previousWorkflow;
+                setEndOfDayPreview(previousWorkflow);
+                setGenerationError("The review could not start. Select an existing project and finish any active review before trying again.");
+            }
+        } catch (error) {
+            setGenerationError(error instanceof Error ? error.message : "The End-of-Day review could not be generated.");
+        } finally {
+            generationInFlightRef.current = false;
+            setGenerating(false);
+        }
+    };
+
     const orderLabels = useMemo(() => agent.currentChange?.type === "reorder"
         ? {
             before: (agent.currentChange.beforeTaskIds ?? []).map((id) => pm.state.tasks[id]?.title ?? id),
@@ -301,6 +383,7 @@ export const AgentPanel: React.FC<{ runStartOfDay?: typeof runStartOfDayWorkflow
 
             <div className="max-h-[70vh] overflow-y-auto p-3">
                 {hasKey && agent.mode === "start-of-day" && planPreview && <StartOfDayPlanPreview plan={planPreview} />}
+                {hasKey && agent.mode === "end-of-day" && endOfDayPreview && <EndOfDayPreview result={endOfDayPreview} />}
                 {!hasKey ? (
                     <div className="rounded-xl border border-dashed border-neutral-700 p-4 text-center">
                         <Settings2 className="mx-auto text-violet-300" size={22} />
@@ -332,6 +415,13 @@ export const AgentPanel: React.FC<{ runStartOfDay?: typeof runStartOfDayWorkflow
                                     <button type="button" disabled={generating || !workUntil} onClick={() => void handleStartOfDay()} className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-500 disabled:opacity-50">{generating ? "Planning…" : "Generate plan"}</button>
                                 </div>
                                 {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Building and validating your day plan…</p>}
+                                {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
+                            </div>
+                        ) : agent.mode === "end-of-day" ? (
+                            <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-900 p-3">
+                                <p className="text-[11px] text-neutral-300">Compare today&apos;s saved plan with completed work and prepare the priority order for tomorrow.</p>
+                                <button type="button" disabled={generating} onClick={() => void handleEndOfDay()} className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-1.5 font-medium text-white hover:bg-emerald-500 disabled:opacity-50">{generating ? "Wrapping up…" : "Wrap up day"}</button>
+                                {generating && <p role="status" className="mt-2 text-[11px] text-emerald-300">Comparing progress and preparing tomorrow…</p>}
                                 {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
                             </div>
                         ) : agent.mode ? <p role="status" className="mt-3 rounded-lg bg-neutral-900 p-2 text-[11px] text-neutral-400">{MODES.find((mode) => mode.id === agent.mode)?.label} selected. The workflow will present each proposed change here for approval.</p> : null}

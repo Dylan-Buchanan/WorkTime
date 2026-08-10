@@ -83,6 +83,16 @@ export const writerOutputSchema: JsonSchema = {
     },
 };
 
+export const endOfDayOutputSchema: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary", "orderedTaskIds"],
+    properties: {
+        summary: { type: "string", minLength: 1 },
+        orderedTaskIds: { type: "array", items: { type: "string", minLength: 1 } },
+    },
+};
+
 export type PlannerTaskOutput = ProposedTask;
 
 export interface PlannerOutput {
@@ -100,6 +110,11 @@ export interface WriterTaskOutput {
 export interface WriterOutput {
     summary: string;
     proposedTasks: WriterTaskOutput[];
+}
+
+export interface EndOfDayOutput {
+    summary: string;
+    orderedTaskIds: string[];
 }
 
 function typeMatches(value: unknown, type: JsonSchema["type"]): boolean {

@@ -14,6 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import { AgentPanel } from "../components/ProjectManager/AgentPanel";
 import { setAgentApiKey } from "../lib/agent/apiKey";
 import type { StartOfDayWorkflowInput, StartOfDayWorkflowResult } from "../lib/agent/startOfDayWorkflow";
+import type { EndOfDayWorkflowInput, EndOfDayWorkflowResult } from "../lib/agent/endOfDayWorkflow";
 
 const OWNER = "agent-owner";
 const guardrails = {
@@ -226,6 +227,59 @@ describe("AgentApprovalProvider", () => {
         expect(localStorage.getItem("worktime:agent:startOfDayPlan:v1")).not.toContain("One improvement");
         fireEvent.click(screen.getByRole("button", { name: "Clear activity" }));
         expect(screen.queryByLabelText("Agent activity")).not.toBeInTheDocument();
+    });
+
+    it("launches End-of-Day, previews tomorrow, and applies the approved priority order", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({
+            projects: { p1: { id: "p1", name: "Plan", color: "#6366F1", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" } },
+            tasks: { t1: task("First"), t2: { ...task("Second"), id: "t2", sortOrder: 1 } },
+            meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
+        });
+        setAgentApiKey("test-key");
+        const reorder: TaskChange = {
+            type: "reorder", action: "reorderTasks", beforeTaskIds: ["t1", "t2"], afterTaskIds: ["t2", "t1"],
+            guardrails, blocked: false, blockReasons: [],
+        };
+        const runEndOfDay = vi.fn(async (_input: EndOfDayWorkflowInput): Promise<EndOfDayWorkflowResult> => ({
+            projectId: "p1", createdAt: "2026-08-10T22:00:00.000Z", summary: "Start with Second tomorrow.",
+            comparison: { plannedCount: 2, completedCount: 1, partialCount: 1, notStartedCount: 0, missingCount: 0, items: [] },
+            tomorrowTasks: [
+                { taskId: "t2", title: "Second", status: "Backlog", priority: "Medium" },
+                { taskId: "t1", title: "First", status: "Backlog", priority: "Medium" },
+            ],
+            changes: [reorder],
+        }));
+        const PanelProbe = () => {
+            const pm = usePM();
+            return <><span data-testid="tomorrow-order">{Object.values(pm.state.tasks).sort((left, right) => left.sortOrder - right.sortOrder).map((item) => item.title).join(",")}</span><AgentPanel runEndOfDay={runEndOfDay} /></>;
+        };
+        render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
+        await screen.findByText("First,Second");
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /End of Day/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Wrap up day" }));
+
+        expect(await screen.findByLabelText("Tomorrow overview")).toHaveTextContent("Start with Second tomorrow.");
+        expect(screen.getByLabelText("Tomorrow overview")).toHaveTextContent("1 completed, 1 partial");
+        expect(runEndOfDay).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p1" }));
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(screen.getByTestId("tomorrow-order")).toHaveTextContent("Second,First"));
+    });
+
+    it("explains when End-of-Day has no saved Start-of-Day handoff", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const PanelProbe = () => {
+            const pm = usePM();
+            return <><span>{pm.state.tasks.t1?.title ?? "loading"}</span><AgentPanel /></>;
+        };
+        render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
+        await screen.findByText("Original");
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /End of Day/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Wrap up day" }));
+        expect(await screen.findByText(/No valid Start-of-Day plan/)).toHaveAttribute("role", "alert");
     });
 
     it("uses current project state when replanning after a task is archived", async () => {
