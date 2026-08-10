@@ -19,6 +19,20 @@ export type {
     PlannerTaskContext,
 } from "./plannerContext";
 
+export {
+    remainingEstimatePomos,
+    selectStartOfDayPlanItems,
+    START_OF_DAY_MAX_TASK_POMOS,
+    validateStartOfDayPlan,
+} from "./startOfDay";
+export type {
+    StartOfDayPlanItem,
+    StartOfDayPlanIssue,
+    StartOfDayPlanIssueCode,
+    StartOfDayPlanValidation,
+    StartOfDayPlanValidationInput,
+} from "./startOfDay";
+
 export { diffPlannerTasks, diffProposedTasks } from "./diffEngine";
 export type {
     DiffPlannerTasksInput,

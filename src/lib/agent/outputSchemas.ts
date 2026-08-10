@@ -47,6 +47,7 @@ const plannerTaskSchema: JsonSchema = {
         relatedTo: { type: "array", items: { type: "string", minLength: 1 } },
         splitsFrom: { type: "string", minLength: 1 },
         rationale: { type: "string", minLength: 1 },
+        estimateEvidenceTaskIds: { type: "array", items: { type: "string", minLength: 1 } },
     },
 };
 

@@ -86,6 +86,28 @@ describe("diffPlannerTasks", () => {
         });
     });
 
+    it("excludes Done tasks but retains Blocked tasks in the reorder proposal", () => {
+        const first = currentTask();
+        const second = currentTask({ id: "task-2", title: "Review report", sortOrder: 1 });
+        const done = currentTask({ id: "task-done", title: "Finished report", status: "Done", sortOrder: 2 });
+        const blocked = currentTask({ id: "task-blocked", title: "Blocked report", status: "Blocked", sortOrder: 3 });
+        const result = diffPlannerTasks({
+            currentTasks: [first, second, done, blocked],
+            proposedTasks: [
+                proposed({ id: "task-2", title: "Review report" }),
+                proposed({ id: "task-done", title: "Finished report", status: "Done" }),
+                proposed({ id: "task-blocked", title: "Blocked report", status: "Blocked" }),
+                proposed({ id: "task-1" }),
+            ],
+        });
+        expect(result.changes).toHaveLength(1);
+        expect(result.changes[0]).toMatchObject({
+            type: "reorder",
+            beforeTaskIds: ["task-1", "task-2", "task-blocked"],
+            afterTaskIds: ["task-2", "task-blocked", "task-1"],
+        });
+    });
+
     it("treats a status transition as an update and flags later due dates", () => {
         const result = diffPlannerTasks([currentTask()], [proposed({ status: "In Progress", dueDate: "2026-08-12" })]);
 

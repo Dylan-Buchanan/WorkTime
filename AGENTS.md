@@ -13,7 +13,7 @@ WorkTime is a Windows Tauri desktop app with a React/Vite frontend. The browser 
 
 Do not add Tauri `invoke` data paths, service-role credentials, invite codes, or push/background-sync behavior. Keep service-role keys and `SIGNUP_INVITE_CODE` server-only. Browser configuration may use only `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and the public recovery origin `VITE_PUBLIC_APP_URL`.
 
-The per-owner localStorage staging store (`worktime:staging:v1:*`, implemented in `src/lib/data/staging/`) is the only general application-data persistence exception. It is frontend-owned, holds only the owner's local app/PM state plus sync metadata, and must not be replaced by Tauri `invoke`/file paths or moved server-side. The agent's surface-local pre-workflow snapshot (`worktime:agent:projectSnapshot:v1`) is the one scoped undo exception and must not be synced. Everything under `pm_state_v1` (UI-only) and the GoTrue `sb-...-auth-token` key remains outside the staging store.
+The per-owner localStorage staging store (`worktime:staging:v1:*`, implemented in `src/lib/data/staging/`) is the only general application-data persistence exception. It is frontend-owned, holds only the owner's local app/PM state plus sync metadata, and must not be replaced by Tauri `invoke`/file paths or moved server-side. The agent's surface-local pre-workflow snapshot (`worktime:agent:projectSnapshot:v1`) is the scoped undo exception, and its completed Start-of-Day handoff (`worktime:agent:startOfDayPlan:v1`) is the scoped End-of-Day comparison exception; neither key may be synced. Everything under `pm_state_v1` (UI-only) and the GoTrue `sb-...-auth-token` key remains outside the staging store.
 
 ## Environment and Supabase
 

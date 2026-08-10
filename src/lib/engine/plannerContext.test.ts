@@ -62,7 +62,7 @@ function pmState(tasks: PMTask[]): ProjectManagerState {
 }
 
 describe("buildPlannerContext", () => {
-    it("includes non-archived selected-project tasks across all statuses and sanitizes them", () => {
+    it("includes selected-project tasks across all statuses (including archived context) and sanitizes them", () => {
         const done = task({ id: "pm-done", title: "Already done", status: "Done", sortOrder: 1 });
         const otherProject = task({ id: "pm-other", projectId: "project-2", sortOrder: 2 });
         const archived = task({ id: "pm-archived", isArchived: true, sortOrder: 3 });
@@ -75,8 +75,9 @@ describe("buildPlannerContext", () => {
             workUntil: new Date("2026-07-15T17:00:00.000Z"),
         });
 
-        expect(result.tasks.map((item) => item.id)).toEqual(["pm-1", "pm-done"]);
+        expect(result.tasks.map((item) => item.id)).toEqual(["pm-1", "pm-done", "pm-archived"]);
         expect(result.tasks[1].status).toBe("Done");
+        expect(result.tasks[2].isArchived).toBe(true);
         expect(result.tasks[0]).not.toHaveProperty("appTaskId");
         expect(result.tasks[0]).not.toHaveProperty("links");
         expect(result.tasks[0].checklist).toEqual([{ id: "check-1", title: "Outline", done: false }]);

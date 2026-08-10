@@ -31,6 +31,8 @@ export interface PlannerTaskContext {
     tags: string[];
     checklist: PMTask["checklist"];
     relatedTo: string[];
+    /** Archived tasks are context-only and cannot enter the proposed target. */
+    isArchived: boolean;
 }
 
 export interface AccuracyAggregate {
@@ -53,7 +55,7 @@ export interface PlannerContext {
     /** Number of whole work sessions that fit before workUntil. */
     workBudgetPomos: number;
     selectedProjectIds: string[];
-    /** Current, non-archived PM task summaries for the selected project(s). */
+    /** PM task summaries for the selected project(s), including archived context tasks. */
     tasks: PlannerTaskContext[];
     /** Aggregate-only historical accuracy data. No historical task rows are included. */
     accuracy: PlannerAccuracyAggregates;
@@ -187,14 +189,15 @@ function toPlannerTask(task: PMTask): PlannerTaskContext {
         tags: [...task.tags],
         checklist: task.checklist.map((item) => ({ ...item })),
         relatedTo: [...task.relatedTo],
+        isArchived: task.isArchived,
     };
 }
 
 /**
  * Build the model-safe input shared by the agentic planning workflows.
  *
- * The caller supplies `now` so the result is deterministic. The task list is
- * limited to current, non-archived tasks in the selected project(s), while
+ * The caller supplies `now` so the result is deterministic. The task list
+ * includes current and archived tasks in the selected project(s), while
  * historical accuracy is represented only by aggregate statistics.
  */
 export function buildPlannerContext(input: PlannerContextInput): PlannerContext {
@@ -203,7 +206,7 @@ export function buildPlannerContext(input: PlannerContextInput): PlannerContext 
 
     const selectedProjectIds = [...input.pmState.ui.selectedProjectIds];
     const tasks = Object.values(input.pmState.tasks)
-        .filter((task) => !task.isArchived && task.projectId !== null && selectedProjectIds.includes(task.projectId))
+        .filter((task) => task.projectId !== null && selectedProjectIds.includes(task.projectId))
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
     const workUntil = parseWorkUntil(now, input.workUntil);
 

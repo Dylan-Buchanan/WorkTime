@@ -619,9 +619,11 @@ describe("LocalStagingStore", () => {
         const store = new LocalStagingStore(window.localStorage);
         window.localStorage.setItem("pm_state_v1", "ui-prefs");
         window.localStorage.setItem("sb-example-auth-token", "session");
+        window.localStorage.setItem("worktime:agent:startOfDayPlan:v1", "day-plan");
         await store.update(OWNER_A, (r) => r);
         expect(window.localStorage.getItem("pm_state_v1")).toBe("ui-prefs");
         expect(window.localStorage.getItem("sb-example-auth-token")).toBe("session");
+        expect(window.localStorage.getItem("worktime:agent:startOfDayPlan:v1")).toBe("day-plan");
     });
 
     it("works against a plain StorageLike fake and surfaces corrupt records", async () => {

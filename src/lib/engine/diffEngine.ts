@@ -230,10 +230,15 @@ function makeChange(
     };
 }
 
+function isOrderableStatus(status: PMTask["status"] | ProposedTask["status"]): boolean {
+    return status !== "Done";
+}
+
 function orderChanged(currentTasks: readonly PMTask[], proposedTasks: readonly ProposedTask[]): { before: string[]; after: string[] } | null {
-    const currentIds = new Set(currentTasks.map((task) => task.id));
-    const before = currentTasks.filter((task) => currentIds.has(task.id)).map((task) => task.id);
-    const after = proposedTasks.flatMap((task) => task.id && currentIds.has(task.id) ? [task.id] : []);
+    const orderableCurrent = currentTasks.filter((task) => isOrderableStatus(task.status));
+    const currentIds = new Set(orderableCurrent.map((task) => task.id));
+    const before = orderableCurrent.filter((task) => currentIds.has(task.id)).map((task) => task.id);
+    const after = proposedTasks.flatMap((task) => isOrderableStatus(task.status) && task.id && currentIds.has(task.id) ? [task.id] : []);
     if (before.length !== after.length || before.every((id, index) => id === after[index])) return null;
     return { before, after };
 }

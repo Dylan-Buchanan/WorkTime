@@ -68,6 +68,30 @@ export {
 } from "./agentClient";
 export type { ValidatedJsonOptions } from "./agentClient";
 
+export {
+    AGENT_START_OF_DAY_PLAN_STORAGE_KEY,
+    clearAgentStartOfDayPlan,
+    getAgentStartOfDayPlan,
+    saveAgentStartOfDayPlan,
+} from "./startOfDayPlanStore";
+
+export { runStartOfDayWorkflow, summarizeStartOfDayApprovedChanges } from "./startOfDayWorkflow";
+export type {
+    StartOfDayLlmOutcome,
+    StartOfDayLlmRole,
+    StartOfDayPhase,
+    StartOfDayProgressEvent,
+    StartOfDayResponseKind,
+    StartOfDayRunKind,
+    StartOfDayWorkflowInput,
+    StartOfDayWorkflowResult,
+} from "./startOfDayWorkflow";
+export type {
+    AgentStartOfDayApprovedChange,
+    AgentStartOfDayPlan,
+    AgentStartOfDayPlanInput,
+} from "./startOfDayPlanStore";
+
 export { buildPlannerContext, calculatePomodoroBudget } from "../engine/plannerContext";
 export type {
     AccuracyAggregate,

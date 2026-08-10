@@ -65,6 +65,8 @@ export interface ProposedTask {
     relatedTo: string[];
     splitsFrom?: string;
     rationale?: string;
+    /** IDs of completed comparable tasks supporting an estimate decrease. */
+    estimateEvidenceTaskIds?: string[];
 }
 
 export interface ProjectManagerState {

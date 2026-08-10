@@ -28,12 +28,21 @@ function TaskSummary({ task, empty }: { task?: PMTask | ProposedTask; empty: str
     );
 }
 
-export const AgentApprovalCard: React.FC<{
+interface AgentApprovalCardProps {
     change: TaskChange;
     busy?: boolean;
+    orderLabels?: { before: string[]; after: string[] };
     onApprove: () => void;
     onReject: () => void;
-}> = ({ change, busy = false, onApprove, onReject }) => {
+}
+
+export const AgentApprovalCard = React.memo(function AgentApprovalCard({
+    change,
+    busy = false,
+    orderLabels,
+    onApprove,
+    onReject,
+}: AgentApprovalCardProps) {
     const warnings = [
         change.guardrails.forwardDueDate ? "Due date moves later" : null,
         change.guardrails.estimateIncreased ? "Estimate increases" : null,
@@ -48,9 +57,9 @@ export const AgentApprovalCard: React.FC<{
 
             {change.type === "reorder" ? (
                 <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-start gap-2 rounded-lg bg-neutral-950/60 p-2 text-[10px]">
-                    <span className="break-all text-neutral-400">{change.beforeTaskIds?.join(" → ") || "No order"}</span>
+                    <span className="break-words text-neutral-400">{orderLabels?.before.join(" → ") || change.beforeTaskIds?.join(" → ") || "No order"}</span>
                     <ArrowRight size={13} className="text-neutral-600" />
-                    <span className="break-all text-neutral-200">{change.afterTaskIds?.join(" → ") || "No order"}</span>
+                    <span className="break-words text-neutral-200">{orderLabels?.after.join(" → ") || change.afterTaskIds?.join(" → ") || "No order"}</span>
                 </div>
             ) : (
                 <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-start gap-2 rounded-lg bg-neutral-950/60 p-2">
@@ -74,4 +83,4 @@ export const AgentApprovalCard: React.FC<{
             </div>
         </article>
     );
-};
+});

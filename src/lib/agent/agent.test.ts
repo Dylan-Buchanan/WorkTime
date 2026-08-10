@@ -78,6 +78,7 @@ describe("OpenAI-compatible LLM transport", () => {
             temperature: 0.2,
             maxTokens: 100,
             responseFormat: { type: "json_object" },
+            thinking: { type: "disabled" },
         })).resolves.toBe("hello");
 
         expect(calledUrl).toBe("https://provider.example/v1/chat/completions");
@@ -89,6 +90,7 @@ describe("OpenAI-compatible LLM transport", () => {
             temperature: 0.2,
             max_tokens: 100,
             response_format: { type: "json_object" },
+            thinking: { type: "disabled" },
         });
     });
 

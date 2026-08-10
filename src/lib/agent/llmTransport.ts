@@ -18,6 +18,8 @@ export interface ChatCompletionRequest {
     temperature?: number;
     maxTokens?: number;
     responseFormat?: { type: "text" | "json_object" };
+    /** OpenAI-compatible provider extension currently used by DeepSeek V4. */
+    thinking?: { type: "enabled" | "disabled" };
 }
 
 export interface ChatCompletionsClient {
@@ -80,6 +82,7 @@ function requestBody(request: ChatCompletionRequest): Record<string, unknown> {
         ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
         ...(request.maxTokens === undefined ? {} : { max_tokens: request.maxTokens }),
         ...(request.responseFormat === undefined ? {} : { response_format: request.responseFormat }),
+        ...(request.thinking === undefined ? {} : { thinking: request.thinking }),
     };
 }
 

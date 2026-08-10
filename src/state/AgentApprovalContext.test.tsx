@@ -6,13 +6,14 @@ import { DataProvider } from "./DataContext";
 import { SyncProvider } from "./SyncContext";
 import { AppStateProvider } from "./AppStateContext";
 import { ProjectManagerProvider, usePM } from "./ProjectManagerContext";
-import { AgentApprovalProvider, type AgentReplanInput, useAgentApproval } from "./AgentApprovalContext";
+import { AgentApprovalProvider, type AgentReplanInput, type AgentReviewCompletionInput, useAgentApproval } from "./AgentApprovalContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
 import type { TaskChange } from "../lib/engine/diffEngine";
 import { MemoryRouter } from "react-router-dom";
 import { AgentPanel } from "../components/ProjectManager/AgentPanel";
 import { setAgentApiKey } from "../lib/agent/apiKey";
+import type { StartOfDayWorkflowInput, StartOfDayWorkflowResult } from "../lib/agent/startOfDayWorkflow";
 
 const OWNER = "agent-owner";
 const guardrails = {
@@ -38,6 +39,20 @@ function task(title: string) {
     };
 }
 
+function workflowResult(overrides: Partial<StartOfDayWorkflowResult> = {}): StartOfDayWorkflowResult {
+    return {
+        projectId: "p1",
+        createdAt: "2026-08-07T13:00:00.000Z",
+        workUntil: "2026-08-07T17:00:00.000Z",
+        workBudgetPomos: 8,
+        summary: "One improvement",
+        proposedTasks: [updateChange("Rewritten").after!],
+        orderedTasks: [{ taskId: "t1", title: "Rewritten", plannedPomos: 1, rollover: false, checklist: [] }],
+        changes: [updateChange("Rewritten")],
+        ...overrides,
+    };
+}
+
 async function dataWithProject() {
     const data = new InMemoryDataAccess(makeAppState());
     await data.savePMState({
@@ -51,13 +66,13 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
     return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId={OWNER}><AppStateProvider><ProjectManagerProvider><AgentApprovalProvider>{children}</AgentApprovalProvider></ProjectManagerProvider></AppStateProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
 
-const Probe: React.FC<{ replan: (input: AgentReplanInput) => Promise<TaskChange[]>; changes?: TaskChange[] }> = ({ replan, changes = [updateChange("Rewritten")] }) => {
+const Probe: React.FC<{ replan: (input: AgentReplanInput) => Promise<TaskChange[]>; changes?: TaskChange[]; onComplete?: (input: AgentReviewCompletionInput) => void | Promise<void> }> = ({ replan, changes = [updateChange("Rewritten")], onComplete }) => {
     const pm = usePM();
     const agent = useAgentApproval();
     return <div>
         <span data-testid="task-title">{pm.state.tasks.t1?.title ?? "loading"}</span>
         <span data-testid="agent-status">{agent.status}</span>
-        <button onClick={() => agent.startReview({ projectId: "p1", mode: "start-of-day", changes, summary: "One improvement", replan })}>Start review</button>
+        <button onClick={() => agent.startReview({ projectId: "p1", mode: "start-of-day", changes, summary: "One improvement", replan, onComplete })}>Start review</button>
         <button onClick={() => void agent.approveCurrent()}>Approve current</button>
         <button onClick={() => void agent.rejectCurrent()}>Reject current</button>
     </div>;
@@ -93,6 +108,50 @@ describe("AgentApprovalProvider", () => {
         expect(screen.getByTestId("agent-status")).toHaveTextContent("completed");
     });
 
+    it("notifies workflow completion once with the final approved changes", async () => {
+        const data = await dataWithProject();
+        const onComplete = vi.fn(async (_input: AgentReviewCompletionInput) => undefined);
+        render(wrap(data, <Probe replan={vi.fn(async () => [])} onComplete={onComplete} />));
+        await screen.findByText("Original");
+        fireEvent.click(screen.getByText("Start review"));
+        await act(async () => { fireEvent.click(screen.getByText("Approve current")); });
+        await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+        expect(onComplete.mock.calls[0][0]).toEqual({
+            projectId: "p1",
+            mode: "start-of-day",
+            summary: "One improvement",
+            approvedChanges: [expect.objectContaining({ taskId: "t1", after: expect.objectContaining({ title: "Rewritten" }) })],
+        });
+    });
+
+    it("does not apply or complete the final change twice after rapid approval clicks", async () => {
+        const data = await dataWithProject();
+        const onComplete = vi.fn(async (_input: AgentReviewCompletionInput) => undefined);
+        render(wrap(data, <Probe replan={vi.fn(async () => [])} onComplete={onComplete} />));
+        await screen.findByText("Original");
+        fireEvent.click(screen.getByText("Start review"));
+
+        await act(async () => {
+            fireEvent.click(screen.getByText("Approve current"));
+            fireEvent.click(screen.getByText("Approve current"));
+        });
+
+        await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+        expect(onComplete.mock.calls[0][0].approvedChanges).toHaveLength(1);
+    });
+
+    it("completes an empty review once when startReview is rapidly invoked", async () => {
+        const data = await dataWithProject();
+        const onComplete = vi.fn(async (_input: AgentReviewCompletionInput) => undefined);
+        render(wrap(data, <Probe changes={[]} replan={vi.fn(async () => [])} onComplete={onComplete} />));
+        await screen.findByText("Original");
+
+        fireEvent.click(screen.getByText("Start review"));
+        fireEvent.click(screen.getByText("Start review"));
+
+        await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    });
+
     it("shows setup until an API key is configured, then exposes all modes", async () => {
         const data = await dataWithProject();
         render(wrap(data, <MemoryRouter><AgentPanel /></MemoryRouter>));
@@ -102,5 +161,127 @@ describe("AgentApprovalProvider", () => {
         expect(screen.getByRole("button", { name: /Start of Day/ })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /End of Day/ })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /Chat/ })).toBeInTheDocument();
+    });
+
+    it("launches the Start-of-Day workflow with the selected work-until time", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const runStartOfDay = vi.fn(async (input: StartOfDayWorkflowInput) => {
+            if (input.rejectionFeedback) {
+                input.onProgress?.({ type: "phase", run: "replan", phase: "building-context" });
+                input.onProgress?.({ type: "phase", run: "replan", phase: "completed" });
+                return {
+                    projectId: "p1", createdAt: "2026-08-07T13:01:00.000Z", workUntil: "2026-08-07T17:00:00.000Z",
+                    workBudgetPomos: 8, summary: "Replanned without that change",
+                    proposedTasks: [updateChange("Original").after!],
+                    orderedTasks: [{ taskId: "t1", title: "Original", plannedPomos: 1, rollover: false, checklist: [] }],
+                    changes: [],
+                };
+            }
+            for (let index = 0; index < 17; index += 1) {
+                input.onProgress?.({ type: "phase", run: "initial", phase: "building-context" });
+            }
+            input.onProgress?.({ type: "phase", run: "initial", phase: "planning" });
+            input.onProgress?.({ type: "llm-attempt", run: "initial", role: "planner", attempt: 1, maxAttempts: 2, model: "gpt-5.6-luna", durationMs: 6400, outcome: "invalid", responseKind: "non-json", validationError: "response is not valid JSON" });
+            input.onProgress?.({ type: "llm-attempt", run: "initial", role: "planner", attempt: 2, maxAttempts: 2, model: "gpt-5.6-luna", durationMs: 900, outcome: "valid", retryFeedback: "response is not valid JSON" });
+            input.onProgress?.({ type: "phase", run: "initial", phase: "completed" });
+            return {
+                projectId: "p1",
+                createdAt: "2026-08-07T13:00:00.000Z",
+                workUntil: "2026-08-07T17:00:00.000Z",
+                workBudgetPomos: 8,
+                summary: "One improvement",
+                proposedTasks: [updateChange("Rewritten").after!],
+                orderedTasks: [{ taskId: "t1", title: "Rewritten", plannedPomos: 1, rollover: false, checklist: [] }],
+                changes: [updateChange("Rewritten")],
+            };
+        });
+        const PanelProbe = () => {
+            const pm = usePM();
+            return <><span>{pm.state.tasks.t1?.title ?? "loading"}</span><AgentPanel runStartOfDay={runStartOfDay} /></>;
+        };
+        render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
+        await screen.findByText("Original");
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.change(screen.getByLabelText("Work until"), { target: { value: "17:30" } });
+        fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
+        await screen.findByLabelText("Update task proposal");
+        expect(screen.getByLabelText("Today's recommended order")).toHaveTextContent("1");
+        expect(screen.getByLabelText("Today's recommended order")).toHaveTextContent("Rewritten");
+        expect(runStartOfDay).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p1", workUntil: "17:30" }));
+        expect(screen.getByText("Plan ready", { selector: "p" })).toHaveAttribute("aria-live", "polite");
+        fireEvent.click(screen.getByText("Details (20)"));
+        expect(screen.getByRole("list", { name: "Agent activity log" })).toHaveTextContent("Planner · gpt-5.6-luna · attempt 1/2 · 6.4s · non json");
+        expect(screen.getByRole("list", { name: "Agent activity log" })).toHaveTextContent("Retry feedback: response is not valid JSON");
+        const initialProgress = runStartOfDay.mock.calls[0][0].onProgress;
+        fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+        await waitFor(() => expect(runStartOfDay).toHaveBeenCalledTimes(2));
+        expect(runStartOfDay.mock.calls[1][0]).toEqual(expect.objectContaining({
+            rejectionFeedback: expect.stringContaining("user rejected"),
+            onProgress: initialProgress,
+        }));
+        expect(await screen.findByText("Replan · Plan ready", { selector: "p" })).toHaveAttribute("aria-live", "polite");
+        await waitFor(() => expect(localStorage.getItem("worktime:agent:startOfDayPlan:v1")).toContain("Replanned without that change"));
+        expect(localStorage.getItem("worktime:agent:startOfDayPlan:v1")).not.toContain("One improvement");
+        fireEvent.click(screen.getByRole("button", { name: "Clear activity" }));
+        expect(screen.queryByLabelText("Agent activity")).not.toBeInTheDocument();
+    });
+
+    it("uses current project state when replanning after a task is archived", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const runStartOfDay = vi.fn(async (input: StartOfDayWorkflowInput) => input.rejectionFeedback
+            ? workflowResult({ summary: "Current context", changes: [] })
+            : workflowResult());
+        const PanelProbe = () => {
+            const pm = usePM();
+            return <>
+                <span data-testid="archive-state">{pm.state.tasks.t1?.isArchived ? "archived" : "current"}</span>
+                <button onClick={() => pm.archiveTask("t1")}>Archive task externally</button>
+                <AgentPanel runStartOfDay={runStartOfDay} />
+            </>;
+        };
+        render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
+        await screen.findByText("current");
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
+        await screen.findByLabelText("Update task proposal");
+
+        fireEvent.click(screen.getByText("Archive task externally"));
+        await waitFor(() => expect(screen.getByTestId("archive-state")).toHaveTextContent("archived"));
+        fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+        await waitFor(() => expect(runStartOfDay).toHaveBeenCalledTimes(2));
+        expect(runStartOfDay.mock.calls[1][0].pmState.tasks.t1).toEqual(expect.objectContaining({ isArchived: true }));
+    });
+
+    it("surfaces an error when the selected project disappears during generation", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        let resolveWorkflow!: (result: StartOfDayWorkflowResult) => void;
+        const runStartOfDay = vi.fn(() => new Promise<StartOfDayWorkflowResult>((resolve) => { resolveWorkflow = resolve; }));
+        const PanelProbe = () => {
+            const pm = usePM();
+            return <>
+                <span data-testid="project-state">{pm.state.projects.p1 ? "project-present" : "project-gone"}</span>
+                <button onClick={() => pm.deleteProject("p1")}>Delete project externally</button>
+                <AgentPanel runStartOfDay={runStartOfDay} />
+            </>;
+        };
+        render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
+        await screen.findByText("project-present");
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
+        await waitFor(() => expect(runStartOfDay).toHaveBeenCalledTimes(1));
+
+        fireEvent.click(screen.getByText("Delete project externally"));
+        await waitFor(() => expect(screen.getByTestId("project-state")).toHaveTextContent("project-gone"));
+        await act(async () => { resolveWorkflow(workflowResult({ changes: [] })); });
+
+        expect(await screen.findByText(/The review could not start/)).toBeInTheDocument();
+        expect(screen.getByText("Select an existing project before starting an agent review.")).toHaveAttribute("role", "alert");
     });
 });
