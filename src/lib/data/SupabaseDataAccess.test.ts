@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "./SupabaseDataAccess";
 import type { Habit, HabitCompletion } from "../../state/types";
 import type { PushPlan } from "./sync/types";
+import type { Todo } from "../todos";
 
 const OWNER = "00000000-0000-4000-8000-000000000001";
 
@@ -32,6 +33,11 @@ function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {
     };
 }
 
+function TD(id: string): Todo {
+    return { id, title: "Submit report", rule: { type: "weekly", weekdays: [1, 3] }, dueDate: "2026-01-07",
+        position: 2, isArchived: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+}
+
 function mockClient(): { client: SupabaseClient; rpc: ReturnType<typeof vi.fn> } {
     const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
     const client = {
@@ -58,6 +64,8 @@ function emptyPlan(): PushPlan {
         habitTombstones: [],
         habitCompletionUpserts: [],
         habitCompletionTombstones: [],
+        todoUpserts: [],
+        todoTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -71,6 +79,8 @@ function emptyPlan(): PushPlan {
             habitTombstones: {},
             habitCompletionUpserts: {},
             habitCompletionTombstones: {},
+            todoUpserts: {},
+            todoTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -157,5 +167,23 @@ describe("SupabaseDataAccess habit transport mapping", () => {
             { id: "c1", deleted_at: "2026-01-03T00:00:00.000Z" },
             { id: "c2", deleted_at: "2026-01-03T00:00:00.000Z", habit_id: "h1" },
         ]);
+    });
+
+    it("maps to-do rows and tombstones to the extended RPC", async () => {
+        const { client, rpc } = mockClient();
+        const data = new SupabaseDataAccess(client);
+        const todo = TD("todo-1");
+        await data.push(OWNER, {
+            ...emptyPlan(),
+            todoUpserts: [{ value: todo, updatedAt: "2026-01-03T00:00:00.000Z" }],
+            todoTombstones: [{ id: "todo-2", deletedAt: "2026-01-04T00:00:00.000Z" }],
+        });
+        const args = rpc.mock.calls[0][1];
+        expect(args.p_todo_upserts).toEqual([{
+            id: "todo-1", title: "Submit report", rule: { type: "weekly", weekdays: [1, 3] },
+            due_date: "2026-01-07", position: 2, is_archived: false,
+            created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-03T00:00:00.000Z",
+        }]);
+        expect(args.p_todo_tombstones).toEqual([{ id: "todo-2", deleted_at: "2026-01-04T00:00:00.000Z" }]);
     });
 });

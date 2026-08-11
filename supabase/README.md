@@ -14,7 +14,7 @@ npx supabase status
 
 `db reset` is destructive to the local Supabase data. Never run it against a hosted project. Use the URLs and keys printed by `supabase status` for local clients; do not copy them into source control. Stop the stack with `npx supabase stop`.
 
-`db reset` also replays `supabase/seed.sql`, which creates a fixed local test user (`dbuchananh@gmail.com` / `Test123!`) plus representative timer tasks, project-manager projects/tasks, and habits with completion history. It is idempotent: re-runs update the password and upsert the same fixed records rather than duplicating them. Never run this seed against a hosted project.
+`db reset` also replays `supabase/seed.sql`, which creates a fixed local test user (`dbuchananh@gmail.com` / `Test123!`) plus representative timer tasks, project-manager projects/tasks, habits with completion history, and to-dos. It is idempotent: re-runs update the password and upsert the same fixed records rather than duplicating them. Never run this seed against a hosted project.
 
 The local Auth configuration disables direct email/password signup while preserving password sign-in. The hosted Auth dashboard must have the equivalent “Allow new users to sign up” setting disabled; `db push` does not change hosted Auth settings.
 

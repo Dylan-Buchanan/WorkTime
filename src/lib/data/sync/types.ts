@@ -1,5 +1,6 @@
 import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
+import type { Todo } from "../../todos";
 import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone } from "../staging/types";
 
 /**
@@ -46,6 +47,8 @@ export interface AcknowledgedChanges {
     habitTombstones: Record<string, { deletedAt: string }>;
     habitCompletionUpserts: Record<string, HabitCompletion>;
     habitCompletionTombstones: Record<string, Omit<HabitCompletionTombstone, "id">>;
+    todoUpserts: Record<string, { value: Todo; updatedAt: string }>;
+    todoTombstones: Record<string, { deletedAt: string }>;
     settings: VersionedValue<Settings> | null;
     timerState: VersionedValue<TimerStateSlice> | null;
     pmState: VersionedValue<SyncedPMState> | null;
@@ -68,6 +71,8 @@ export interface PushPlan {
     habitTombstones: Array<{ id: string; deletedAt: string }>;
     habitCompletionUpserts: HabitCompletion[];
     habitCompletionTombstones: Array<HabitCompletionTombstone>;
+    todoUpserts: Array<{ value: Todo; updatedAt: string }>;
+    todoTombstones: Array<{ id: string; deletedAt: string }>;
     settings: VersionedValue<Settings> | null;
     timerState: (VersionedValue<TimerStateSlice> & { newGeneration: boolean }) | null;
     pmState: VersionedValue<SyncedPMState> | null;

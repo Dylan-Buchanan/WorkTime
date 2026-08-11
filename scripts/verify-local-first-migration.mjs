@@ -204,7 +204,9 @@ try {
     assertLoopback(config.url);
 
     console.log("Resetting local database to the migration before 20260802000000_sync_metadata.sql...");
-    run("npx supabase db reset --local --version 20260801020000");
+    // The current seed may reference tables introduced after this historical
+    // target (for example todos), so this replay supplies its own fixtures.
+    run("npx supabase db reset --local --version 20260801020000 --no-seed");
     refreshLocalGatewayDns();
 
     const user = await createThrowawayUser(config);

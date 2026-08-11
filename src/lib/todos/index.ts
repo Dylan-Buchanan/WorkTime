@@ -5,6 +5,8 @@ export type {
     OneOffTodoRule,
     TodoRule,
     TodoRuleType,
+    Todo,
+    NewTodoInput,
     WeeklyTodoRule,
     YearlyDate,
     YearlyTodoRule,
@@ -22,4 +24,3 @@ export {
 } from "./calendar";
 
 export { isDueOn, isValidRule, nextOccurrence, normalizeRule, validateRule } from "./recurrence";
-

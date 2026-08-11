@@ -40,3 +40,25 @@ export interface YearlyTodoRule {
 
 export type TodoRule = OneOffTodoRule | WeeklyTodoRule | MonthlyTodoRule | YearlyTodoRule;
 
+/**
+ * Persisted to-do state. `dueDate` is the single active occurrence and is
+ * intentionally stored separately from `rule`: an overdue recurring item does
+ * not advance until a later command explicitly checks it off and rolls it.
+ */
+export interface Todo {
+    id: string;
+    title: string;
+    rule: TodoRule | null;
+    dueDate: LocalDateKey | null;
+    position: number;
+    isArchived: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface NewTodoInput {
+    title: string;
+    rule?: TodoRule | null;
+    dueDate?: LocalDateKey | null;
+    position?: number;
+}

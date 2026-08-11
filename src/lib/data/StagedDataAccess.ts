@@ -19,6 +19,7 @@ import {
 } from "../engine";
 import { EngineError } from "../engine";
 import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
+import type { Todo } from "../todos";
 import type { LocalStagingStore } from "./staging/LocalStagingStore";
 import { deepValuesEqual } from "./staging/serialization";
 import type { PendingTimerCompletion, StagedOwnerRecord } from "./staging/types";
@@ -454,6 +455,32 @@ export class StagedDataAccess implements DataAccess {
 
     async sync(options: SyncOptions): Promise<SyncResult> {
         return this.syncExecutor.sync(options);
+    }
+
+    /** Replaces the staged to-do collection and maintains LWW stamps/tombstones. */
+    async saveTodos(todos: Todo[]): Promise<void> {
+        const stamp = this.now().toISOString();
+        const nextTodos = Object.fromEntries(todos.map((todo) => [todo.id, clone(todo)]));
+        await this.store.update(this.ownerId, (current) => {
+            const todoUpdatedAt = { ...current.todoUpdatedAt };
+            const todoTombstones = { ...current.todoTombstones };
+            for (const id of Object.keys(nextTodos)) {
+                if (current.todos[id] === undefined || !equal(current.todos[id], nextTodos[id])) {
+                    todoUpdatedAt[id] = stamp;
+                }
+                delete todoTombstones[id];
+            }
+            for (const id of Object.keys(current.todos)) {
+                if (nextTodos[id]) continue;
+                delete todoUpdatedAt[id];
+                todoTombstones[id] = { id, deletedAt: stamp };
+            }
+            return { ...current, todos: nextTodos, todoUpdatedAt, todoTombstones };
+        });
+    }
+
+    async loadTodos(): Promise<Todo[]> {
+        return Object.values(this.store.read(this.ownerId).todos).map((todo) => clone(todo));
     }
 
     async discardPendingChanges(): Promise<void> {

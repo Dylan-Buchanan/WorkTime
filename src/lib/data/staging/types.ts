@@ -8,6 +8,8 @@ import type {
     Task,
 } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
+import { isValidRule } from "../../todos";
+import type { Todo, TodoRule } from "../../todos";
 
 /**
  * The versioned, serializable schema persisted for each owner under
@@ -42,6 +44,7 @@ export interface SyncSnapshot {
     logs: Record<string, PomodoroLogEntry>;
     habits: Record<string, { value: Habit; updatedAt: string }>;
     habitCompletions: Record<string, HabitCompletion>;
+    todos: Record<string, { value: Todo; updatedAt: string }>;
     settings: VersionedValue<Settings>;
     timerState: VersionedValue<TimerStateSlice> & { completed: boolean };
     pmState: VersionedValue<SyncedPMState>;
@@ -81,7 +84,7 @@ export interface HabitCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 2;
+    schemaVersion: 3;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -117,9 +120,14 @@ export interface StagedOwnerRecord {
     habitUpdatedAt: Record<string, string>;
     habitTombstones: Record<string, { id: string; deletedAt: string }>;
     habitCompletionTombstones: Record<string, HabitCompletionTombstone>;
+    /** Current locally-staged to-dos, keyed by to-do id. */
+    todos: Record<string, Todo>;
+    /** `updated_at` LWW transport stamps per locally-changed to-do. */
+    todoUpdatedAt: Record<string, string>;
+    todoTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 2 as const;
+export const STAGING_SCHEMA_VERSION = 3 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -222,6 +230,20 @@ function isHabitCompletion(value: unknown): boolean {
     );
 }
 
+function isTodo(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.title === "string" &&
+        (value.rule === null || isValidRule(value.rule as TodoRule)) &&
+        (value.dueDate === null || typeof value.dueDate === "string") &&
+        isFiniteNumber(value.position) &&
+        typeof value.isArchived === "boolean" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
 function isTombstone(value: unknown): boolean {
     return isObject(value) && typeof value.id === "string" && typeof value.deletedAt === "string";
 }
@@ -278,6 +300,10 @@ function isSyncSnapshot(value: unknown): boolean {
         ) &&
         isObject(value.habitCompletions) &&
         Object.values(value.habitCompletions).every(isHabitCompletion) &&
+        isObject(value.todos) &&
+        Object.values(value.todos).every(
+            (row) => isObject(row) && isTodo(row.value) && typeof row.updatedAt === "string",
+        ) &&
         isVersionedValue(value.settings, isSettings) &&
         isVersionedValue(timerState, isTimerSlice) &&
         typeof timerState.completed === "boolean" &&
@@ -322,11 +348,14 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["habitUpdatedAt", (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string")],
     ["habitTombstones", isTombstoneMap],
     ["habitCompletionTombstones", isCompletionTombstoneMap],
+    ["todos", (v): boolean => isObject(v) && Object.values(v).every(isTodo)],
+    ["todoUpdatedAt", (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string")],
+    ["todoTombstones", isTombstoneMap],
 ];
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * and `2` are accepted; records at the unchanged v1 key migrate to v2 in memory
+ * through `3` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -344,7 +373,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     if (!isObject(parsed)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" is not an object`);
     }
-    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
         );
@@ -352,7 +381,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     // v1 records predate the habit fields, so inject the five empty values and
     // both empty snapshot maps before running v2 validation on the same shape
     // newer records are parsed with. The v1 key prefix is not a migration.
-    const record: Record<string, unknown> =
+    let record: Record<string, unknown> =
         parsed.schemaVersion === 1
             ? {
                   ...parsed,
@@ -372,6 +401,21 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
                             },
               }
             : parsed;
+    // v2 records predate to-dos. Empty maps preserve every existing staged
+    // domain while making the migration safe before the first remote pull.
+    if (record.schemaVersion === 2) {
+        record = {
+            ...record,
+            schemaVersion: 3,
+            todos: {},
+            todoUpdatedAt: {},
+            todoTombstones: {},
+            lastSynced:
+                record.lastSynced === null
+                    ? null
+                    : { ...(record.lastSynced as Record<string, unknown>), todos: {} },
+        };
+    }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(
             `Staging record owner mismatch: stored "${String(record.ownerId)}" for key owner "${ownerId}"`,

@@ -419,3 +419,51 @@ on conflict (owner_id, id) do update set
     habit_id = excluded.habit_id,
     bucket = excluded.bucket,
     updated_at = now();
+
+insert into public.todos (
+    id, owner_id, title, rule, due_date, position, is_archived, created_at, updated_at
+)
+select
+    seed.id, u.id, seed.title, seed.rule, seed.due_date, seed.position,
+    seed.is_archived, seed.created_at, now()
+from (
+    values
+        (
+            '60000000-0000-4000-8000-000000000001'::uuid,
+            'Review today''s priorities',
+            jsonb_build_object('type', 'weekly', 'weekdays', jsonb_build_array(extract(dow from current_date)::integer)),
+            current_date,
+            0,
+            false,
+            '2026-08-01T08:00:00Z'::timestamptz
+        ),
+        (
+            '60000000-0000-4000-8000-000000000002'::uuid,
+            'Submit expense report',
+            jsonb_build_object('type', 'one-off', 'date', to_char(current_date + 3, 'YYYY-MM-DD')),
+            current_date + 3,
+            1,
+            false,
+            '2026-08-01T08:05:00Z'::timestamptz
+        ),
+        (
+            '60000000-0000-4000-8000-000000000003'::uuid,
+            'Organize reference notes',
+            null::jsonb,
+            null::date,
+            2,
+            false,
+            '2026-08-01T08:10:00Z'::timestamptz
+        )
+) as seed(id, title, rule, due_date, position, is_archived, created_at)
+cross join lateral (
+    select id from auth.users where email = 'dbuchananh@gmail.com'
+) u
+on conflict (owner_id, id) do update set
+    title = excluded.title,
+    rule = excluded.rule,
+    due_date = excluded.due_date,
+    position = excluded.position,
+    is_archived = excluded.is_archived,
+    created_at = excluded.created_at,
+    updated_at = now();

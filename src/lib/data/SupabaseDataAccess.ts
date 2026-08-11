@@ -4,6 +4,8 @@ import { DataAccessAuthError } from "./DataAccess";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./staging/types";
 import type { PushPlan, SyncRemote } from "./sync/types";
 import { completionRpcPayload } from "./sync/timerCompletions";
+import { isValidRule } from "../todos";
+import type { Todo, TodoRule } from "../todos";
 
 const PAGE_SIZE = 500;
 type JsonRecord = Record<string, unknown>;
@@ -79,6 +81,19 @@ function habitCompletionRow(completion: HabitCompletion) {
         bucket: completion.bucket,
         created_at: completion.createdAt,
         updated_at: completion.updatedAt,
+    };
+}
+
+function todoRow(todo: Todo, updatedAt?: string) {
+    return {
+        id: todo.id,
+        title: todo.title,
+        rule: todo.rule,
+        due_date: todo.dueDate,
+        position: todo.position,
+        is_archived: todo.isArchived,
+        created_at: todo.createdAt,
+        updated_at: updatedAt ?? todo.updatedAt,
     };
 }
 
@@ -214,6 +229,23 @@ export class SupabaseDataAccess implements SyncRemote {
         };
     }
 
+    private validateTodo(row: any): Todo {
+        if (
+            !row || typeof row.id !== "string" || typeof row.title !== "string" ||
+            (row.rule !== null && !isValidRule(row.rule as TodoRule)) ||
+            (row.due_date !== null && typeof row.due_date !== "string") ||
+            typeof row.position !== "number" || typeof row.is_archived !== "boolean" ||
+            typeof row.created_at !== "string" || typeof row.updated_at !== "string"
+        ) {
+            this.fail("todos", new Error(`invalid to-do row for ${row?.id ?? "unknown"}`));
+        }
+        return {
+            id: row.id, title: row.title, rule: clone(row.rule), dueDate: row.due_date,
+            position: row.position, isArchived: row.is_archived,
+            createdAt: row.created_at, updatedAt: row.updated_at,
+        };
+    }
+
     private validateTimer(value: unknown): ActiveTimer | null {
         if (value === null || value === undefined) return null;
         if (!isRecord(value) || typeof value.task_id !== "string" || typeof value.started_at !== "string" || typeof value.ends_at !== "string" || !["Work", "ShortBreak", "LongBreak"].includes(String(value.kind))) {
@@ -236,11 +268,12 @@ export class SupabaseDataAccess implements SyncRemote {
     async pull(expectedOwnerId: string): Promise<SyncSnapshot> {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
 
-        const [taskRows, logRows, habitRows, completionRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
+        const [taskRows, logRows, habitRows, completionRows, todoRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
             this.page("tasks", ownerId, [{ column: "id" }]),
             this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
             this.page("habits", ownerId, [{ column: "id" }]),
             this.page("habit_completions", ownerId, [{ column: "habit_id" }, { column: "bucket" }, { column: "id" }]),
+            this.page("todos", ownerId, [{ column: "id" }]),
             this.client.from("settings").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("timer_state").select("data, completed, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("pm_state").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
@@ -273,6 +306,12 @@ export class SupabaseDataAccess implements SyncRemote {
             habitCompletions[row.id] = completion;
         }
 
+        const todos: SyncSnapshot["todos"] = {};
+        for (const row of todoRows) {
+            const todo = this.validateTodo(row);
+            todos[row.id] = { value: todo, updatedAt: row.updated_at };
+        }
+
         const settingsData = settingsResponse.data?.data;
         if (settingsData !== undefined && !isSettings(settingsData)) {
             this.fail("settings", new Error(`invalid settings row for ${ownerId}`));
@@ -291,6 +330,7 @@ export class SupabaseDataAccess implements SyncRemote {
             logs,
             habits,
             habitCompletions,
+            todos,
             settings: {
                 value: settingsResponse.data ? clone(settingsData) : null,
                 updatedAt: settingsResponse.data?.updated_at ?? null,
@@ -392,6 +432,12 @@ export class SupabaseDataAccess implements SyncRemote {
                       deleted_at: deletedAt,
                       ...(habitId !== undefined ? { habit_id: habitId } : {}),
                   }))
+                : null,
+            p_todo_upserts: plan.todoUpserts.length
+                ? plan.todoUpserts.map(({ value, updatedAt }) => todoRow(value, updatedAt))
+                : null,
+            p_todo_tombstones: plan.todoTombstones.length
+                ? plan.todoTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
                 : null,
             p_settings_data: plan.settings?.value ?? null,
             p_settings_updated_at: plan.settings?.updatedAt ?? null,

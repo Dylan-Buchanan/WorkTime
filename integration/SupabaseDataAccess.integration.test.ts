@@ -11,6 +11,7 @@ const TASK_ID = "00000000-0000-4000-8000-100000000001";
 const LOG_ID = "00000000-0000-4000-8000-100000000002";
 const HABIT_ID = "00000000-0000-4000-8000-100000000003";
 const COMPLETION_ID = "00000000-0000-4000-8000-100000000004";
+const TODO_ID = "00000000-0000-4000-8000-100000000006";
 const FOREIGN_OWNER = "ffffffff-ffff-4000-8000-ffffffffffff";
 const T0 = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T00:00:00.000Z";
@@ -31,6 +32,8 @@ function emptyPlan(): PushPlan {
         habitTombstones: [],
         habitCompletionUpserts: [],
         habitCompletionTombstones: [],
+        todoUpserts: [],
+        todoTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -44,6 +47,8 @@ function emptyPlan(): PushPlan {
             habitTombstones: {},
             habitCompletionUpserts: {},
             habitCompletionTombstones: {},
+            todoUpserts: {},
+            todoTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -58,6 +63,11 @@ function habit(id: string, name: string, updatedAt = T0) {
 
 function completion(id: string, habitId: string, bucket = "2026-01-02") {
     return { id, habitId, bucket, createdAt: T0, updatedAt: T0 };
+}
+
+function todo(id = TODO_ID) {
+    return { id, title: "Pushed to-do", rule: { type: "weekly" as const, weekdays: [1, 3] },
+        dueDate: "2026-01-07" as const, position: 1, isArchived: false, createdAt: T0, updatedAt: T0 };
 }
 
 // PostgREST serializes timestamptz columns with an offset (+00:00) rather than
@@ -81,6 +91,7 @@ describe("SupabaseDataAccess transport", () => {
         expect(snapshot.logs).toEqual({});
         expect(snapshot.habits).toEqual({});
         expect(snapshot.habitCompletions).toEqual({});
+        expect(snapshot.todos).toEqual({});
         expect(snapshot.settings).toEqual({ value: null, updatedAt: null });
         expect(snapshot.timerState).toEqual({ value: null, updatedAt: null, completed: false });
         expect(snapshot.pmState).toEqual({ value: null, updatedAt: null });
@@ -106,12 +117,14 @@ describe("SupabaseDataAccess transport", () => {
         const timerSlice = { active_task: TASK_ID, current_cycle_pomodoros: 1, timer: null };
         const pushedHabit = habit(HABIT_ID, "Pushed habit");
         const pushedCompletion = completion(COMPLETION_ID, HABIT_ID);
+        const pushedTodo = todo();
         const plan: PushPlan = {
             ...emptyPlan(),
             taskUpserts: [{ value: task, updatedAt: T0 }],
             logUpserts: [log],
             habitUpserts: [{ value: pushedHabit, updatedAt: T0 }],
             habitCompletionUpserts: [pushedCompletion],
+            todoUpserts: [{ value: pushedTodo, updatedAt: T0 }],
             settings: { value: settings, updatedAt: T0 },
             timerState: { value: timerSlice, updatedAt: T0, newGeneration: false },
             pmState: { value: PM_STATE, updatedAt: T0 },
@@ -156,6 +169,9 @@ describe("SupabaseDataAccess transport", () => {
         expect(pulledCompletion.bucket).toBe(pushedCompletion.bucket);
         expect(epoch(pulledCompletion.createdAt)).toBe(epoch(pushedCompletion.createdAt));
         expect(epoch(pulledCompletion.updatedAt)).toBe(epoch(pushedCompletion.updatedAt));
+        expect(first.todos[TODO_ID].value).toMatchObject({
+            id: TODO_ID, title: pushedTodo.title, rule: pushedTodo.rule, dueDate: pushedTodo.dueDate,
+        });
         expect(first.settings.value).toEqual(settings);
         expect(epoch(first.settings.updatedAt)).toBe(epoch(T0));
         expect(first.timerState.value).toEqual(timerSlice);
@@ -179,6 +195,7 @@ describe("SupabaseDataAccess transport", () => {
         const completions = await user.client.from("habit_completions").select("id");
         expect(completions.error).toBeNull();
         expect(completions.data).toHaveLength(1);
+        expect((await user.client.from("todos").select("id")).data).toHaveLength(1);
         expect((await user.client.from("settings").select("owner_id")).data).toHaveLength(1);
         expect((await user.client.from("timer_state").select("owner_id")).data).toHaveLength(1);
         expect((await user.client.from("pm_state").select("owner_id")).data).toHaveLength(1);
@@ -220,6 +237,25 @@ describe("SupabaseDataAccess transport", () => {
         const pulled = await remote.pull(user.userId);
         expect(pulled.habits).toEqual({});
         expect(pulled.habitCompletions).toEqual({});
+    });
+
+    it("enforces owner RLS for to-do reads and writes", async () => {
+        user = await createLocalUser();
+        const other = await createLocalUser();
+        try {
+            await new SupabaseDataAccess(user.client).push(user.userId, {
+                ...emptyPlan(), todoUpserts: [{ value: todo(), updatedAt: T0 }],
+            });
+            expect((await other.client.from("todos").select("id")).data).toEqual([]);
+            const spoof = await other.client.from("todos").insert({
+                id: "00000000-0000-4000-8000-100000000007", owner_id: user.userId,
+                title: "Spoofed", position: 0, is_archived: false,
+            });
+            expect(spoof.error).not.toBeNull();
+            expect((await user.client.from("todos").select("id")).data).toHaveLength(1);
+        } finally {
+            await other.cleanup();
+        }
     });
 
     it("refreshes an active session and rejects a refresh without a session", async () => {

@@ -59,6 +59,9 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         habitUpdatedAt: {},
         habitTombstones: {},
         habitCompletionTombstones: {},
+        todos: {},
+        todoUpdatedAt: {},
+        todoTombstones: {},
     };
 }
 
@@ -140,6 +143,24 @@ function countHabitCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapsho
     return count;
 }
 
+function countTodoDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const ids = new Set<string>([...Object.keys(record.todos), ...Object.keys(base.todos)]);
+    for (const id of ids) {
+        const current = record.todos[id];
+        if (!current) continue;
+        const baseline = base.todos[id];
+        const localStamp = record.todoUpdatedAt[id];
+        const valueUnchanged = baseline !== undefined && deepValuesEqual(current, baseline.value);
+        if (valueUnchanged && (localStamp === undefined || localStamp === baseline.updatedAt)) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.todoTombstones)) {
+        if (base.todos[id]) count += 1;
+    }
+    return count;
+}
+
 /**
  * Entity-based pending work relative to `lastSynced`. Task upserts, task
  * tombstones, new/changed logs, log tombstones, habit upserts, habit
@@ -161,6 +182,7 @@ function countPending(record: StagedOwnerRecord): number {
         if (pmDiffers(record, base)) count += 1;
         count += countHabitDeltas(record, base);
         count += countHabitCompletionDeltas(record, base);
+        count += countTodoDeltas(record, base);
         return count;
     }
 
@@ -221,6 +243,7 @@ function countPending(record: StagedOwnerRecord): number {
 
     count += countHabitDeltas(record, base);
     count += countHabitCompletionDeltas(record, base);
+    count += countTodoDeltas(record, base);
 
     return count;
 }
@@ -338,6 +361,9 @@ export class LocalStagingStore {
                         Object.entries(baseline.habits).map(([id, row]) => [id, row.value]),
                     ),
                     habitCompletions: { ...baseline.habitCompletions },
+                    todos: Object.fromEntries(
+                        Object.entries(baseline.todos).map(([id, row]) => [id, row.value]),
+                    ),
                 };
             const stored = { ...next, revision: current.revision + 1 };
             try {

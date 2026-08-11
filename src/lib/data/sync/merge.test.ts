@@ -4,6 +4,7 @@ import { defaultAppState } from "../../engine";
 import { LocalStagingStore } from "../staging/LocalStagingStore";
 import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice } from "../staging/types";
 import { buildPushPlan, commitAcknowledgedPush, isLiveTimer, mergePulledSnapshot, MergeError } from "./merge";
+import type { Todo } from "../../todos";
 
 const NOW = new Date("2026-01-10T00:00:00.000Z");
 const T1 = "2026-01-01T00:00:00.000Z";
@@ -63,6 +64,11 @@ function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {
     };
 }
 
+function TD(id: string, overrides: Partial<Todo> = {}): Todo {
+    return { id, title: `Todo ${id}`, rule: null, dueDate: null, position: 0, isArchived: false,
+        createdAt: T1, updatedAt: T1, ...overrides };
+}
+
 /**
  * A pulled habit snapshot row: the domain `updatedAt` mirrors the transport
  * `updated_at` value exactly, as `SupabaseDataAccess.validateHabit` produces.
@@ -81,6 +87,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         logs: {},
         habits: {},
         habitCompletions: {},
+        todos: {},
         settings: { value: { ...defaultAppState().settings }, updatedAt: T1 },
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T1, completed: false },
         pmState: { value: null, updatedAt: null },
@@ -92,7 +99,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -123,13 +130,16 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         habitUpdatedAt: {},
         habitTombstones: {},
         habitCompletionTombstones: {},
+        todos: Object.fromEntries(Object.entries(baseline.todos).map(([id, row]) => [id, { ...row.value }])),
+        todoUpdatedAt: {},
+        todoTombstones: {},
         ...overrides,
     };
 }
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
@@ -151,6 +161,9 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         habitUpdatedAt: {},
         habitTombstones: {},
         habitCompletionTombstones: {},
+        todos: {},
+        todoUpdatedAt: {},
+        todoTombstones: {},
         ...overrides,
     };
 }
@@ -1388,6 +1401,34 @@ describe("pending count parity", () => {
         const store = new LocalStagingStore(window.localStorage);
         await store.update("owner-a", () => merged.record);
         expect(store.pendingCount("owner-a")).toBe(merged.pendingCount);
+    });
+});
+
+describe("to-do staged merge", () => {
+    it("builds and acknowledges LWW to-do upserts", () => {
+        const base = snapshot();
+        const record = recordFromBaseline(base, {
+            todos: { td1: TD("td1", { dueDate: "2026-01-05", updatedAt: T2 }) },
+            todoUpdatedAt: { td1: T2 },
+        });
+        const plan = buildPushPlan(record);
+        expect(plan.todoUpserts).toEqual([{ value: record.todos.td1, updatedAt: T2 }]);
+        const pushed = snapshot({ todos: { td1: { value: record.todos.td1, updatedAt: T2 } } });
+        const committed = commitAcknowledgedPush(record, plan, pushed);
+        expect(committed.todoUpdatedAt).toEqual({});
+        expect(buildPushPlan(committed).todoUpserts).toEqual([]);
+    });
+
+    it("keeps a newer remote to-do over an older local edit", () => {
+        const baseTodo = TD("td1", { title: "Base", updatedAt: T1 });
+        const base = snapshot({ todos: { td1: { value: baseTodo, updatedAt: T1 } } });
+        const record = recordFromBaseline(base, {
+            todos: { td1: TD("td1", { title: "Local", updatedAt: T2 }) }, todoUpdatedAt: { td1: T2 },
+        });
+        const remoteTodo = TD("td1", { title: "Remote", updatedAt: T3 });
+        const merged = mergePulledSnapshot(record, snapshot({ todos: { td1: { value: remoteTodo, updatedAt: T3 } } }), NOW);
+        expect(merged.record.todos.td1.title).toBe("Remote");
+        expect(merged.record.todoUpdatedAt).toEqual({});
     });
 });
 

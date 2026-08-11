@@ -7,6 +7,7 @@ import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
 import { timerGenerationKey } from "./sync/timerCompletions";
 import type { ActiveTimer, Habit, HabitCompletion } from "../../state/types";
+import type { Todo } from "../todos";
 
 const OWNER_A = "owner-a";
 const OWNER_B = "owner-b";
@@ -46,6 +47,11 @@ function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {
         updatedAt: "2026-01-01T00:00:00.000Z",
         ...overrides,
     };
+}
+
+function TD(id: string, overrides: Partial<Todo> = {}): Todo {
+    return { id, title: `Todo ${id}`, rule: null, dueDate: null, position: 0, isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...overrides };
 }
 
 function throwingStorage(): StorageLike {
@@ -90,6 +96,7 @@ function makeBaseline(timer: ActiveTimer | null, overrides: Partial<SyncSnapshot
         logs: {},
         habits: {},
         habitCompletions: {},
+        todos: {},
         settings: { value: { ...defaultSettings }, updatedAt: "2026-01-01T00:00:00.000Z" },
         timerState: {
             value: { active_task: "t1", current_cycle_pomodoros: 0, timer },
@@ -471,6 +478,23 @@ describe("StagedDataAccess", () => {
         expect(deleted.habitCompletionTombstones.c1).toEqual({
             id: "c1",
             deletedAt: "2026-01-02T00:00:00.000Z",
+        });
+    });
+
+    it("stages to-do upserts and tombstones without network access", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-02T00:00:00.000Z") });
+        await data.saveTodos([TD("todo-1", { dueDate: "2026-01-03" })]);
+        expect(sync).not.toHaveBeenCalled();
+        expect(store.read(OWNER_A).todoUpdatedAt["todo-1"]).toBe("2026-01-02T00:00:00.000Z");
+        const loaded = await data.loadTodos();
+        loaded[0].title = "mutated";
+        expect((await data.loadTodos())[0].title).toBe("Todo todo-1");
+
+        await data.saveTodos([]);
+        expect(store.read(OWNER_A).todoTombstones["todo-1"]).toEqual({
+            id: "todo-1", deletedAt: "2026-01-02T00:00:00.000Z",
         });
     });
 

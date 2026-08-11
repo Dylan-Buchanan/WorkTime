@@ -1,4 +1,5 @@
 import type { EngineResult } from "../engine";
+import type { Todo } from "../todos";
 import type {
     ActiveTimer,
     AppStateData,
@@ -111,6 +112,8 @@ export interface DataAccess {
     loadPMState(): Promise<SyncedPMState | null>;
     saveHabits(habits: Habit[], completions: HabitCompletion[]): Promise<void>;
     loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }>;
+    saveTodos(todos: Todo[]): Promise<void>;
+    loadTodos(): Promise<Todo[]>;
     sync(options: SyncOptions): Promise<SyncResult>;
     discardPendingChanges(): Promise<void>;
     pendingCount(): number;

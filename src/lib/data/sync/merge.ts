@@ -5,6 +5,7 @@ import { deepValuesEqual } from "../staging/serialization";
 import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone } from "../staging/types";
 import type { AcknowledgedChanges, MergeResult, PushPlan } from "./types";
 import { completionMask } from "./timerCompletions";
+import type { Todo } from "../../todos";
 
 /**
  * Pure three-way merge, push-plan construction, and post-push commit for the
@@ -28,6 +29,7 @@ const EMPTY_SNAPSHOT: SyncSnapshot = {
     logs: {},
     habits: {},
     habitCompletions: {},
+    todos: {},
     settings: { value: null, updatedAt: null },
     timerState: { value: null, updatedAt: null, completed: false },
     pmState: { value: null, updatedAt: null },
@@ -53,6 +55,15 @@ const HABIT_FIELDS: ReadonlyArray<keyof Habit> = [
     "description",
     "color",
     "frequency",
+    "position",
+    "isArchived",
+    "createdAt",
+];
+
+const TODO_FIELDS: ReadonlyArray<keyof Todo> = [
+    "title",
+    "rule",
+    "dueDate",
     "position",
     "isArchived",
     "createdAt",
@@ -455,6 +466,93 @@ function mergeHabits(
     return { habits, stamps, tombstones };
 }
 
+interface MergedTodos {
+    todos: Record<string, Todo>;
+    stamps: Record<string, string>;
+    tombstones: Record<string, { id: string; deletedAt: string }>;
+}
+
+function mergeTodoRow(
+    localTodo: Todo,
+    localStamp: string | undefined,
+    remoteRow: { value: Todo; updatedAt: string },
+    baseRow: { value: Todo; updatedAt: string } | undefined,
+    now: Date,
+): { value: Todo; updatedAt: string } {
+    const base = baseRow?.value;
+    const localTs = localStamp ?? baseRow?.updatedAt;
+    const remoteTs = remoteRow.updatedAt;
+    const merged: Record<string, unknown> = { ...localTodo };
+    for (const field of TODO_FIELDS) {
+        const localChanged = base === undefined || !valuesEqual(localTodo[field], base[field]);
+        const remoteChanged = base === undefined || !valuesEqual(remoteRow.value[field], base[field]);
+        if (remoteChanged && localChanged) {
+            if (localTs === undefined || timestampMs(remoteTs) >= timestampMs(localTs)) merged[field] = remoteRow.value[field];
+        } else if (remoteChanged) {
+            merged[field] = remoteRow.value[field];
+        }
+    }
+    let updatedAt =
+        localTs !== undefined && timestampMs(localTs) >= timestampMs(remoteTs) ? localTs : (remoteTs ?? now.toISOString());
+    merged.updatedAt = updatedAt;
+    const mergedTodo = merged as unknown as Todo;
+    if (!valuesEqual(mergedTodo, remoteRow.value) && timestampMs(updatedAt) <= timestampMs(remoteTs)) {
+        updatedAt = strictlyAfter(remoteTs);
+        mergedTodo.updatedAt = updatedAt;
+    }
+    return { value: mergedTodo, updatedAt };
+}
+
+function mergeTodos(
+    localTodos: Record<string, Todo>,
+    todoUpdatedAt: Record<string, string>,
+    todoTombstones: Record<string, { id: string; deletedAt: string }>,
+    base: SyncSnapshot,
+    remote: SyncSnapshot,
+    now: Date,
+): MergedTodos {
+    const todos: Record<string, Todo> = {};
+    const stamps: Record<string, string> = {};
+    const tombstones: Record<string, { id: string; deletedAt: string }> = {};
+    const ids = new Set([
+        ...Object.keys(base.todos), ...Object.keys(localTodos), ...Object.keys(todoTombstones), ...Object.keys(remote.todos),
+    ]);
+    for (const id of ids) {
+        const baseRow = base.todos[id];
+        const local = localTodos[id];
+        const tombstone = todoTombstones[id];
+        const remoteRow = remote.todos[id];
+        if (tombstone) {
+            if (remoteRow && timestampMs(remoteRow.updatedAt) > timestampMs(tombstone.deletedAt)) todos[id] = { ...remoteRow.value };
+            else if (remoteRow) tombstones[id] = { ...tombstone };
+            continue;
+        }
+        if (!local) {
+            if (remoteRow) todos[id] = { ...remoteRow.value };
+            continue;
+        }
+        if (!remoteRow) {
+            if (!baseRow) {
+                const stamp = todoUpdatedAt[id];
+                if (stamp === undefined) throw new MergeError(`Locally-created to-do "${id}" has no updated_at stamp`);
+                todos[id] = { ...local };
+                stamps[id] = stamp;
+            } else {
+                const stamp = todoUpdatedAt[id];
+                if (stamp !== undefined && timestampMs(stamp) > timestampMs(baseRow.updatedAt) && !valuesEqual(local, baseRow.value)) {
+                    todos[id] = { ...local };
+                    stamps[id] = stamp;
+                }
+            }
+            continue;
+        }
+        const merged = mergeTodoRow(local, todoUpdatedAt[id], remoteRow, baseRow, now);
+        todos[id] = merged.value;
+        if (!valuesEqual(merged.value, remoteRow.value)) stamps[id] = merged.updatedAt;
+    }
+    return { todos, stamps, tombstones };
+}
+
 interface MergedHabitCompletions {
     habitCompletions: Record<string, HabitCompletion>;
     tombstones: Record<string, HabitCompletionTombstone>;
@@ -635,6 +733,21 @@ function countHabitCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapsho
     return count;
 }
 
+function countTodoDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const ids = new Set([...Object.keys(record.todos), ...Object.keys(base.todos)]);
+    for (const id of ids) {
+        const current = record.todos[id];
+        if (!current) continue;
+        const baseline = base.todos[id];
+        const stamp = record.todoUpdatedAt[id];
+        if (baseline && valuesEqual(current, baseline.value) && (stamp === undefined || stamp === baseline.updatedAt)) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.todoTombstones)) if (base.todos[id]) count += 1;
+    return count;
+}
+
 /**
  * Pending work in a record relative to `base`, mirroring the staging store's
  * entity-based counting so `MergeResult.pendingCount` matches the persisted
@@ -649,6 +762,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
         if (pmDiffers(record, base)) count += 1;
         count += countHabitDeltas(record, base);
         count += countHabitCompletionDeltas(record, base);
+        count += countTodoDeltas(record, base);
         return count;
     }
 
@@ -701,6 +815,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
 
     count += countHabitDeltas(record, base);
     count += countHabitCompletionDeltas(record, base);
+    count += countTodoDeltas(record, base);
 
     return count;
 }
@@ -728,6 +843,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             remote,
             habits.habits,
         );
+        const todos = mergeTodos(record.todos, record.todoUpdatedAt, record.todoTombstones, base, remote, now);
         const merged: StagedOwnerRecord = {
             ...record,
             initialized: true,
@@ -745,6 +861,9 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             habitUpdatedAt: habits.stamps,
             habitTombstones: habits.tombstones,
             habitCompletionTombstones: completions.tombstones,
+            todos: todos.todos,
+            todoUpdatedAt: todos.stamps,
+            todoTombstones: todos.tombstones,
             unbootstrapped: false,
         };
         return { record: merged, remoteBaseline: remote, pendingCount: countPending(merged, remote) };
@@ -759,6 +878,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         remote,
         habits.habits,
     );
+    const todos = mergeTodos(record.todos, record.todoUpdatedAt, record.todoTombstones, base, remote, now);
     const settings = mergeSingletonValue<Settings>(
         record.state.settings,
         record.settingsUpdatedAt,
@@ -811,6 +931,9 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         habitUpdatedAt: habits.stamps,
         habitTombstones: habits.tombstones,
         habitCompletionTombstones: completions.tombstones,
+        todos: todos.todos,
+        todoUpdatedAt: todos.stamps,
+        todoTombstones: todos.tombstones,
         unbootstrapped: false,
     };
 
@@ -856,6 +979,34 @@ function habitDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot): HabitDelt
         tombstoneAcks[id] = { deletedAt: tombstone.deletedAt };
     }
 
+    return { upserts, upsertAcks, tombstones, tombstoneAcks };
+}
+
+interface TodoDeltas {
+    upserts: PushPlan["todoUpserts"];
+    upsertAcks: AcknowledgedChanges["todoUpserts"];
+    tombstones: PushPlan["todoTombstones"];
+    tombstoneAcks: AcknowledgedChanges["todoTombstones"];
+}
+
+function todoDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot): TodoDeltas {
+    const upserts: PushPlan["todoUpserts"] = [];
+    const upsertAcks: AcknowledgedChanges["todoUpserts"] = {};
+    for (const [id, current] of Object.entries(record.todos)) {
+        const baseline = base.todos[id];
+        if (baseline && valuesEqual(current, baseline.value)) continue;
+        const updatedAt = record.todoUpdatedAt[id];
+        if (updatedAt === undefined) throw new MergeError(`To-do "${id}" differs from the baseline but has no updated_at stamp`);
+        upserts.push({ value: { ...current }, updatedAt });
+        upsertAcks[id] = { value: { ...current }, updatedAt };
+    }
+    const tombstones: PushPlan["todoTombstones"] = [];
+    const tombstoneAcks: AcknowledgedChanges["todoTombstones"] = {};
+    for (const [id, tombstone] of Object.entries(record.todoTombstones)) {
+        if (!base.todos[id]) continue;
+        tombstones.push({ id, deletedAt: tombstone.deletedAt });
+        tombstoneAcks[id] = { deletedAt: tombstone.deletedAt };
+    }
     return { upserts, upsertAcks, tombstones, tombstoneAcks };
 }
 
@@ -927,6 +1078,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         habitTombstones: {},
         habitCompletionUpserts: {},
         habitCompletionTombstones: {},
+        todoUpserts: {},
+        todoTombstones: {},
         settings: null,
         timerState: null,
         pmState: null,
@@ -954,6 +1107,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         // wipe request so durable habit work is never dropped by a reset.
         const habits = habitDeltasOf(record, base);
         const completions = completionDeltasOf(record, base);
+        const todos = todoDeltasOf(record, base);
         return {
             baseRevision: record.revision,
             taskUpserts: [],
@@ -964,6 +1118,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             habitTombstones: habits.tombstones,
             habitCompletionUpserts: completions.upserts,
             habitCompletionTombstones: completions.tombstones,
+            todoUpserts: todos.upserts,
+            todoTombstones: todos.tombstones,
             settings,
             timerState,
             pmState,
@@ -974,6 +1130,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
                 habitTombstones: habits.tombstoneAcks,
                 habitCompletionUpserts: completions.upsertAcks,
                 habitCompletionTombstones: completions.tombstoneAcks,
+                todoUpserts: todos.upsertAcks,
+                todoTombstones: todos.tombstoneAcks,
                 settings,
                 timerState,
                 pmState,
@@ -1068,6 +1226,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
     // ordinary plan.
     const habits = habitDeltasOf(record, base);
     const completions = completionDeltasOf(record, base);
+    const todos = todoDeltasOf(record, base);
 
     return {
         baseRevision: record.revision,
@@ -1079,6 +1238,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         habitTombstones: habits.tombstones,
         habitCompletionUpserts: completions.upserts,
         habitCompletionTombstones: completions.tombstones,
+        todoUpserts: todos.upserts,
+        todoTombstones: todos.tombstones,
         settings,
         timerState,
         pmState,
@@ -1093,6 +1254,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             habitTombstones: habits.tombstoneAcks,
             habitCompletionUpserts: completions.upsertAcks,
             habitCompletionTombstones: completions.tombstoneAcks,
+            todoUpserts: todos.upsertAcks,
+            todoTombstones: todos.tombstoneAcks,
         },
     };
 }
@@ -1175,6 +1338,22 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
         }
     }
     next = { ...next, habitCompletionTombstones };
+
+    let todoUpdatedAt = next.todoUpdatedAt;
+    for (const [id, acknowledged] of Object.entries(ack.todoUpserts)) {
+        const current = next.todos[id];
+        if (current && valuesEqual(current, acknowledged.value) && todoUpdatedAt[id] === acknowledged.updatedAt) {
+            todoUpdatedAt = omitStamp(todoUpdatedAt, id);
+        }
+    }
+    next = { ...next, todoUpdatedAt };
+
+    let todoTombstones = next.todoTombstones;
+    for (const [id, acknowledged] of Object.entries(ack.todoTombstones)) {
+        const current = todoTombstones[id];
+        if (current && current.deletedAt === acknowledged.deletedAt) todoTombstones = omitTombstone(todoTombstones, id);
+    }
+    next = { ...next, todoTombstones };
 
     // Log upserts and habit completion upserts have no marker to clear; once
     // `pushed` contains them the entity-based pending detection stops counting

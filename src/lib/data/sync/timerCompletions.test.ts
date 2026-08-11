@@ -90,6 +90,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         logs: {},
         habits: {},
         habitCompletions: {},
+        todos: {},
         settings: { value: { ...defaultAppState().settings }, updatedAt: T1 },
         timerState: {
             value: { active_task: null, current_cycle_pomodoros: 0, timer: null },
@@ -104,7 +105,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const base = snapshot();
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -133,6 +134,9 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
         habitUpdatedAt: {},
         habitTombstones: {},
         habitCompletionTombstones: {},
+        todos: {},
+        todoUpdatedAt: {},
+        todoTombstones: {},
         ...overrides,
     };
 }

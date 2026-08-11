@@ -20,6 +20,7 @@ import {
     skipBreak,
 } from "../engine";
 import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
+import type { Todo } from "../todos";
 import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncOptions, SyncResult, SyncedPMState } from "./DataAccess";
 
 function clone<T>(value: T): T {
@@ -49,6 +50,7 @@ export interface InMemoryDataStore {
     pmState: SyncedPMState | null;
     habits: Habit[];
     habitCompletions: HabitCompletion[];
+    todos: Todo[];
     completed: boolean;
 }
 
@@ -93,7 +95,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], completed: false };
+            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], todos: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.pmState = this.store.pmState ? clone(this.store.pmState) : null;
@@ -101,6 +103,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.habitCompletions = this.store.habitCompletions
             ? this.store.habitCompletions.map((completion) => clone(completion))
             : [];
+        this.store.todos = this.store.todos ? this.store.todos.map((todo) => clone(todo)) : [];
         this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
         this.createTaskId = options.createTaskId ?? randomId;
@@ -253,11 +256,22 @@ export class InMemoryDataAccess implements DataAccess {
         };
     }
 
+    async saveTodos(todos: Todo[]): Promise<void> {
+        this.store.todos = todos.map((todo) => clone(todo));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadTodos(): Promise<Todo[]> {
+        return this.store.todos.map((todo) => clone(todo));
+    }
+
     async discardPendingChanges(): Promise<void> {
         this.store.state = cloneAppState(this.baseline.state);
         this.store.pmState = this.baseline.pmState ? clone(this.baseline.pmState) : null;
         this.store.habits = this.baseline.habits.map((habit) => clone(habit));
         this.store.habitCompletions = this.baseline.habitCompletions.map((completion) => clone(completion));
+        this.store.todos = this.baseline.todos.map((todo) => clone(todo));
         this.store.completed = this.baseline.completed;
         this.pending = 0;
         this.notify();
@@ -292,6 +306,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         pmState: null,
         habits: [],
         habitCompletions: [],
+        todos: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };
