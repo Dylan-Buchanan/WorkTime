@@ -219,7 +219,7 @@ function SnapshotProbe() {
         <div data-testid="snapshot-title">{current?.title ?? "missing"}</div>
         <div data-testid="snapshot-result">{result}</div>
         <div data-testid="stored-snapshot">{getAgentSnapshot()?.projectId ?? "none"}</div>
-        <button onClick={() => captureAgentSnapshot()}>capture-snapshot</button>
+        <button onClick={() => { captureAgentSnapshot(); setResult("captured"); }}>capture-snapshot</button>
         <button onClick={() => updateTask("pt1", { title: "Changed" })}>change-snapshot-task</button>
         <button onClick={() => {
             const next = revertAgentSnapshot();

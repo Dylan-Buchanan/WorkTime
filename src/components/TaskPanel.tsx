@@ -5,13 +5,36 @@ import { usePM } from "../state/ProjectManagerContext";
 import { PMTask, TaskPriority } from "../state/types";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
+export const TASK_SORT_LS_KEY = "task_panel_sort_v1";
+
+export const TASK_SORT_OPTIONS = ["default", "project", "priority", "dueDate", "estimateAsc", "estimateDesc"] as const;
+export type TaskSortOption = (typeof TASK_SORT_OPTIONS)[number];
+
+function loadSavedTaskSort(): TaskSortOption {
+    try {
+        const raw = window.localStorage.getItem(TASK_SORT_LS_KEY);
+        if (!raw) return "default";
+        return (TASK_SORT_OPTIONS as readonly string[]).includes(raw) ? (raw as TaskSortOption) : "default";
+    } catch {
+        return "default";
+    }
+}
+
+function saveTaskSort(value: TaskSortOption): void {
+    try {
+        window.localStorage.setItem(TASK_SORT_LS_KEY, value);
+    } catch {
+        // local UI preference is best effort
+    }
+}
+
 export const TaskPanel: React.FC = () => {
     const { state, createTask, setActiveTask, finalizeTask } = useAppState();
     const { state: pmState } = usePM();
     const { play } = useSounds();
     const [name, setName] = useState("");
     const [targetInput, setTargetInput] = useState("4");
-    const [sortOption, setSortOption] = useState<"default" | "project" | "priority" | "dueDate" | "estimateAsc" | "estimateDesc">("default");
+    const [sortOption, setSortOption] = useState<TaskSortOption>(loadSavedTaskSort);
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
 
@@ -208,7 +231,11 @@ export const TaskPanel: React.FC = () => {
                 <span className="text-[10px] uppercase tracking-wide text-neutral-500">Sort</span>
                 <select
                     value={sortOption}
-                    onChange={(e) => setSortOption(e.target.value as any)}
+                    onChange={(e) => {
+                        const value = e.target.value as TaskSortOption;
+                        setSortOption(value);
+                        saveTaskSort(value);
+                    }}
                     className="flex-1 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                     <option value="default">Default</option>
