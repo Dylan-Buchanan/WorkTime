@@ -18,8 +18,10 @@ import {
     localDateKey,
     nextOccurrence,
     normalizeRule,
+    formatTodoRule,
 } from "../lib/todos";
 import type { LocalDateKey, MonthlyDay, Todo, TodoRule, YearlyDate } from "../lib/todos";
+import { TodoSchedulePicker, type RecurrenceType, type SchedulePickerValue } from "./TodoSchedulePicker";
 import { useSounds } from "../hooks/useSounds";
 import { useTodos } from "../state/TodoContext";
 
@@ -31,21 +33,11 @@ type TodoDraft = {
     schedule: ScheduleType;
     date: string;
     weekdays: number[];
-    monthlyDays: string;
-    monthlyLastDayOffset: string;
+    monthlyDays: number[];
+    monthlyLastDayOffset: number | null;
     yearlyDates: YearlyDate[];
 };
 
-const WEEKDAYS = [
-    { value: 1, label: "Mon" },
-    { value: 2, label: "Tue" },
-    { value: 3, label: "Wed" },
-    { value: 4, label: "Thu" },
-    { value: 5, label: "Fri" },
-    { value: 6, label: "Sat" },
-    { value: 0, label: "Sun" },
-];
-const MONTHS = Array.from({ length: 12 }, (_, index) => ({ value: index + 1, label: new Date(2024, index, 1).toLocaleDateString(undefined, { month: "long" }) }));
 const BUCKETS: Array<{ key: BucketKey; label: string }> = [
     { key: "overdue", label: "Overdue" },
     { key: "today", label: "Today" },
@@ -56,7 +48,7 @@ const BUCKETS: Array<{ key: BucketKey; label: string }> = [
 function todayKey(): LocalDateKey { return localDateKey(new Date()) as LocalDateKey; }
 
 function blankDraft(): TodoDraft {
-    return { title: "", schedule: "none", date: "", weekdays: [], monthlyDays: "", monthlyLastDayOffset: "", yearlyDates: [{ month: 1, day: 1 }] };
+    return { title: "", schedule: "none", date: "", weekdays: [], monthlyDays: [], monthlyLastDayOffset: null, yearlyDates: [{ month: 1, day: 1 }] };
 }
 
 function draftFromTodo(todo: Todo): TodoDraft {
@@ -67,8 +59,8 @@ function draftFromTodo(todo: Todo): TodoDraft {
     if (rule.type === "monthly") {
         const numeric = rule.days.filter((day): day is number => typeof day === "number");
         const last = rule.days.find((day) => typeof day !== "number");
-        const offset = last && typeof last === "object" ? String(last.lastDayOffset) : last === "last-day" ? "0" : "";
-        return { ...blankDraft(), title: todo.title, schedule: rule.type, date: todo.dueDate ?? "", monthlyDays: numeric.join(", "), monthlyLastDayOffset: offset };
+        const offset = last && typeof last === "object" ? last.lastDayOffset : last === "last-day" ? 0 : null;
+        return { ...blankDraft(), title: todo.title, schedule: rule.type, date: todo.dueDate ?? "", monthlyDays: numeric, monthlyLastDayOffset: offset };
     }
     return { ...blankDraft(), title: todo.title, schedule: rule.type, date: todo.dueDate ?? "", yearlyDates: rule.dates.map((date) => ({ ...date })) };
 }
@@ -83,7 +75,25 @@ function parseDate(value: string): LocalDateKey | null {
     }
 }
 
-function buildRule(draft: TodoDraft): { rule: TodoRule | null; dueDate: LocalDateKey | null } {
+function buildRecurrenceRule(draft: TodoDraft): TodoRule {
+    if (draft.schedule === "weekly") {
+        if (draft.weekdays.length === 0) throw new Error("Choose at least one weekday.");
+        return { type: "weekly", weekdays: draft.weekdays };
+    }
+    if (draft.schedule === "monthly") {
+        if (draft.monthlyDays.length === 0 && draft.monthlyLastDayOffset === null) throw new Error("Choose at least one monthly day.");
+        const days: MonthlyDay[] = [...draft.monthlyDays];
+        if (draft.monthlyLastDayOffset !== null) days.push({ lastDayOffset: draft.monthlyLastDayOffset });
+        return { type: "monthly", days };
+    }
+    if (draft.schedule === "yearly") {
+        if (draft.yearlyDates.length === 0) throw new Error("Add at least one yearly date.");
+        return { type: "yearly", dates: draft.yearlyDates };
+    }
+    throw new Error("Choose a recurrence schedule.");
+}
+
+function buildRule(draft: TodoDraft, requireMatchingDueDate = true): { rule: TodoRule | null; dueDate: LocalDateKey | null } {
     if (draft.schedule === "none") return { rule: null, dueDate: null };
     if (draft.schedule === "one-off") {
         const date = parseDate(draft.date);
@@ -92,29 +102,10 @@ function buildRule(draft: TodoDraft): { rule: TodoRule | null; dueDate: LocalDat
     }
 
     const dueDate = parseDate(draft.date);
-    if (!dueDate) throw new Error("Choose the first due date.");
-    const date = localDateFromKey(dueDate);
-    let rule: TodoRule;
-    if (draft.schedule === "weekly") {
-        if (draft.weekdays.length === 0) throw new Error("Choose at least one weekday.");
-        rule = { type: "weekly", weekdays: draft.weekdays };
-    } else if (draft.schedule === "monthly") {
-        const dayValues = draft.monthlyDays
-            .split(/[\s,]+/)
-            .filter(Boolean)
-            .map((value) => Number(value));
-        if ((dayValues.length === 0 && draft.monthlyLastDayOffset === "") || dayValues.some((day) => !Number.isInteger(day) || day < 1 || day > 31)) {
-            throw new Error("Enter monthly days from 1 through 31.");
-        }
-        const days: MonthlyDay[] = dayValues;
-        if (draft.monthlyLastDayOffset !== "") days.push({ lastDayOffset: Number(draft.monthlyLastDayOffset) });
-        rule = { type: "monthly", days };
-    } else {
-        if (draft.yearlyDates.length === 0) throw new Error("Add at least one yearly date.");
-        rule = { type: "yearly", dates: draft.yearlyDates };
-    }
+    if (!dueDate && requireMatchingDueDate) throw new Error("Choose the first due date.");
+    const rule = buildRecurrenceRule(draft);
     const normalized = normalizeRule(rule);
-    if (!isDueOn(normalized, date)) throw new Error("The first due date must match the recurrence schedule.");
+    if (requireMatchingDueDate && dueDate && !isDueOn(normalized, localDateFromKey(dueDate))) throw new Error("The first due date must match the recurrence schedule.");
     return { rule: normalized, dueDate };
 }
 
@@ -148,6 +139,22 @@ function scheduleLabel(rule: TodoRule | null): string {
     return rule.type === "one-off" ? "One-off" : rule.type[0].toUpperCase() + rule.type.slice(1);
 }
 
+function rulesEqual(left: TodoRule | null, right: TodoRule | null): boolean {
+    if (!left || !right) return left === right;
+    try {
+        const normalizeForCompare = (rule: TodoRule): string => {
+            const normalized = normalizeRule(rule);
+            if (normalized.type === "weekly") return JSON.stringify({ ...normalized, weekdays: [...normalized.weekdays].sort((a, b) => a - b) });
+            if (normalized.type === "monthly") return JSON.stringify({ ...normalized, days: [...normalized.days].sort((a, b) => String(a).localeCompare(String(b))) });
+            if (normalized.type === "yearly") return JSON.stringify({ ...normalized, dates: [...normalized.dates].sort((a, b) => a.month - b.month || a.day - b.day) });
+            return JSON.stringify(normalized);
+        };
+        return normalizeForCompare(left) === normalizeForCompare(right);
+    } catch {
+        return false;
+    }
+}
+
 export const TodosPage: React.FC = () => {
     const { state, hydrated, createTodo, updateTodo, archiveTodo, deleteTodo, reorderTodos, setSelectedTodo } = useTodos();
     const { play } = useSounds();
@@ -179,8 +186,16 @@ export const TodosPage: React.FC = () => {
         const title = draft.title.trim();
         if (!title) { setFormError("Give this to-do a title first."); return; }
         try {
-            const { rule, dueDate } = buildRule(draft);
-            if (editingId) updateTodo(editingId, { title, rule, dueDate });
+            const { rule, dueDate } = buildRule(draft, !editingId);
+            if (editingId) {
+                const existing = state.todos[editingId];
+                const ruleChanged = existing ? !rulesEqual(existing.rule, rule) : true;
+                const next = ruleChanged && rule && rule.type !== "one-off" ? nextOccurrence(rule, new Date()) : null;
+                const recomputedDueDate = ruleChanged && rule && rule.type !== "one-off" && next
+                    ? localDateKey(next) as LocalDateKey
+                    : ruleChanged && rule && rule.type !== "one-off" ? null : dueDate;
+                updateTodo(editingId, { title, rule, dueDate: recomputedDueDate });
+            }
             else createTodo({ title, rule, dueDate });
             closeForm();
         } catch (error) {
@@ -282,7 +297,7 @@ const TodoForm: React.FC<{
                     <option value="none">No due date</option><option value="one-off">One-off</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option>
                 </select>
             </div>
-            <ScheduleFields draft={draft} onChange={onChange} />
+            <ScheduleFields draft={draft} editing={editing} onChange={onChange} />
             <div className="flex items-end gap-2 md:flex-col md:items-stretch md:justify-end">
                 <button type="submit" className="rounded bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-500">{editing ? "Save changes" : "Create to-do"}</button>
                 <button type="button" onClick={onCancel} className="rounded border border-neutral-700 px-3 py-1.5 text-[11px] text-neutral-300 hover:bg-neutral-800">Cancel</button>
@@ -292,14 +307,26 @@ const TodoForm: React.FC<{
     </form>
 );
 
-const ScheduleFields: React.FC<{ draft: TodoDraft; onChange: React.Dispatch<React.SetStateAction<TodoDraft>> }> = ({ draft, onChange }) => {
+const ScheduleFields: React.FC<{ draft: TodoDraft; editing: boolean; onChange: React.Dispatch<React.SetStateAction<TodoDraft>> }> = ({ draft, editing, onChange }) => {
     if (draft.schedule === "none") return <p className="self-end text-[11px] text-neutral-500">This to-do will stay in the no-date list.</p>;
     if (draft.schedule === "one-off") return <DateField id="todo-date" label="Due date" value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />;
+    const pickerValue: SchedulePickerValue = {
+        type: draft.schedule as RecurrenceType,
+        weekdays: draft.weekdays,
+        monthlyDays: draft.monthlyDays,
+        monthlyLastDayOffset: draft.monthlyLastDayOffset,
+        yearlyDates: draft.yearlyDates,
+    };
+    let preview: string | null = null;
+    try { preview = formatTodoRule(buildRecurrenceRule(draft)); } catch { /* incomplete drafts have no preview */ }
     return <div className="space-y-2">
-        <DateField id="todo-due-date" label="First due date" value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />
-        {draft.schedule === "weekly" && <fieldset><legend className="mb-1 text-[10px] text-neutral-400">Weekdays</legend><div className="flex flex-wrap gap-1">{WEEKDAYS.map((day) => <label key={day.value} className="flex cursor-pointer items-center gap-1 rounded border border-neutral-700 px-1.5 py-1 text-[10px] text-neutral-300"><input type="checkbox" aria-label={day.label} checked={draft.weekdays.includes(day.value)} onChange={(event) => onChange((current) => ({ ...current, weekdays: event.target.checked ? [...current.weekdays, day.value] : current.weekdays.filter((value) => value !== day.value) }))} />{day.label}</label>)}</div></fieldset>}
-        {draft.schedule === "monthly" && <div className="space-y-2"><div><label className="block text-[10px] text-neutral-400" htmlFor="todo-monthly-days">Days of month</label><input id="todo-monthly-days" value={draft.monthlyDays} onChange={(event) => onChange((current) => ({ ...current, monthlyDays: event.target.value }))} placeholder="1, 15" className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs" /></div><div><label className="block text-[10px] text-neutral-400" htmlFor="todo-last-day-offset">Also use last day</label><select id="todo-last-day-offset" value={draft.monthlyLastDayOffset} onChange={(event) => onChange((current) => ({ ...current, monthlyLastDayOffset: event.target.value }))} className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs"><option value="">No</option>{Array.from({ length: 31 }, (_, offset) => <option key={offset} value={offset}>{offset === 0 ? "Last day" : `${offset} day${offset === 1 ? "" : "s"} before last`}</option>)}</select></div></div>}
-        {draft.schedule === "yearly" && <div className="space-y-1"><span className="block text-[10px] text-neutral-400">Dates each year</span>{draft.yearlyDates.map((date, index) => <div key={`${index}-${date.month}-${date.day}`} className="flex items-end gap-1"><label className="min-w-0 flex-1 text-[9px] text-neutral-500">Month<select aria-label={`Yearly month ${index + 1}`} value={date.month} onChange={(event) => onChange((current) => ({ ...current, yearlyDates: current.yearlyDates.map((item, itemIndex) => itemIndex === index ? { ...item, month: Number(event.target.value) } : item) }))} className="mt-0.5 w-full rounded border border-neutral-700 bg-neutral-950 px-1.5 py-1.5 text-xs">{MONTHS.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}</select></label><label className="w-16 text-[9px] text-neutral-500">Day<input aria-label={`Yearly day ${index + 1}`} type="number" min="1" max="31" value={date.day} onChange={(event) => onChange((current) => ({ ...current, yearlyDates: current.yearlyDates.map((item, itemIndex) => itemIndex === index ? { ...item, day: Number(event.target.value) } : item) }))} className="mt-0.5 w-full rounded border border-neutral-700 bg-neutral-950 px-1.5 py-1.5 text-xs" /></label>{draft.yearlyDates.length > 1 && <button type="button" aria-label={`Remove yearly date ${index + 1}`} onClick={() => onChange((current) => ({ ...current, yearlyDates: current.yearlyDates.filter((_, itemIndex) => itemIndex !== index) }))} className="rounded border border-neutral-700 px-2 py-1.5 text-[10px] text-red-300">Remove</button>}</div>)}<button type="button" onClick={() => onChange((current) => ({ ...current, yearlyDates: [...current.yearlyDates, { month: 1, day: 1 }] }))} className="rounded border border-neutral-700 px-2 py-1 text-[10px] text-neutral-300 hover:bg-neutral-800">Add yearly date</button></div>}
+        <DateField id="todo-due-date" label={editing ? "Current due date" : "First due date"} value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />
+        <TodoSchedulePicker
+            value={pickerValue}
+            preview={preview}
+            onChange={(value) => onChange((current) => ({ ...current, schedule: value.type, weekdays: value.weekdays, monthlyDays: value.monthlyDays, monthlyLastDayOffset: value.monthlyLastDayOffset, yearlyDates: value.yearlyDates }))}
+        />
+        {editing && <p className="text-[9px] text-neutral-500">Changing the recurrence recalculates the next pending date from now.</p>}
     </div>;
 };
 

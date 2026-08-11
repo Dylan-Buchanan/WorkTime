@@ -24,3 +24,5 @@ export {
 } from "./calendar";
 
 export { isDueOn, isValidRule, nextOccurrence, normalizeRule, validateRule } from "./recurrence";
+
+export { formatMonthlyDay, formatTodoRule, formatYearlyDate } from "./format";

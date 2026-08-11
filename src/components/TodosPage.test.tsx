@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { TodosPage } from "./TodosPage";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
-import { addLocalDays, localDateKey } from "../lib/todos";
+import { addLocalDays, localDateKey, nextOccurrence } from "../lib/todos";
 import type { Todo } from "../lib/todos";
 import { DataProvider } from "../state/DataContext";
 import { SyncProvider } from "../state/SyncContext";
@@ -75,5 +75,30 @@ describe("TodosPage", () => {
         await user.click(screen.getByRole("button", { name: "Create to-do" }));
         await screen.findByText("Unscheduled");
         expect(within(screen.getByText("Unscheduled").closest("article")!).getByText(/No due date/)).toBeInTheDocument();
+    });
+
+    it("recomputes the pending date when an existing recurrence changes", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const today = new Date();
+        const currentWeekday = today.getDay();
+        const nextWeekday = (currentWeekday + 1) % 7;
+        const weekdayLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const currentDate = localDateKey(today) as Todo["dueDate"];
+        await data.saveTodos([todo("Editable recurring", currentDate, { rule: { type: "weekly", weekdays: [currentWeekday] } })]);
+        const user = userEvent.setup();
+
+        render(wrap(data));
+        await screen.findByText("Editable recurring");
+        await user.click(screen.getByRole("button", { name: "Edit" }));
+        await user.click(screen.getByRole("checkbox", { name: weekdayLabels[currentWeekday] }));
+        const nextDay = screen.getByRole("checkbox", { name: weekdayLabels[nextWeekday] });
+        await user.click(nextDay);
+        await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+        const expected = nextOccurrence({ type: "weekly", weekdays: [nextWeekday] }, new Date());
+        await waitFor(async () => {
+            const saved = await data.loadTodos();
+            expect(saved?.[0].dueDate).toBe(expected ? localDateKey(expected) : null);
+        });
     });
 });
