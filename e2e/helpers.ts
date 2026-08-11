@@ -26,7 +26,7 @@ async function seedState(client: SupabaseClient, seed: Partial<AppStateData> = {
     await client.from("timer_state").upsert({ data: { active_task: seed.active_task ? uuidFor(seed.active_task) : null, current_cycle_pomodoros: seed.current_cycle_pomodoros ?? 0, timer }, completed: false });
 }
 
-export async function openApp(browser: Browser, seed?: Partial<AppStateData>, pmSeed?: any): Promise<TestApp> {
+export async function openApp(browser: Browser, seed?: Partial<AppStateData>, pmSeed?: any, options?: { viewport?: { width: number; height: number } }): Promise<TestApp> {
     const user: LocalUser = await createLocalUser();
     let context: BrowserContext | null = null;
     let cleaned = false;
@@ -45,7 +45,7 @@ export async function openApp(browser: Browser, seed?: Partial<AppStateData>, pm
         if (seed) await seedState(user.client, seed);
         if (pmSeed) await user.client.from("pm_state").upsert({ data: { projects: pmSeed.projects ?? {}, tasks: pmSeed.tasks ?? {}, meta: pmSeed.meta ?? {} } });
         const config = localSupabaseConfig();
-        context = await browser.newContext();
+        context = await browser.newContext(options?.viewport ? { viewport: options.viewport } : {});
         await context.addInitScript(({ key, session }) => localStorage.setItem(key, JSON.stringify(session)), { key: supabaseAuthStorageKey(config.url), session: user.session });
         const page = await context.newPage();
         // The close listener and explicit cleanup share one promise so closing the

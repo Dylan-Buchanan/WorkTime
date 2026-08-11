@@ -209,7 +209,7 @@ export const TaskPanel: React.FC = () => {
                 <select
                     value={sortOption}
                     onChange={(e) => setSortOption(e.target.value as any)}
-                    className="flex-1 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="flex-1 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                     <option value="default">Default</option>
                     <option value="project">Project</option>
@@ -233,13 +233,13 @@ export const TaskPanel: React.FC = () => {
                         console.error("Failed to create task", err);
                     }
                 }}
-                className="flex gap-2 border border-neutral-700 rounded-md bg-neutral-900/40 p-2"
+                className="flex flex-wrap gap-2 border border-neutral-700 rounded-md bg-neutral-900/40 p-2"
             >
                 <input
                     value={name}
                     placeholder="Task name"
                     onChange={(e) => setName(e.target.value)}
-                    className="flex-1 min-w-0 bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="flex-1 min-w-[8rem] bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
                 <input
                     type="number"
@@ -249,9 +249,9 @@ export const TaskPanel: React.FC = () => {
                     onBlur={(e) => {
                         commitTargetInput(e.target.value);
                     }}
-                    className="w-14 bg-neutral-800/60 border border-neutral-700 rounded px-1 py-1 text-[11px] text-center focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="w-14 bg-neutral-800/60 border border-neutral-700 rounded px-1 py-1.5 sm:py-1 text-[11px] text-center focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
-                <button type="submit" onMouseEnter={() => play("hover")} className="px-2 py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
+                <button type="submit" onMouseEnter={() => play("hover")} className="px-3 py-1.5 sm:px-2 sm:py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
                     Add
                 </button>
             </form>
@@ -293,7 +293,7 @@ export const TaskPanel: React.FC = () => {
                                                     setActiveTask(t.id);
                                                     play("pressSide");
                                                 }}
-                                                className={`group flex items-center gap-2 rounded border border-transparent px-2 py-1 text-[11px] transition hover:border-neutral-700 hover:bg-neutral-800/50 ${
+                                                className={`group flex items-center gap-2 rounded border border-transparent px-2 py-1.5 text-[11px] transition hover:border-neutral-700 hover:bg-neutral-800/50 ${
                                                     active ? "bg-neutral-800/60 border-neutral-700" : ""
                                                 }`}
                                             >
@@ -309,7 +309,7 @@ export const TaskPanel: React.FC = () => {
                                                             finalizeTask(t.id);
                                                             play("completeTask");
                                                         }}
-                                                        className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] text-white transition hover:bg-emerald-500 active:bg-emerald-700"
+                                                        className="rounded bg-emerald-600 px-2.5 py-1 text-[10px] text-white transition hover:bg-emerald-500 active:bg-emerald-700"
                                                     >
                                                         Complete
                                                     </button>

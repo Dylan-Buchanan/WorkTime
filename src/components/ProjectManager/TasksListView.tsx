@@ -54,7 +54,7 @@ const TaskRow: React.FC<{
         <div
             onClick={onClick}
             className={`px-3 py-2 grid items-center gap-2 cursor-pointer hover:bg-neutral-800 ${selected ? "bg-neutral-800" : ""}`}
-            style={{ gridTemplateColumns: "16px 1fr auto auto auto auto" }}
+            style={{ gridTemplateColumns: "16px minmax(0,1fr) auto auto auto auto" }}
         >
             <input
                 type="checkbox"
@@ -66,8 +66,8 @@ const TaskRow: React.FC<{
             <InlineEditable value={task.title} onChange={(v) => onUpdate({ title: v })} className="truncate pr-2" />
             <StatusChip status={task.status} onChange={(s) => onUpdate({ status: s })} />
             <PriorityChip priority={task.priority} onChange={(p) => onUpdate({ priority: p })} />
-            <div className={`text-[10px] px-2 py-0.5 rounded ${overdue ? "bg-red-600/30 text-red-300" : "bg-neutral-700/40 text-neutral-400"}`}>{task.dueDate?.slice(5) || "--"}</div>
-            <div className="text-[10px] text-neutral-500 flex flex-col items-end leading-tight">
+            <div className={`hidden sm:block text-[10px] px-2 py-0.5 rounded ${overdue ? "bg-red-600/30 text-red-300" : "bg-neutral-700/40 text-neutral-400"}`}>{task.dueDate?.slice(5) || "--"}</div>
+            <div className="hidden sm:flex text-[10px] text-neutral-500 flex-col items-end leading-tight">
                 <span>
                     {Number(task.timeSpentMinutes || 0).toFixed(1)}m
                     {Number.isFinite(Number(task.estimatePomos)) && (
@@ -90,7 +90,7 @@ const StatusChip: React.FC<{
     onChange: (s: PMTask["status"]) => void;
 }> = ({ status, onChange }) => {
     return (
-        <select value={status} onChange={(e) => onChange(e.target.value as PMTask["status"])} className="bg-neutral-900 text-[10px] rounded px-2 py-1 outline-none">
+        <select value={status} onChange={(e) => onChange(e.target.value as PMTask["status"])} className="bg-neutral-900 text-[10px] rounded px-2 py-1.5 sm:py-1 outline-none">
             {statuses.map((s) => (
                 <option key={s}>{s}</option>
             ))}
@@ -102,7 +102,7 @@ const PriorityChip: React.FC<{
     onChange: (p: PMTask["priority"]) => void;
 }> = ({ priority, onChange }) => {
     return (
-        <select value={priority} onChange={(e) => onChange(e.target.value as PMTask["priority"])} className="bg-neutral-900 text-[10px] rounded px-2 py-1 outline-none">
+        <select value={priority} onChange={(e) => onChange(e.target.value as PMTask["priority"])} className="bg-neutral-900 text-[10px] rounded px-2 py-1.5 sm:py-1 outline-none">
             {priorities.map((s) => (
                 <option key={s}>{s}</option>
             ))}

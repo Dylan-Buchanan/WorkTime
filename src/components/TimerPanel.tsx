@@ -323,11 +323,11 @@ export const TimerPanel: React.FC = () => {
     }, [activeAppTaskId, activeAppTask, state?.tasks, linkedTask, activeFractionComplete]);
 
     return (
-        <div className="w-full h-full flex">
-            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center select-none relative">
+        <div className="w-full min-h-full flex m-auto">
+            <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6 text-center select-none relative">
                 <div className="flex flex-col items-center gap-6 max-w-md w-full">
                     <div className="flex flex-col items-center gap-3">
-                        <div className="relative w-72 h-72">
+                        <div className="relative w-52 h-52 sm:w-64 sm:h-64 md:w-72 md:h-72">
                             {/* Progress ring */}
                             <div
                                 className="absolute inset-0 rounded-full"
@@ -338,7 +338,7 @@ export const TimerPanel: React.FC = () => {
                                 aria-hidden
                             />
                             <div className="absolute inset-1.5 rounded-full bg-neutral-950 border border-neutral-800 flex items-center justify-center">
-                                <span className="text-6xl font-semibold tabular-nums tracking-tight">{timer ? formatMs(ms) : "READY"}</span>
+                                <span className="text-4xl sm:text-5xl md:text-6xl font-semibold tabular-nums tracking-tight">{timer ? formatMs(ms) : "READY"}</span>
                             </div>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap justify-center">
@@ -357,7 +357,7 @@ export const TimerPanel: React.FC = () => {
                             {unassigned && <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px]">No Project</span>}
                             {canShowDetails && (
                                 <button
-                                    className={`px-2 py-1 rounded border border-neutral-700 text-[10px] uppercase tracking-wide transition-colors ${
+                                    className={`px-3 py-2 sm:px-2 sm:py-1 rounded border border-neutral-700 text-[10px] uppercase tracking-wide transition-colors ${
                                         detailsOpen ? "bg-neutral-800" : "bg-neutral-900/60 hover:bg-neutral-800/70"
                                     }`}
                                     onMouseEnter={() => play("hover")}
@@ -384,7 +384,7 @@ export const TimerPanel: React.FC = () => {
                     <div className="flex flex-wrap gap-2 justify-center text-xs">
                         {!timer && (
                             <button
-                                className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500 transition-colors font-medium text-white shadow-sm"
+                                className="px-5 py-2.5 sm:px-4 sm:py-2 rounded bg-indigo-600 hover:bg-indigo-500 transition-colors font-medium text-white shadow-sm"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
                                     startWork();
@@ -396,7 +396,7 @@ export const TimerPanel: React.FC = () => {
                         )}
                         {timer && !isPaused && ms > 0 && (
                             <button
-                                className="px-3 py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
                                     pauseTimer();
@@ -408,7 +408,7 @@ export const TimerPanel: React.FC = () => {
                         )}
                         {timer && isPaused && (
                             <button
-                                className="px-3 py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
                                     resumeTimer();
@@ -421,7 +421,7 @@ export const TimerPanel: React.FC = () => {
                         {timer && ms === 0 && <span className="text-emerald-400 text-xs font-medium">Transitioning...</span>}
                         {timer && !isPaused && timer.kind === "Work" && ms > 0 && (
                             <button
-                                className="px-3 py-2 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-500/30 transition-colors"
+                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-500/30 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
                                     stopWork();
@@ -433,7 +433,7 @@ export const TimerPanel: React.FC = () => {
                         )}
                         {isBreak && timer && ms > 0 && !isPaused && (
                             <button
-                                className="px-3 py-2 rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
                                     skipBreak();
@@ -484,10 +484,21 @@ export const TimerPanel: React.FC = () => {
                     {/* Removed redundant bottom progress bar */}
                 </div>
             </div>
+            {detailsOpen && (
+                <div
+                    className="md:hidden fixed inset-0 z-30 bg-black/50"
+                    onClick={closeDetails}
+                    aria-hidden
+                />
+            )}
             <aside
-                className={`h-full will-change-[width] transition-[width] duration-200 ease-out overflow-hidden bg-neutral-950/90 backdrop-blur ${
-                    detailsOpen ? "w-80 border-l border-neutral-800" : "w-0 pointer-events-none"
-                }`}
+                className={
+                    "overflow-hidden bg-neutral-950/95 backdrop-blur " +
+                    "md:relative md:z-auto md:h-full md:translate-x-0 md:transition-[width] md:duration-200 md:ease-out " +
+                    (detailsOpen ? "md:w-80 md:border-l md:border-neutral-800 " : "md:w-0 md:pointer-events-none ") +
+                    "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-40 max-md:w-[min(20rem,100vw)] max-md:shadow-2xl max-md:transition-transform max-md:duration-200 max-md:ease-out " +
+                    (detailsOpen ? "max-md:translate-x-0" : "max-md:translate-x-full max-md:pointer-events-none")
+                }
                 id="timer-task-details-panel"
                 aria-hidden={!detailsOpen}
             >
@@ -496,7 +507,7 @@ export const TimerPanel: React.FC = () => {
                         <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-800 text-[11px] uppercase tracking-wide">
                             <span className="font-medium text-neutral-300">Task details</span>
                             <button
-                                className="text-[10px] px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
+                                className="text-[10px] px-3 py-2 sm:px-2 sm:py-1 rounded bg-neutral-800 hover:bg-neutral-700"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
                                     closeDetails();
@@ -512,7 +523,7 @@ export const TimerPanel: React.FC = () => {
                                 This task isn't assigned to a project yet. Use the selector below to organize it or keep it standalone.
                             </div>
                         )}
-                        <div className="flex-1 min-h-0 overflow-hidden">
+                        <div className="flex-1 min-h-0 overflow-y-auto">
                             {inspectorTask ? (
                                 <TaskInspector key={inspectorTask.id} />
                             ) : (

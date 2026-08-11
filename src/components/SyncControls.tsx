@@ -34,13 +34,13 @@ export const SyncControls: React.FC = () => {
     }
 
     return (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
             <button
                 type="button"
                 onClick={handleSync}
                 disabled={status === "syncing"}
                 aria-label={`Sync data${pendingCount > 0 ? ` (${pendingCount} pending changes)` : ""}`}
-                className="relative rounded px-2 py-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-50"
+                className="relative rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-50"
             >
                 Sync data
                 {pendingCount > 0 && (
@@ -59,7 +59,7 @@ export const SyncControls: React.FC = () => {
                     setShowDeleteConfirm(true);
                 }}
                 disabled={pendingCount === 0 || status === "syncing"}
-                className="rounded px-2 py-1 text-red-400 hover:bg-red-950/50 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-red-400 hover:bg-red-950/50 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
             >
                 Delete Changes
             </button>
@@ -147,7 +147,7 @@ export const UnsyncedBanner: React.FC = () => {
             role="region"
             aria-label="Unsynced changes"
             data-testid="unsynced-banner"
-            className="flex items-center gap-3 border-b border-amber-900/60 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-200"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-900/60 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-200"
         >
             <span className="font-medium">Unsynced changes from your previous visit</span>
             <button

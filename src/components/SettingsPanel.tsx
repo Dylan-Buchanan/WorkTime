@@ -61,7 +61,7 @@ export const SettingsPanel: React.FC = () => {
                                 onChange={(e) =>
                                     onChange(key, Number(e.target.value))
                                 }
-                                className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                             />
                         </label>
                     ))}
@@ -105,7 +105,7 @@ export const SettingsPanel: React.FC = () => {
                             setAgentProviderChoice(event.target.value as typeof agentProvider);
                             setAgentSaveStatus(null);
                         }}
-                        className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                     >
                         {AGENT_PROVIDER_OPTIONS.map((provider) => (
                             <option key={provider.id} value={provider.id}>
@@ -127,7 +127,7 @@ export const SettingsPanel: React.FC = () => {
                         setAgentSaveStatus(null);
                     }}
                     placeholder="sk-…"
-                    className="w-full bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="w-full bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
                 <div className="flex gap-2">
                     <button
@@ -194,7 +194,7 @@ export const SettingsPanel: React.FC = () => {
             {showReset && (
                 <div className="fixed inset-0 z-40 flex items-center justify-center">
                     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" />
-                    <div className="relative w-72 rounded-lg border border-neutral-700 bg-neutral-900/95 p-4 shadow-xl space-y-3 text-[11px]">
+                    <div className="relative w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-neutral-700 bg-neutral-900/95 p-4 shadow-xl space-y-3 text-[11px]">
                         <h4 className="text-neutral-200 font-semibold text-xs">
                             Confirm Data Reset
                         </h4>

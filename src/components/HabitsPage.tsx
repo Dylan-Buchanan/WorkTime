@@ -138,16 +138,16 @@ export const HabitsPage: React.FC = () => {
                                 type="button"
                                 aria-pressed={state.ui.period === period.value}
                                 onClick={() => setPeriod(period.value)}
-                                className={`px-2.5 py-1 text-[10px] transition-colors ${state.ui.period === period.value ? "bg-indigo-600 text-white" : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"}`}
+                                className={`px-2.5 py-1.5 sm:py-1 text-[10px] transition-colors ${state.ui.period === period.value ? "bg-indigo-600 text-white" : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"}`}
                             >
                                 {period.label}
                             </button>
                         ))}
                     </div>
-                    <button type="button" onClick={() => setShowArchived((visible) => !visible)} className="rounded border border-neutral-800 px-2.5 py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">
+                    <button type="button" onClick={() => setShowArchived((visible) => !visible)} className="rounded border border-neutral-800 px-2.5 py-1.5 sm:py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">
                         {showArchived ? "Hide archived" : "Show archived"}
                     </button>
-                    <button type="button" onClick={openCreate} className="rounded bg-indigo-600 px-3 py-1 text-[10px] font-medium text-white hover:bg-indigo-500">
+                    <button type="button" onClick={openCreate} className="rounded bg-indigo-600 px-3 py-1.5 sm:py-1 text-[10px] font-medium text-white hover:bg-indigo-500">
                         Add habit
                     </button>
                 </div>
@@ -377,9 +377,9 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
                                     {expanded ? "Collapse 365 details" : "Expand 365 details"}
                                 </button>
                             )}
-                            <button type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }} className="rounded px-2 py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">Edit</button>
-                            <button type="button" onClick={(event) => { event.stopPropagation(); onArchive(); }} className="rounded px-2 py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">{archived ? "Restore" : "Archive"}</button>
-                            <button type="button" onClick={(event) => { event.stopPropagation(); onDelete(); }} className="rounded px-2 py-1 text-[10px] text-red-300 hover:bg-red-950/50">Delete</button>
+                            <button type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }} className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">Edit</button>
+                            <button type="button" onClick={(event) => { event.stopPropagation(); onArchive(); }} className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">{archived ? "Restore" : "Archive"}</button>
+                            <button type="button" onClick={(event) => { event.stopPropagation(); onDelete(); }} className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-red-300 hover:bg-red-950/50">Delete</button>
                         </div>
                     </div>
                 </div>

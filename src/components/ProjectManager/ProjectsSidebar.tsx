@@ -8,7 +8,7 @@ const COLOR_PRESETS = ["#6366F1", "#EC4899", "#10B981", "#F59E0B", "#3B82F6", "#
 
 const getRandomPresetColor = () => COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)];
 
-export const ProjectsSidebar: React.FC = () => {
+export const ProjectsSidebar: React.FC<{ onSelectProject?: () => void }> = ({ onSelectProject }) => {
     const { state, createProject, setFilters, deleteProject, updateProject } = usePM();
     const { play } = useSounds();
     const activeProjectId = state.ui.selectedProjectIds[0] || null;
@@ -53,6 +53,7 @@ export const ProjectsSidebar: React.FC = () => {
         setShowCreateForm(false);
         setNewProjectName("");
         setNewProjectColor(getRandomPresetColor());
+        onSelectProject?.();
     };
 
     return (
@@ -258,8 +259,9 @@ export const ProjectsSidebar: React.FC = () => {
                             onClick={() => {
                                 setFilters({ selectedProjectIds: [p.id] });
                                 play("pressSide");
+                                onSelectProject?.();
                             }}
-                            className={`w-full text-left px-2 py-1 rounded hover:bg-neutral-800 focus:bg-neutral-800 group ${activeProjectId === p.id ? "bg-neutral-800" : ""}`}
+                            className={`w-full text-left px-2 py-1.5 rounded hover:bg-neutral-800 focus:bg-neutral-800 group ${activeProjectId === p.id ? "bg-neutral-800" : ""}`}
                         >
                             <div className="flex items-center gap-2">
                                 <span className="w-2.5 h-2.5 rounded-full" style={{ background: p.color }} />

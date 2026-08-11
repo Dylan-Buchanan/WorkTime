@@ -240,8 +240,8 @@ export const AnalyticsPage: React.FC = () => {
     }, [metrics]);
 
     return (
-        <div className="flex flex-col h-full">
-            <div className="sticky top-0 z-10 bg-neutral-950/80 backdrop-blur border-b border-neutral-800 p-3 flex flex-wrap gap-3 text-xs">
+        <div className="flex flex-col h-full min-w-0">
+            <div className="sticky top-0 z-10 bg-neutral-950/80 backdrop-blur border-b border-neutral-800 p-3 flex flex-wrap gap-x-3 gap-y-2 text-xs">
                 <div className="flex flex-col">
                     <label className="text-[10px] opacity-60">From</label>
                     <input
@@ -411,7 +411,7 @@ export const AnalyticsPage: React.FC = () => {
                     </div>
                 </section>
                 <section id="heatmap" className="space-y-2">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                         <h2 className="text-sm font-semibold">
                             Hour-of-Day Heatmap
                         </h2>
@@ -425,7 +425,7 @@ export const AnalyticsPage: React.FC = () => {
                     <Heatmap hours={heatmap} />
                 </section>
                 <section id="project-pareto" className="space-y-2">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                         <h2 className="text-sm font-semibold">
                             Project Pareto
                         </h2>
@@ -472,7 +472,7 @@ export const AnalyticsPage: React.FC = () => {
                     </div>
                 </section>
                 <section id="quality-panel" className="space-y-2">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                         <h2 className="text-sm font-semibold">
                             Quality & Planning
                         </h2>
@@ -568,7 +568,7 @@ export const MultiSelect: React.FC<{
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}
-                className={`bg-neutral-900 rounded px-2 py-1 text-left flex items-center justify-between gap-2 ${minWidth ?? "min-w-[100px]"}`}
+                className={`bg-neutral-900 rounded px-2 py-1.5 sm:py-1 text-left flex items-center justify-between gap-2 ${minWidth ?? "min-w-[100px]"}`}
                 aria-haspopup="listbox"
                 aria-expanded={open}
                 aria-label={label}
@@ -581,7 +581,7 @@ export const MultiSelect: React.FC<{
                     role="listbox"
                     aria-multiselectable
                     aria-label={label}
-                    className="absolute z-20 mt-1 w-full max-h-52 overflow-y-auto rounded border border-neutral-700 bg-neutral-900 p-1 shadow-xl habit-scroll"
+                    className="absolute z-20 mt-1 w-full min-w-[10rem] max-h-52 overflow-y-auto rounded border border-neutral-700 bg-neutral-900 p-1 shadow-xl habit-scroll"
                 >
                     {options.length === 0 && (
                         <div className="px-2 py-1 text-[11px] opacity-60">
