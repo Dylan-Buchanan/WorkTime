@@ -389,12 +389,15 @@ const Checklist: React.FC<{
     task: PMTask;
     update: (patch: Partial<PMTask>) => void;
 }> = ({ task, update }) => {
+    const [input, setInput] = React.useState("");
     const add = () => {
-        const title = prompt("Subtask title");
-        if (!title) return;
-        update({
-            checklist: [...task.checklist, { id: crypto.randomUUID(), title, done: false }],
-        });
+        const title = input.trim();
+        if (title) {
+            update({
+                checklist: [...task.checklist, { id: crypto.randomUUID(), title, done: false }],
+            });
+        }
+        setInput("");
     };
     return (
         <div className="space-y-2">
@@ -414,9 +417,23 @@ const Checklist: React.FC<{
                     </label>
                 ))}
             </div>
-            <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
-                Add Item
-            </button>
+            <div className="flex items-center gap-1">
+                <input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Add checklist item"
+                    className="bg-neutral-900 rounded px-2 py-1 text-[10px] flex-1"
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                            e.preventDefault();
+                            add();
+                        }
+                    }}
+                />
+                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
+                    Add
+                </button>
+            </div>
         </div>
     );
 };
