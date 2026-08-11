@@ -12,6 +12,7 @@ export interface TodoState {
 
 export interface TodoContextValue {
     state: TodoState;
+    hydrated: boolean;
     createTodo(input: NewTodoInput): Todo;
     updateTodo(id: string, patch: Partial<Todo>): void;
     archiveTodo(id: string, archive?: boolean): void;
@@ -170,7 +171,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const setSelectedTodo = (selected: string | null) => setState((previous) => ({ ...previous, ui: { selected } }));
     const refreshTodos = useCallback(async () => { await sync({ reason: "manual" }); await reload(); }, [reload, sync]);
 
-    return <TodoContext.Provider value={{ state, createTodo, updateTodo, archiveTodo, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;
+    return <TodoContext.Provider value={{ state, hydrated, createTodo, updateTodo, archiveTodo, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;
 };
 
 export function useTodos(): TodoContextValue {
