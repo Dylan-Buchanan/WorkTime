@@ -27,6 +27,92 @@ export function parseDueDateKey(raw?: string | null): string | null {
     return toLocalDateKey(parsed);
 }
 
+export interface LocalWeekWindow {
+    startKey: string;
+    endKey: string;
+}
+
+/** Returns the local Monday-through-Sunday window containing `reference`. */
+export function getLocalWeekWindow(reference: Date): LocalWeekWindow {
+    const start = new Date(reference);
+    start.setHours(0, 0, 0, 0);
+    const daysSinceMonday = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - daysSinceMonday);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return { startKey: toLocalDateKey(start), endKey: toLocalDateKey(end) };
+}
+
+export interface ProjectionBacklogTask {
+    dueDate?: string | null;
+    remainingPomodoros: number;
+    projectId: string | null;
+}
+
+export interface ProjectionBacklog {
+    totalPomodoros: number;
+    dueTodayOrOverduePomodoros: number;
+    unscheduledPomodoros: number;
+    dueThisWeekPomodoros: number;
+    excludedFuturePomodoros: number;
+    remainingByProject: Map<string | null, number>;
+}
+
+export interface ProjectionBacklogs {
+    daily: ProjectionBacklog;
+    weekly: ProjectionBacklog;
+}
+
+function emptyProjectionBacklog(): ProjectionBacklog {
+    return {
+        totalPomodoros: 0,
+        dueTodayOrOverduePomodoros: 0,
+        unscheduledPomodoros: 0,
+        dueThisWeekPomodoros: 0,
+        excludedFuturePomodoros: 0,
+        remainingByProject: new Map(),
+    };
+}
+
+function addToBacklog(backlog: ProjectionBacklog, task: ProjectionBacklogTask, category: "due" | "unscheduled" | "thisWeek") {
+    backlog.totalPomodoros += task.remainingPomodoros;
+    if (category === "due") backlog.dueTodayOrOverduePomodoros += task.remainingPomodoros;
+    if (category === "unscheduled") backlog.unscheduledPomodoros += task.remainingPomodoros;
+    if (category === "thisWeek") backlog.dueThisWeekPomodoros += task.remainingPomodoros;
+    backlog.remainingByProject.set(task.projectId, (backlog.remainingByProject.get(task.projectId) ?? 0) + task.remainingPomodoros);
+}
+
+/**
+ * Builds daily and ISO-week projection backlogs from already-eligible task work.
+ * The caller supplies the reference date so the computation has no wall-clock dependency.
+ */
+export function buildProjectionBacklogs(tasks: ProjectionBacklogTask[], reference: Date): ProjectionBacklogs {
+    const daily = emptyProjectionBacklog();
+    const weekly = emptyProjectionBacklog();
+    const todayKey = toLocalDateKey(reference);
+    const { endKey: weekEndKey } = getLocalWeekWindow(reference);
+
+    for (const task of tasks) {
+        if (!Number.isFinite(task.remainingPomodoros) || task.remainingPomodoros <= EPSILON) continue;
+        const dueKey = parseDueDateKey(task.dueDate);
+        if (!dueKey) {
+            addToBacklog(daily, task, "unscheduled");
+            addToBacklog(weekly, task, "unscheduled");
+        } else if (dueKey <= todayKey) {
+            addToBacklog(daily, task, "due");
+            addToBacklog(weekly, task, "due");
+        } else if (dueKey <= weekEndKey) {
+            daily.excludedFuturePomodoros += task.remainingPomodoros;
+            addToBacklog(weekly, task, "thisWeek");
+        } else {
+            daily.excludedFuturePomodoros += task.remainingPomodoros;
+            weekly.excludedFuturePomodoros += task.remainingPomodoros;
+        }
+    }
+
+    return { daily, weekly };
+}
+
 export function formatPomodoroCount(value: number): string {
     if (!Number.isFinite(value) || value <= EPSILON) return "0p";
     if (Math.abs(value - Math.round(value)) < 0.05) {

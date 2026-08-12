@@ -78,7 +78,7 @@ describe("TimerPanel projected finish", () => {
         await waitFor(() => expect(screen.getByText("No work due today. 2p future-due work remains outside this projection.")).toBeInTheDocument());
         expect(screen.queryByText("You're all caught up for today. Great work!")).not.toBeInTheDocument();
         expect(screen.queryByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole("button", { name: "Info" }));
+        fireEvent.click(screen.getAllByRole("button", { name: "Info" })[0]);
         expect(screen.getByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).toBeInTheDocument();
     });
 
@@ -89,10 +89,29 @@ describe("TimerPanel projected finish", () => {
             future: makePMTask({ id: "future", estimatePomos: 2, dueDate: futureDateKey() }),
         });
 
-        await waitFor(() => expect(screen.getByText("Projected finish")).toBeInTheDocument());
-        expect(screen.getByText("Due today/overdue: 1p")).toBeInTheDocument();
+        await waitFor(() => expect(screen.getByText("Daily projected finish")).toBeInTheDocument());
+        expect(screen.getByText("Due now · 1p")).toBeInTheDocument();
         expect(screen.queryByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole("button", { name: "Info" }));
+        fireEvent.click(screen.getAllByRole("button", { name: "Info" })[0]);
         expect(screen.getByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).toBeInTheDocument();
+    });
+
+    it("includes later-this-week tasks in a distinct weekly projection", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 12, 10, 0));
+        try {
+            await renderWithTasks({
+                friday: makePMTask({ id: "friday", estimatePomos: 2, dueDate: "2026-08-14" }),
+                nextWeek: makePMTask({ id: "next-week", estimatePomos: 3, dueDate: "2026-08-17" }),
+            });
+
+            await waitFor(() => expect(screen.getByText("No work due today. 5p future-due work remains outside this projection.")).toBeInTheDocument());
+            fireEvent.click(screen.getByRole("button", { name: /This week/ }));
+            expect(screen.getByText("Weekly projected finish")).toBeInTheDocument();
+            expect(screen.getByText("Later this week · 2p")).toBeInTheDocument();
+            expect(screen.queryByText("Later this week · 5p")).not.toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

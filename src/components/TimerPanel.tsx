@@ -3,11 +3,24 @@ import { useAppState } from "../state/AppStateContext";
 import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
 import { TaskInspector } from "./ProjectManager/TaskInspector";
-import { EPSILON, computeElapsedSecs, formatDurationMinutes, formatMs, formatPomodoroCount, parseDueDateKey, toLocalDateKey } from "../lib/timer";
+import {
+    EPSILON,
+    buildProjectionBacklogs,
+    computeElapsedSecs,
+    formatDurationMinutes,
+    formatMs,
+    formatPomodoroCount,
+    getLocalWeekWindow,
+    toLocalDateKey,
+    type ProjectionBacklog,
+    type ProjectionBacklogTask,
+} from "../lib/timer";
 import { useOptionalTodos } from "../state/TodoContext";
 import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
+import { CalendarDays, CalendarRange, Check, Clock3, Coffee, Info, Target } from "lucide-react";
 
-const PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.";
+const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.";
+const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Excludes later-due, Done, archived, no-estimate, and zero remaining.";
 
 type FinishProjection =
     | {
@@ -15,10 +28,11 @@ type FinishProjection =
           finishDate: Date;
           finishLabel: string;
           dayLabel: string;
-          extendsPastToday: boolean;
+          extendsPastWindow: boolean;
           totalPomodoros: number;
           dueTodayPomodoros: number;
           unscheduledPomodoros: number;
+          dueThisWeekPomodoros: number;
           futureDuePomodoros: number;
           totalMinutes: number;
           workMinutes: number;
@@ -29,8 +43,179 @@ type FinishProjection =
           totalPomodoros: number;
           dueTodayPomodoros: number;
           unscheduledPomodoros: number;
+          dueThisWeekPomodoros: number;
           futureDuePomodoros: number;
       };
+
+interface ProjectionCardProps {
+    projection: FinishProjection;
+    scope: "daily" | "weekly";
+}
+
+const ProjectionCard: React.FC<ProjectionCardProps> = ({ projection, scope }) => {
+    const [infoOpen, setInfoOpen] = useState(false);
+    const isWeekly = scope === "weekly";
+    const title = isWeekly ? "Weekly projected finish" : "Daily projected finish";
+    const rules = isWeekly ? WEEKLY_PROJECTED_FINISH_RULES : DAILY_PROJECTED_FINISH_RULES;
+    const rulesId = `${scope}-projected-finish-rules`;
+    const ScopeIcon = isWeekly ? CalendarRange : CalendarDays;
+    const theme = isWeekly
+        ? {
+              border: "border-fuchsia-400/20",
+              glow: "bg-fuchsia-500/10",
+              icon: "bg-fuchsia-400/10 text-fuchsia-300 ring-fuchsia-400/20",
+              label: "text-fuchsia-300",
+              bar: "bg-fuchsia-400",
+              chip: "border-fuchsia-400/15 bg-fuchsia-400/5",
+          }
+        : {
+              border: "border-sky-400/20",
+              glow: "bg-sky-500/10",
+              icon: "bg-sky-400/10 text-sky-300 ring-sky-400/20",
+              label: "text-sky-300",
+              bar: "bg-sky-400",
+              chip: "border-sky-400/15 bg-sky-400/5",
+          };
+
+    if (!projection.hasWork) {
+        const hasExcludedWork = projection.futureDuePomodoros > EPSILON;
+        return (
+            <section className={`relative w-full overflow-hidden rounded-xl border bg-neutral-900/75 p-4 text-left shadow-lg shadow-black/10 ${theme.border}`}>
+                <div className={`pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full blur-3xl ${theme.glow}`} />
+                <div className="relative flex items-start gap-3">
+                    <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ring-1 ${hasExcludedWork ? "bg-amber-400/10 text-amber-300 ring-amber-400/20" : "bg-emerald-400/10 text-emerald-300 ring-emerald-400/20"}`}>
+                        {hasExcludedWork ? <ScopeIcon size={17} aria-hidden /> : <Check size={17} aria-hidden />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${theme.label}`}>{title}</div>
+                        <div className="mt-1 text-sm leading-snug text-neutral-200">
+                            {hasExcludedWork
+                                ? isWeekly
+                                    ? `No work due this week. ${formatPomodoroCount(projection.futureDuePomodoros)} later-due work remains outside this projection.`
+                                    : `No work due today. ${formatPomodoroCount(projection.futureDuePomodoros)} future-due work remains outside this projection.`
+                                : isWeekly ? "You're all caught up for this week. Great work!" : "You're all caught up for today. Great work!"}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-white/5 hover:text-neutral-200"
+                        onClick={() => setInfoOpen((open) => !open)}
+                        aria-expanded={infoOpen}
+                        aria-controls={rulesId}
+                        aria-label="Info"
+                    >
+                        <Info size={14} aria-hidden />
+                    </button>
+                </div>
+                {infoOpen && <div id={rulesId} className="relative mt-3 border-t border-white/5 pt-3 text-[10px] leading-relaxed text-neutral-500">{rules}</div>}
+            </section>
+        );
+    }
+
+    const focusPercent = projection.totalMinutes > 0 ? Math.min(100, Math.max(0, (projection.workMinutes / projection.totalMinutes) * 100)) : 0;
+
+    return (
+        <section className={`relative w-full overflow-hidden rounded-xl border bg-neutral-900/75 p-4 text-left shadow-lg shadow-black/10 ${theme.border}`}>
+            <div className={`pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full blur-3xl ${theme.glow}`} />
+            <div className="relative flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2.5">
+                    <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ring-1 ${theme.icon}`}>
+                        <ScopeIcon size={17} aria-hidden />
+                    </div>
+                    <div>
+                        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${theme.label}`}>{title}</div>
+                        <div className="mt-0.5 text-[10px] text-neutral-500">{formatPomodoroCount(projection.totalPomodoros)} in scope</div>
+                    </div>
+                </div>
+                <div className="flex items-center gap-1">
+                    <button
+                        type="button"
+                        className="grid h-7 w-7 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-white/5 hover:text-neutral-200"
+                        onClick={() => setInfoOpen((open) => !open)}
+                        aria-expanded={infoOpen}
+                        aria-controls={rulesId}
+                        aria-label="Info"
+                    >
+                        <Info size={14} aria-hidden />
+                    </button>
+                </div>
+            </div>
+
+            <div className="relative mt-4 flex items-end justify-between gap-3">
+                <div>
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-neutral-500">Finish by</div>
+                    <div className="mt-0.5 text-3xl font-semibold tracking-tight text-neutral-50">{projection.finishLabel}</div>
+                </div>
+                <div className={`mb-1 rounded-full border px-2.5 py-1 text-[10px] font-medium ${theme.chip} ${theme.label}`}>{projection.dayLabel}</div>
+            </div>
+
+            <div className="relative mt-4">
+                <div className="mb-1.5 flex items-center justify-between text-[10px] text-neutral-500">
+                    <span className="inline-flex items-center gap-1"><Target size={11} aria-hidden /> Focus {formatDurationMinutes(projection.workMinutes)}</span>
+                    <span className="inline-flex items-center gap-1"><Coffee size={11} aria-hidden /> Breaks {formatDurationMinutes(projection.breakMinutes)}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-neutral-800" aria-label={`${Math.round(focusPercent)}% focus time`}>
+                    <div className={`h-full rounded-full ${theme.bar}`} style={{ width: `${focusPercent}%` }} />
+                </div>
+                <div className="mt-1.5 flex items-center gap-1 text-[10px] text-neutral-500">
+                    <Clock3 size={11} aria-hidden />
+                    <span>{formatDurationMinutes(projection.totalMinutes)} total</span>
+                </div>
+            </div>
+
+            <div className="relative mt-3 flex flex-wrap gap-1.5 text-[10px] text-neutral-400">
+                {projection.dueTodayPomodoros > EPSILON && <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-1">Due now · {formatPomodoroCount(projection.dueTodayPomodoros)}</span>}
+                {projection.unscheduledPomodoros > EPSILON && <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-1">Flexible · {formatPomodoroCount(projection.unscheduledPomodoros)}</span>}
+                {projection.dueThisWeekPomodoros > EPSILON && <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-1">Later this week · {formatPomodoroCount(projection.dueThisWeekPomodoros)}</span>}
+            </div>
+            {projection.extendsPastWindow && (
+                <div className="relative mt-3 rounded-md bg-amber-400/5 px-2.5 py-1.5 text-[10px] text-amber-300/90 ring-1 ring-inset ring-amber-400/10">
+                    {isWeekly ? "May spill into next week—consider reprioritizing." : "May spill into tomorrow—consider reprioritizing."}
+                </div>
+            )}
+            {infoOpen && <div id={rulesId} className="relative mt-3 border-t border-white/5 pt-3 text-[10px] leading-relaxed text-neutral-500">{rules}</div>}
+        </section>
+    );
+};
+
+const ProjectionSwitcher: React.FC<{ projections: { daily: FinishProjection; weekly: FinishProjection } }> = ({ projections }) => {
+    const [scope, setScope] = useState<"daily" | "weekly">("daily");
+    const options = [
+        { scope: "daily" as const, label: "Today", icon: CalendarDays, projection: projections.daily },
+        { scope: "weekly" as const, label: "This week", icon: CalendarRange, projection: projections.weekly },
+    ];
+
+    return (
+        <div className="w-full">
+            <div className="mb-2 grid grid-cols-2 rounded-lg bg-neutral-900/80 p-1 ring-1 ring-inset ring-white/5" aria-label="Projection range">
+                {options.map((option) => {
+                    const selected = option.scope === scope;
+                    const OptionIcon = option.icon;
+                    return (
+                        <button
+                            key={option.scope}
+                            type="button"
+                            className={`flex items-center justify-center gap-2 rounded-md px-3 py-2 text-[11px] font-medium transition-all ${
+                                selected
+                                    ? option.scope === "daily"
+                                        ? "bg-sky-400/10 text-sky-200 shadow-sm ring-1 ring-inset ring-sky-400/15"
+                                        : "bg-fuchsia-400/10 text-fuchsia-200 shadow-sm ring-1 ring-inset ring-fuchsia-400/15"
+                                    : "text-neutral-500 hover:bg-white/[0.03] hover:text-neutral-300"
+                            }`}
+                            onClick={() => setScope(option.scope)}
+                            aria-pressed={selected}
+                        >
+                            <OptionIcon size={13} aria-hidden />
+                            <span>{option.label}</span>
+                            <span className="text-[9px] opacity-60">{formatPomodoroCount(option.projection.totalPomodoros)}</span>
+                        </button>
+                    );
+                })}
+            </div>
+            <ProjectionCard scope={scope} projection={projections[scope]} />
+        </div>
+    );
+};
 
 export const TimerPanel: React.FC = () => {
     const app = useAppState();
@@ -41,7 +226,6 @@ export const TimerPanel: React.FC = () => {
     const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
-    const [projectionInfoOpen, setProjectionInfoOpen] = useState(false);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
     const ms = remainingMs();
@@ -161,7 +345,7 @@ export const TimerPanel: React.FC = () => {
     const taskName = activeAppTask?.name ?? metadataTask?.title ?? (timer ? "Task" : null);
     const emptyDetailsMessage = pmSelectedId || linkedTaskId || activeAppTaskId ? "Syncing task details…" : "Select or start a task to view details.";
 
-    const finishProjection = useMemo<FinishProjection | null>(() => {
+    const finishProjections = useMemo<{ daily: FinishProjection; weekly: FinishProjection } | null>(() => {
         if (!state?.settings) return null;
         const settings = state.settings;
         const workMinutes = settings.work_minutes;
@@ -169,30 +353,15 @@ export const TimerPanel: React.FC = () => {
 
         const backendTasks = state.tasks || {};
         const pmTasks = Object.values(pmState.tasks || {});
-        if (pmTasks.length === 0) {
-            return {
-                hasWork: false,
-                totalPomodoros: 0,
-                dueTodayPomodoros: 0,
-                unscheduledPomodoros: 0,
-                futureDuePomodoros: 0,
-            };
-        }
-
         const projectionStart = new Date();
         const todayKey = toLocalDateKey(projectionStart);
+        const weekEndKey = getLocalWeekWindow(projectionStart).endKey;
         const workMs = workMinutes * 60000;
         const shortBreakMs = (settings.short_break_minutes || 0) * 60000;
         const longBreakMs = (settings.long_break_minutes || 0) * 60000;
         const segmentLength = Math.max(1, settings.segment_length || 1);
-
         const activeTimer = timer;
-
-        let totalRemaining = 0;
-        let dueTodayRemaining = 0;
-        let unscheduledRemaining = 0;
-        let futureDueRemaining = 0;
-        const remainingByProject = new Map<string | null, number>();
+        const eligibleTasks: ProjectionBacklogTask[] = [];
 
         pmTasks.forEach((pmTask) => {
             if (pmTask.isArchived) return;
@@ -214,112 +383,97 @@ export const TimerPanel: React.FC = () => {
 
             const remaining = Math.max(0, estimate - worked);
             if (remaining <= EPSILON) return;
-
-            const dueKey = parseDueDateKey(pmTask.dueDate);
-            if (dueKey && dueKey > todayKey) {
-                futureDueRemaining += remaining;
-                return;
-            }
-
-            if (dueKey) {
-                dueTodayRemaining += remaining;
-            } else {
-                unscheduledRemaining += remaining;
-            }
-            totalRemaining += remaining;
             const projectId = pmTask.projectId && pmState.projects[pmTask.projectId] ? pmTask.projectId : null;
-            remainingByProject.set(projectId, (remainingByProject.get(projectId) ?? 0) + remaining);
+            eligibleTasks.push({ dueDate: pmTask.dueDate, remainingPomodoros: remaining, projectId });
         });
 
-        if (totalRemaining <= EPSILON) {
-            return {
+        const backlogs = buildProjectionBacklogs(eligibleTasks, projectionStart);
+
+        const createProjection = (backlog: ProjectionBacklog, windowEndKey: string): FinishProjection => {
+            const totalRemaining = backlog.totalPomodoros;
+            if (totalRemaining <= EPSILON) return {
                 hasWork: false,
                 totalPomodoros: 0,
-                dueTodayPomodoros: dueTodayRemaining,
-                unscheduledPomodoros: unscheduledRemaining,
-                futureDuePomodoros: futureDueRemaining,
+                dueTodayPomodoros: backlog.dueTodayOrOverduePomodoros,
+                unscheduledPomodoros: backlog.unscheduledPomodoros,
+                dueThisWeekPomodoros: backlog.dueThisWeekPomodoros,
+                futureDuePomodoros: backlog.excludedFuturePomodoros,
             };
-        }
 
-        let totalMs = 0;
-        let futurePomodoros = totalRemaining;
-        let cycleCount = state.current_cycle_pomodoros || 0;
+            let totalMs = 0;
+            let futurePomodoros = totalRemaining;
+            let cycleCount = state.current_cycle_pomodoros || 0;
 
-        if (activeTimer) {
-            if (ms > 0) {
-                totalMs += ms;
-            }
-            if (activeTimer.kind === "Work") {
-                const remainingFraction = activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, activeRemainingSecs / activeWorkPlannedSecs)) : 0;
-                futurePomodoros = Math.max(0, futurePomodoros - remainingFraction);
-                cycleCount += 1;
-                if (futurePomodoros > EPSILON) {
-                    const takeLong = cycleCount >= segmentLength;
-                    totalMs += takeLong ? longBreakMs : shortBreakMs;
-                    if (takeLong) {
-                        cycleCount = 0;
-                    }
-                }
-            } else if (activeTimer.kind === "LongBreak") {
-                cycleCount = 0;
-            }
-        }
-
-        let future = futurePomodoros;
-        while (future > EPSILON) {
-            const chunk = Math.min(1, future);
-            totalMs += chunk * workMs;
-            future -= chunk;
-            const hasMore = future > EPSILON;
-            if (hasMore) {
-                const countsAsFull = chunk >= 1 - EPSILON;
-                if (countsAsFull) {
+            if (activeTimer) {
+                if (ms > 0) totalMs += ms;
+                if (activeTimer.kind === "Work") {
+                    const remainingFraction = activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, activeRemainingSecs / activeWorkPlannedSecs)) : 0;
+                    futurePomodoros = Math.max(0, futurePomodoros - remainingFraction);
                     cycleCount += 1;
-                    const takeLong = cycleCount >= segmentLength;
-                    totalMs += takeLong ? longBreakMs : shortBreakMs;
-                    if (takeLong) {
-                        cycleCount = 0;
+                    if (futurePomodoros > EPSILON) {
+                        const takeLong = cycleCount >= segmentLength;
+                        totalMs += takeLong ? longBreakMs : shortBreakMs;
+                        if (takeLong) cycleCount = 0;
                     }
-                } else {
-                    totalMs += shortBreakMs;
+                } else if (activeTimer.kind === "LongBreak") {
+                    cycleCount = 0;
                 }
             }
-        }
 
-        const assignedWorkloads = [...remainingByProject.entries()]
-            .filter(([projectId]) => projectId !== null)
-            .map(([projectId, remaining]) => ({
-                durationMs: totalMs * (remaining / totalRemaining),
-                schedule: pmState.projects[projectId!],
-            }));
-        let finishDate = combinedProjectFinish(projectionStart, assignedWorkloads);
-        const unassignedRemaining = remainingByProject.get(null) ?? 0;
-        if (unassignedRemaining > EPSILON) {
-            const unassignedFinish = addProjectedDuration(projectionStart, totalMs * (unassignedRemaining / totalRemaining), settings.end_of_day);
-            if (unassignedFinish > finishDate) finishDate = unassignedFinish;
-        }
-        const finishDayKey = toLocalDateKey(finishDate);
-        const extendsPastToday = finishDayKey !== todayKey;
-        const dayLabelFormatter = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
-        const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+            let future = futurePomodoros;
+            while (future > EPSILON) {
+                const chunk = Math.min(1, future);
+                totalMs += chunk * workMs;
+                future -= chunk;
+                if (future > EPSILON) {
+                    if (chunk >= 1 - EPSILON) {
+                        cycleCount += 1;
+                        const takeLong = cycleCount >= segmentLength;
+                        totalMs += takeLong ? longBreakMs : shortBreakMs;
+                        if (takeLong) cycleCount = 0;
+                    } else {
+                        totalMs += shortBreakMs;
+                    }
+                }
+            }
 
-        const totalMinutes = totalMs / 60000;
-        const workMinutesTotal = totalRemaining * workMinutes;
-        const breakMinutesTotal = Math.max(0, totalMinutes - workMinutesTotal);
+            const assignedWorkloads = [...backlog.remainingByProject.entries()]
+                .filter(([projectId]) => projectId !== null)
+                .map(([projectId, remaining]) => ({ durationMs: totalMs * (remaining / totalRemaining), schedule: pmState.projects[projectId!] }));
+            let finishDate = combinedProjectFinish(projectionStart, assignedWorkloads);
+            const unassignedRemaining = backlog.remainingByProject.get(null) ?? 0;
+            if (unassignedRemaining > EPSILON) {
+                const unassignedFinish = addProjectedDuration(projectionStart, totalMs * (unassignedRemaining / totalRemaining), settings.end_of_day);
+                if (unassignedFinish > finishDate) finishDate = unassignedFinish;
+            }
+            const finishDayKey = toLocalDateKey(finishDate);
+            const extendsPastWindow = finishDayKey > windowEndKey;
+            const dayLabelFormatter = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
+            const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+
+            const totalMinutes = totalMs / 60000;
+            const workMinutesTotal = totalRemaining * workMinutes;
+
+            return {
+                hasWork: true,
+                finishDate,
+                finishLabel: timeFormatter.format(finishDate),
+                dayLabel: finishDayKey === todayKey ? "Today" : dayLabelFormatter.format(finishDate),
+                extendsPastWindow,
+                totalPomodoros: totalRemaining,
+                dueTodayPomodoros: backlog.dueTodayOrOverduePomodoros,
+                unscheduledPomodoros: backlog.unscheduledPomodoros,
+                dueThisWeekPomodoros: backlog.dueThisWeekPomodoros,
+                futureDuePomodoros: backlog.excludedFuturePomodoros,
+                totalMinutes,
+                workMinutes: workMinutesTotal,
+                breakMinutes: Math.max(0, totalMinutes - workMinutesTotal),
+            };
+        };
 
         return {
-            hasWork: true,
-            finishDate,
-            finishLabel: timeFormatter.format(finishDate),
-            dayLabel: extendsPastToday ? dayLabelFormatter.format(finishDate) : "Today",
-            extendsPastToday,
-            totalPomodoros: totalRemaining,
-            dueTodayPomodoros: dueTodayRemaining,
-            unscheduledPomodoros: unscheduledRemaining,
-            futureDuePomodoros: futureDueRemaining,
-            totalMinutes,
-            workMinutes: workMinutesTotal,
-            breakMinutes: breakMinutesTotal,
+            daily: createProjection(backlogs.daily, todayKey),
+            weekly: createProjection(backlogs.weekly, weekEndKey),
         };
     }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, pmState.projects, timer, ms, tick, activeWorkPlannedSecs, activeRemainingSecs, activeFractionComplete, activeAppTaskId]);
 
@@ -482,64 +636,8 @@ export const TimerPanel: React.FC = () => {
                             <span className="text-neutral-600"> (goal {formatPomodoroCount(activePomodoroSummary.target)})</span>
                         </div>
                     )}
-                    {finishProjection && (
-                        <div className="w-full">
-                            {finishProjection.hasWork ? (
-                                <div className="w-full bg-neutral-900/70 border border-neutral-800 rounded-lg px-4 py-3 text-left shadow-sm">
-                                    <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-neutral-500">
-                                        <span className="font-medium text-neutral-300">Projected finish</span>
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                type="button"
-                                                className="rounded border border-neutral-700 px-1.5 py-0.5 text-[9px] normal-case tracking-normal text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-                                                onClick={() => setProjectionInfoOpen((open) => !open)}
-                                                aria-expanded={projectionInfoOpen}
-                                                aria-controls="projected-finish-rules"
-                                            >
-                                                Info
-                                            </button>
-                                            <span>{finishProjection.dayLabel}</span>
-                                        </div>
-                                    </div>
-                                    <div className="mt-1 text-2xl font-semibold text-neutral-100">{finishProjection.finishLabel}</div>
-                                    <div className="mt-2 text-[11px] text-neutral-400">
-                                        ~{formatDurationMinutes(finishProjection.totalMinutes)} remaining
-                                        <span className="text-neutral-600"> · </span>
-                                        Focus {formatDurationMinutes(finishProjection.workMinutes)}
-                                        <span className="text-neutral-600"> + </span>
-                                        Breaks {formatDurationMinutes(finishProjection.breakMinutes)}
-                                    </div>
-                                    {projectionInfoOpen && <div id="projected-finish-rules" className="mt-2 text-[10px] text-neutral-500">{PROJECTED_FINISH_RULES}</div>}
-                                    <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-neutral-500">
-                                        {finishProjection.dueTodayPomodoros > EPSILON && <span>Due today/overdue: {formatPomodoroCount(finishProjection.dueTodayPomodoros)}</span>}
-                                        {finishProjection.unscheduledPomodoros > EPSILON && <span>No due date: {formatPomodoroCount(finishProjection.unscheduledPomodoros)}</span>}
-                                    </div>
-                                    {finishProjection.extendsPastToday && <div className="mt-2 text-[10px] text-amber-300/90">May spill into tomorrow—consider reprioritizing.</div>}
-                                </div>
-                            ) : (
-                                <div className={`w-full rounded-lg px-4 py-3 text-left text-[12px] ${
-                                    finishProjection.futureDuePomodoros > EPSILON
-                                        ? "bg-amber-600/10 border border-amber-500/30 text-amber-200"
-                                        : "bg-emerald-600/10 border border-emerald-500/30 text-emerald-200"
-                                }`}>
-                                    <div className="flex items-start justify-between gap-3">
-                                        {finishProjection.futureDuePomodoros > EPSILON
-                                            ? `No work due today. ${formatPomodoroCount(finishProjection.futureDuePomodoros)} future-due work remains outside this projection.`
-                                            : "You're all caught up for today. Great work!"}
-                                        <button
-                                            type="button"
-                                            className="shrink-0 rounded border border-current/30 px-1.5 py-0.5 text-[9px] text-current/80 hover:bg-black/10 hover:text-current"
-                                            onClick={() => setProjectionInfoOpen((open) => !open)}
-                                            aria-expanded={projectionInfoOpen}
-                                            aria-controls="projected-finish-rules"
-                                        >
-                                            Info
-                                        </button>
-                                    </div>
-                                    {projectionInfoOpen && <div id="projected-finish-rules" className="mt-2 text-[10px] text-neutral-400">{PROJECTED_FINISH_RULES}</div>}
-                                </div>
-                            )}
-                        </div>
+                    {finishProjections && (
+                        <ProjectionSwitcher projections={finishProjections} />
                     )}
                     {/* Accessible linear progress */}
                     {/* Removed redundant bottom progress bar */}

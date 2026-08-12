@@ -5,10 +5,12 @@ import {
     computeElapsedSecs,
     computePlannedSecs,
     computeRemainingMs,
+    buildProjectionBacklogs,
     formatDurationMinutes,
     formatMs,
     formatPomodoroCount,
     parseDueDateKey,
+    getLocalWeekWindow,
     toLocalDateKey,
 } from "./timer";
 import { ActiveTimer } from "../state/types";
@@ -141,5 +143,47 @@ describe("date helpers", () => {
         expect(parseDueDateKey("")).toBe(null);
         expect(parseDueDateKey("not-a-date")).toBe(null);
         expect(parseDueDateKey(undefined)).toBe(null);
+    });
+    it("derives a local ISO Monday-through-Sunday week across month boundaries", () => {
+        expect(getLocalWeekWindow(new Date(2026, 7, 12, 14, 30))).toEqual({
+            startKey: "2026-08-10",
+            endKey: "2026-08-16",
+        });
+        expect(getLocalWeekWindow(new Date(2026, 7, 16, 23, 59))).toEqual({
+            startKey: "2026-08-10",
+            endKey: "2026-08-16",
+        });
+    });
+});
+
+describe("buildProjectionBacklogs", () => {
+    it("adds later-this-week work only to the weekly backlog", () => {
+        const result = buildProjectionBacklogs([
+            { dueDate: "2026-08-09", remainingPomodoros: 1, projectId: "alpha" },
+            { dueDate: "2026-08-12", remainingPomodoros: 2, projectId: "alpha" },
+            { dueDate: null, remainingPomodoros: 3, projectId: null },
+            { dueDate: "2026-08-14", remainingPomodoros: 4, projectId: "beta" },
+            { dueDate: "2026-08-17", remainingPomodoros: 5, projectId: "beta" },
+        ], new Date(2026, 7, 12, 12));
+
+        expect(result.daily.totalPomodoros).toBe(6);
+        expect(result.daily.dueTodayOrOverduePomodoros).toBe(3);
+        expect(result.daily.unscheduledPomodoros).toBe(3);
+        expect(result.daily.excludedFuturePomodoros).toBe(9);
+        expect(result.weekly.totalPomodoros).toBe(10);
+        expect(result.weekly.dueThisWeekPomodoros).toBe(4);
+        expect(result.weekly.excludedFuturePomodoros).toBe(5);
+        expect(result.weekly.remainingByProject.get("alpha")).toBe(3);
+        expect(result.weekly.remainingByProject.get("beta")).toBe(4);
+        expect(result.weekly.remainingByProject.get(null)).toBe(3);
+    });
+
+    it("ignores non-positive and non-finite remaining work", () => {
+        const result = buildProjectionBacklogs([
+            { remainingPomodoros: 0, projectId: null },
+            { remainingPomodoros: Number.NaN, projectId: null },
+        ], new Date(2026, 7, 12));
+        expect(result.daily.totalPomodoros).toBe(0);
+        expect(result.weekly.totalPomodoros).toBe(0);
     });
 });
