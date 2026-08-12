@@ -1,6 +1,6 @@
 # Supabase foundation
 
-This directory contains the local Supabase CLI project, the Phase 0 schema/RLS migration, and the invite-gated signup Edge Function. Docker and the Supabase CLI are required.
+This directory contains the local Supabase CLI project, schema/RLS migrations, and the invite-signup and Shortcut sync Edge Functions. Docker and the Supabase CLI are required.
 
 ## Local setup
 
@@ -30,10 +30,10 @@ SIGNUP_INVITE_CODE=replace-with-a-local-secret
 
 Supabase supplies `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the function runtime. Never commit or put either privileged value, or the invite code, in a `VITE_` variable.
 
-Serve locally with:
+Serve all local functions with their per-function JWT settings from `config.toml`:
 
 ```sh
-npx supabase functions serve invite-signup --no-verify-jwt --env-file supabase/.env.local
+pnpm supabase:serve
 ```
 
 For a hosted project, use secure input for real secrets where possible rather than putting them in shell history:
@@ -56,6 +56,30 @@ Manual Auth cases:
 3. Direct anonymous `auth.signUp` is rejected because public signup is disabled.
 4. The created user can authenticate with `signInWithPassword` without an invite.
 5. `OPTIONS` returns CORS headers without creating a user.
+
+## Shortcut sync function
+
+`public.shortcut_settings` stores one Shortcut connection per owner. Save or replace it through the owner-derived RPC so PostgREST never needs SELECT permission on the token column:
+
+```ts
+await supabase.rpc("save_shortcut_settings", {
+    p_shortcut_token: token,
+    p_team_name: teamName,
+    p_excluded_statuses: excludedStatuses,
+});
+```
+
+Authenticated clients may select only `owner_id`, `team_name`, `excluded_statuses`, `last_synced_at`, and `updated_at`. Selecting `shortcut_token` is intentionally denied. The token is plaintext within Postgres under RLS and column privileges; it is readable by the `shortcut-sync` service-role path and database administrators, but is never returned by the save RPC or sync function.
+
+Invoke `shortcut-sync` with `POST` through the authenticated Supabase client. The function independently verifies the bearer JWT, derives the owner, resolves the current Shortcut member and workflow states, follows at most four 250-result search pages, and returns `{ stories, synced_at }`. A successful call updates `last_synced_at`. Stable error codes include `AUTH_REQUIRED`, `SHORTCUT_NOT_CONFIGURED`, `SHORTCUT_TOKEN_INVALID`, `SHORTCUT_RATE_LIMITED`, and `SHORTCUT_UPSTREAM_ERROR`; rate-limit responses may include `retry_after_seconds`.
+
+Deploy the authenticated function without `--no-verify-jwt`:
+
+```sh
+npx supabase functions deploy shortcut-sync
+```
+
+No Shortcut token belongs in an environment file, log, `VITE_` variable, or committed source.
 
 ## Owner-isolation verification matrix
 

@@ -23,7 +23,7 @@
         "supabase:stop": "npx supabase stop",
         "supabase:reset": "npx supabase db reset",
         "supabase:status": "npx supabase status",
-        "supabase:serve": "npx supabase functions serve invite-signup --no-verify-jwt --env-file supabase/.env.local",
+        "supabase:serve": "npx supabase functions serve --env-file supabase/.env.local",
         "supabase:fullstart": "npm run supabase:start && npm run supabase:serve"
     },
     "dependencies": {
