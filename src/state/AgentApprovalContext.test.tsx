@@ -59,7 +59,7 @@ function workflowResult(overrides: Partial<StartOfDayWorkflowResult> = {}): Star
 async function dataWithProject() {
     const data = new InMemoryDataAccess(makeAppState());
     await data.savePMState({
-        projects: { p1: { id: "p1", name: "Plan", color: "#6366F1", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" } },
+        projects: { p1: { id: "p1", name: "Plan", color: "#6366F1", workableStart: "09:00", workableEnd: "17:00", workableDays: [1, 2, 3, 4, 5], isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" } },
         tasks: { t1: task("Original") }, meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
     });
     return data;
@@ -234,7 +234,7 @@ describe("AgentApprovalProvider", () => {
     it("launches End-of-Day, previews tomorrow, and applies the approved priority order", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePMState({
-            projects: { p1: { id: "p1", name: "Plan", color: "#6366F1", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" } },
+            projects: { p1: { id: "p1", name: "Plan", color: "#6366F1", workableStart: "09:00", workableEnd: "17:00", workableDays: [1, 2, 3, 4, 5], isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" } },
             tasks: { t1: task("First"), t2: { ...task("Second"), id: "t2", sortOrder: 1 } },
             meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
         });

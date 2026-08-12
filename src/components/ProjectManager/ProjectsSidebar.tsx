@@ -5,6 +5,127 @@ import { useSounds } from "../../hooks/useSounds";
 import { EmptyState } from "./EmptyState";
 
 const COLOR_PRESETS = ["#6366F1", "#EC4899", "#10B981", "#F59E0B", "#3B82F6", "#8B5CF6", "#EF4444", "#14B8A6"];
+const WEEKDAYS = [
+    { value: 1, label: "M", name: "Monday" },
+    { value: 2, label: "T", name: "Tuesday" },
+    { value: 3, label: "W", name: "Wednesday" },
+    { value: 4, label: "T", name: "Thursday" },
+    { value: 5, label: "F", name: "Friday" },
+    { value: 6, label: "S", name: "Saturday" },
+    { value: 0, label: "S", name: "Sunday" },
+] as const;
+const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
+    const hours = Math.floor(index / 2);
+    const minutes = index % 2 === 0 ? "00" : "30";
+    return `${String(hours).padStart(2, "0")}:${minutes}`;
+});
+
+function formatScheduleTime(value: string): string {
+    const [hours, minutes] = value.split(":").map(Number);
+    const period = hours >= 12 ? "PM" : "AM";
+    const displayHours = hours % 12 || 12;
+    return `${displayHours}:${String(minutes).padStart(2, "0")} ${period}`;
+}
+
+const ScheduleTimeSelect: React.FC<{ label: string; value: string; options: string[]; onChange: (value: string) => void }> = ({ label, value, options, onChange }) => {
+    const [open, setOpen] = useState(false);
+    const [activeIndex, setActiveIndex] = useState(() => Math.max(0, options.indexOf(value)));
+    const rootRef = useRef<HTMLDivElement>(null);
+    const activeOptionRef = useRef<HTMLButtonElement>(null);
+    const listboxId = React.useId();
+
+    useEffect(() => {
+        if (!open) return;
+        const closeOnOutsideClick = (event: MouseEvent) => {
+            if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+        };
+        document.addEventListener("mousedown", closeOnOutsideClick);
+        return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+    }, [open]);
+
+    useEffect(() => {
+        if (open) activeOptionRef.current?.scrollIntoView({ block: "nearest" });
+    }, [activeIndex, open]);
+
+    const openAtCurrentValue = () => {
+        setActiveIndex(Math.max(0, options.indexOf(value)));
+        setOpen(true);
+    };
+    const choose = (nextValue: string) => {
+        onChange(nextValue);
+        setOpen(false);
+    };
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+        if (event.key === "Escape") {
+            setOpen(false);
+            return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (open) choose(options[activeIndex]);
+            else openAtCurrentValue();
+            return;
+        }
+        if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            event.preventDefault();
+            if (!open) {
+                openAtCurrentValue();
+                return;
+            }
+            if (event.key === "Home") setActiveIndex(0);
+            else if (event.key === "End") setActiveIndex(options.length - 1);
+            else setActiveIndex((current) => Math.max(0, Math.min(options.length - 1, current + (event.key === "ArrowDown" ? 1 : -1))));
+        }
+    };
+
+    return (
+        <div ref={rootRef} className="relative min-w-0 flex-1 space-y-1.5">
+            <span className="block text-[10px] font-medium uppercase tracking-wide text-neutral-500">{label}</span>
+            <button
+                type="button"
+                role="combobox"
+                aria-label={`Workable ${label.toLowerCase()} time`}
+                aria-expanded={open}
+                aria-controls={listboxId}
+                onClick={() => open ? setOpen(false) : openAtCurrentValue()}
+                onKeyDown={handleKeyDown}
+                className={`relative w-full rounded-lg border bg-neutral-950 py-2 pl-2.5 pr-7 text-left text-xs font-medium text-neutral-100 outline-none transition hover:border-neutral-600 focus:ring-2 focus:ring-indigo-500/20 ${open ? "border-indigo-500" : "border-neutral-700"}`}
+            >
+                {formatScheduleTime(value)}
+                <svg aria-hidden viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className={`pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-500 transition-transform ${open ? "rotate-180" : ""}`}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m6 8 4 4 4-4" />
+                </svg>
+            </button>
+            {open && (
+                <div
+                    id={listboxId}
+                    role="listbox"
+                    aria-label={`${label} time options`}
+                    className="absolute left-0 right-0 top-full z-30 mt-1 max-h-44 overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-950 p-1 shadow-xl shadow-black/40 [scrollbar-color:#525252_#171717] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-neutral-600 [&::-webkit-scrollbar-track]:bg-neutral-900"
+                >
+                    {options.map((time, index) => {
+                        const selected = time === value;
+                        const active = index === activeIndex;
+                        return (
+                            <button
+                                ref={active ? activeOptionRef : undefined}
+                                key={time}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                onMouseEnter={() => setActiveIndex(index)}
+                                onClick={() => choose(time)}
+                                className={`block w-full rounded-md px-2 py-1.5 text-left text-xs transition ${selected ? "bg-indigo-600 text-white" : active ? "bg-neutral-800 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800"}`}
+                            >
+                                {formatScheduleTime(time)}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
 
 const getRandomPresetColor = () => COLOR_PRESETS[Math.floor(Math.random() * COLOR_PRESETS.length)];
 
@@ -167,6 +288,49 @@ export const ProjectsSidebar: React.FC<{ onSelectProject?: () => void }> = ({ on
                             />
                             <span aria-hidden className="h-5 w-5 rounded-full border border-neutral-800" style={{ background: activeProject.color }} />
                         </label>
+                    </div>
+                    <div className="space-y-3 border-t border-neutral-800 pt-3">
+                        <div className="flex items-center justify-between gap-2">
+                            <div>
+                                <p className="text-[10px] uppercase tracking-wide text-neutral-500">Workable hours</p>
+                                <p className="mt-0.5 text-[11px] text-neutral-300">{formatScheduleTime(activeProject.workableStart)} – {formatScheduleTime(activeProject.workableEnd)}</p>
+                            </div>
+                            <svg aria-hidden viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-indigo-400">
+                                <circle cx="10" cy="10" r="7" />
+                                <path strokeLinecap="round" d="M10 6v4l2.5 1.5" />
+                            </svg>
+                        </div>
+                        <div className="flex items-end gap-2">
+                            <ScheduleTimeSelect
+                                label="Start"
+                                value={activeProject.workableStart}
+                                options={[...new Set([...TIME_OPTIONS.filter((time) => time < activeProject.workableEnd), activeProject.workableStart])].sort()}
+                                onChange={(workableStart) => updateProject(activeProject.id, { workableStart })}
+                            />
+                            <span aria-hidden className="pb-2.5 text-neutral-600">→</span>
+                            <ScheduleTimeSelect
+                                label="End"
+                                value={activeProject.workableEnd}
+                                options={[...new Set([...TIME_OPTIONS.filter((time) => time > activeProject.workableStart), activeProject.workableEnd])].sort()}
+                                onChange={(workableEnd) => updateProject(activeProject.id, { workableEnd })}
+                            />
+                        </div>
+                        <div>
+                            <p className="mb-1 text-[10px] text-neutral-400">Workable weekdays</p>
+                            <div className="grid grid-cols-7 gap-1">
+                                {WEEKDAYS.map((day) => {
+                                    const selected = activeProject.workableDays.includes(day.value);
+                                    return (
+                                        <button key={day.name} type="button" aria-label={day.name} aria-pressed={selected} title={day.name} onClick={() => {
+                                            const next = selected ? activeProject.workableDays.filter((value) => value !== day.value) : [...activeProject.workableDays, day.value];
+                                            if (next.length > 0) updateProject(activeProject.id, { workableDays: next });
+                                        }} className={`rounded py-1 text-[10px] font-semibold transition ${selected ? "bg-indigo-600 text-white" : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700"}`}>
+                                            {day.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-[11px]">
                         <button

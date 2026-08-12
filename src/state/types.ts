@@ -12,12 +12,18 @@ export interface Task {
 // New Project Manager domain types
 export type TaskStatus = "Backlog" | "Next" | "In Progress" | "Blocked" | "Done";
 export type TaskPriority = "Low" | "Medium" | "High";
+export type WorkableWeekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface Project {
     id: string;
     name: string;
     color: string; // hex
     description?: string;
+    /** Local wall-clock project availability in 24-hour HH:mm form. */
+    workableStart: string;
+    workableEnd: string;
+    /** JavaScript weekday numbers: Sunday=0 through Saturday=6. */
+    workableDays: WorkableWeekday[];
     isArchived: boolean;
     sortOrder: number;
     createdAt: string;

@@ -56,6 +56,7 @@ describe("normalizeState", () => {
         expect(s.ui.view).toBe("list");
         expect(s.ui.selectedProjectIds).toHaveLength(1);
         expect(s.ui.selectedProjectIds[0]).toBe(Object.keys(s.projects)[0]);
+        expect(Object.values(s.projects)[0]).toMatchObject({ workableStart: "09:00", workableEnd: "17:00", workableDays: [1, 2, 3, 4, 5] });
     });
 
     it("coerces invalid statuses and priorities", () => {
@@ -90,6 +91,13 @@ describe("normalizeState", () => {
         const p = s.projects.p1;
         expect(p.createdAt.length).toBeGreaterThan(0);
         expect(p.updatedAt).toBe(p.createdAt);
+    });
+
+    it("normalizes invalid project scheduling and preserves valid values", () => {
+        const invalid = normalizeState({ projects: { p1: { id: "p1", workableStart: "18:00", workableEnd: "09:00", workableDays: [9] } } } as any);
+        expect(invalid.projects.p1).toMatchObject({ workableStart: "09:00", workableEnd: "17:00", workableDays: [1, 2, 3, 4, 5] });
+        const valid = normalizeState({ projects: { p1: { id: "p1", workableStart: "07:30", workableEnd: "15:00", workableDays: [6, 2, 2] } } } as any);
+        expect(valid.projects.p1).toMatchObject({ workableStart: "07:30", workableEnd: "15:00", workableDays: [2, 6] });
     });
 
     it("filters selectedProjectIds to existing projects and defaults when empty", () => {

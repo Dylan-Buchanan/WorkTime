@@ -538,7 +538,7 @@ export const AnalyticsPage: React.FC = () => {
                             days (&gt;=4 sessions)
                         </div>
                         <div className="text-[11px]">To-do completion streak: <strong>{todoMetrics.streak}</strong> days</div>
-                        <CapacityForecast filtered={filtered} />
+                        <CapacityForecast filtered={filtered} workableDays={new Set((selectedProjects.length > 0 ? selectedProjects : Object.keys(pm.projects)).flatMap((id) => pm.projects[id]?.workableDays ?? []))} />
                     </div>
                 </section>
             </div>
@@ -715,8 +715,8 @@ const Heatmap: React.FC<{
     );
 };
 
-// Capacity Forecast: simple next 2 weeks forecast = weekday average * upcoming workdays (Mon-Fri)
-const CapacityForecast: React.FC<{ filtered: any[] }> = ({ filtered }) => {
+// Capacity Forecast: historical weekday average across the selected projects' workable days.
+const CapacityForecast: React.FC<{ filtered: any[]; workableDays: Set<number> }> = ({ filtered, workableDays }) => {
     const byWeekday: number[] = Array(7).fill(0);
     const counts: number[] = Array(7).fill(0);
     filtered
@@ -737,7 +737,7 @@ const CapacityForecast: React.FC<{ filtered: any[] }> = ({ filtered }) => {
     let forecastMins = 0;
     next14.forEach((d) => {
         const dow = d.getDay();
-        if (dow === 0 || dow === 6) return;
+        if (!workableDays.has(dow)) return;
         forecastMins += avgPerWeekday[dow];
     });
     return (

@@ -15,7 +15,7 @@ function baseInput(complete: ChatCompletionsClient["complete"]): ChatWorkflowInp
     const tasks = [task("t1", "Draft brief", 0), task("t2", "Review brief", 1)];
     const pmState: Pick<ProjectManagerState, "projects" | "tasks"> = {
         projects: {
-            p1: { id: "p1", name: "Launch", description: "Ship the launch", color: "#6366F1", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
+            p1: { id: "p1", name: "Launch", description: "Ship the launch", color: "#6366F1", workableStart: "09:00", workableEnd: "17:00", workableDays: [1, 2, 3, 4, 5], isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
         },
         tasks: Object.fromEntries(tasks.map((item) => [item.id, item])),
     };

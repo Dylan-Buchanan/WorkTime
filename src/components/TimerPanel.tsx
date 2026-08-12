@@ -5,7 +5,7 @@ import { usePM } from "../state/ProjectManagerContext";
 import { TaskInspector } from "./ProjectManager/TaskInspector";
 import { EPSILON, computeElapsedSecs, formatDurationMinutes, formatMs, formatPomodoroCount, parseDueDateKey, toLocalDateKey } from "../lib/timer";
 import { useOptionalTodos } from "../state/TodoContext";
-import { addProjectedDuration } from "../lib/projection";
+import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
 
 const PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.";
 
@@ -192,6 +192,7 @@ export const TimerPanel: React.FC = () => {
         let dueTodayRemaining = 0;
         let unscheduledRemaining = 0;
         let futureDueRemaining = 0;
+        const remainingByProject = new Map<string | null, number>();
 
         pmTasks.forEach((pmTask) => {
             if (pmTask.isArchived) return;
@@ -226,6 +227,8 @@ export const TimerPanel: React.FC = () => {
                 unscheduledRemaining += remaining;
             }
             totalRemaining += remaining;
+            const projectId = pmTask.projectId && pmState.projects[pmTask.projectId] ? pmTask.projectId : null;
+            remainingByProject.set(projectId, (remainingByProject.get(projectId) ?? 0) + remaining);
         });
 
         if (totalRemaining <= EPSILON) {
@@ -283,7 +286,18 @@ export const TimerPanel: React.FC = () => {
             }
         }
 
-        const finishDate = addProjectedDuration(projectionStart, totalMs, settings.end_of_day);
+        const assignedWorkloads = [...remainingByProject.entries()]
+            .filter(([projectId]) => projectId !== null)
+            .map(([projectId, remaining]) => ({
+                durationMs: totalMs * (remaining / totalRemaining),
+                schedule: pmState.projects[projectId!],
+            }));
+        let finishDate = combinedProjectFinish(projectionStart, assignedWorkloads);
+        const unassignedRemaining = remainingByProject.get(null) ?? 0;
+        if (unassignedRemaining > EPSILON) {
+            const unassignedFinish = addProjectedDuration(projectionStart, totalMs * (unassignedRemaining / totalRemaining), settings.end_of_day);
+            if (unassignedFinish > finishDate) finishDate = unassignedFinish;
+        }
         const finishDayKey = toLocalDateKey(finishDate);
         const extendsPastToday = finishDayKey !== todayKey;
         const dayLabelFormatter = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
@@ -307,7 +321,7 @@ export const TimerPanel: React.FC = () => {
             workMinutes: workMinutesTotal,
             breakMinutes: breakMinutesTotal,
         };
-    }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, timer, ms, tick, activeWorkPlannedSecs, activeRemainingSecs, activeFractionComplete, activeAppTaskId]);
+    }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, pmState.projects, timer, ms, tick, activeWorkPlannedSecs, activeRemainingSecs, activeFractionComplete, activeAppTaskId]);
 
     const activePomodoroSummary = useMemo(() => {
         if (!activeAppTaskId) return null;

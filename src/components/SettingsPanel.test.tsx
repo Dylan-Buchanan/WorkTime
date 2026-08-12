@@ -75,7 +75,7 @@ describe("SettingsPanel reset scope", () => {
             tasks: { t1: { id: "t1", name: "Doomed", target_pomodoros: 2, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } },
         }));
         await data.savePMState({
-            projects: { p1: { id: "p1", name: "Keep Me", color: "#fff", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } },
+            projects: { p1: { id: "p1", name: "Keep Me", color: "#fff", workableStart: "09:00", workableEnd: "17:00", workableDays: [1, 2, 3, 4, 5], isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } },
             tasks: {},
             meta: { initializedAt: "2026-01-01T00:00:00Z" },
         });

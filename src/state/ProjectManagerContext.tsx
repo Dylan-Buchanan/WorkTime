@@ -11,6 +11,7 @@ import {
     saveAgentProjectSnapshot,
 } from "../lib/agent/snapshotStore";
 import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/snapshotStore";
+import { normalizeProjectSchedule } from "../lib/projectSchedule";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -46,6 +47,7 @@ function buildDefaultState(): ProjectManagerState {
         name: "General",
         color: randomColor(),
         description: "",
+        ...normalizeProjectSchedule(null),
         isArchived: false,
         sortOrder: 0,
         createdAt: now(),
@@ -410,6 +412,7 @@ export const ProjectManagerProvider: React.FC<{
             name,
             color: color || randomColor(),
             description: "",
+            ...normalizeProjectSchedule(null),
             isArchived: false,
             sortOrder: Object.keys(state.projects).length,
             createdAt: now(),
@@ -428,7 +431,8 @@ export const ProjectManagerProvider: React.FC<{
     const updateProject = (id: string, patch: Partial<Project>) => {
         const p = state.projects[id];
         if (!p) return;
-        const upd: Project = { ...p, ...patch, updatedAt: now() };
+        const merged = { ...p, ...patch };
+        const upd: Project = { ...merged, ...normalizeProjectSchedule(merged), updatedAt: now() };
         persist((prev) => ({
             ...prev,
             projects: { ...prev.projects, [id]: upd },
@@ -817,6 +821,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
             name: project.name || "Untitled",
             color: project.color || randomColor(),
             description: project.description ?? "",
+            ...normalizeProjectSchedule(project),
             isArchived: Boolean(project.isArchived),
             sortOrder: typeof project.sortOrder === "number" && Number.isFinite(project.sortOrder) ? project.sortOrder : 0,
             createdAt,
