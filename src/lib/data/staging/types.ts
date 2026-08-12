@@ -237,6 +237,8 @@ function isTodo(value: unknown): boolean {
         typeof value.title === "string" &&
         (value.rule === null || isValidRule(value.rule as TodoRule)) &&
         (value.dueDate === null || typeof value.dueDate === "string") &&
+        (value.estimate === undefined || (isFiniteNumber(value.estimate) && value.estimate >= 1)) &&
+        (value.currentTaskId === undefined || value.currentTaskId === null || typeof value.currentTaskId === "string") &&
         isFiniteNumber(value.position) &&
         typeof value.isArchived === "boolean" &&
         typeof value.createdAt === "string" &&

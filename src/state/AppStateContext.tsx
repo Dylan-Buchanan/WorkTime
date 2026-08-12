@@ -43,6 +43,9 @@ interface AppContextShape {
     remainingMs: () => number;
     error: string | null;
     finalizeTask: (id: string) => Promise<void>;
+    archiveTask: (id: string) => Promise<void>;
+    startTaskWork: (id: string) => Promise<void>;
+    subscribeTaskCompletions: (listener: (taskId: string) => void) => () => void;
     pauseTimer: () => void;
     resumeTimer: () => void;
     isPaused: boolean;
@@ -64,6 +67,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const progressing = useRef(false);
     const stateRef = useRef<AppStateData | null>(null);
     const queuedReconciliationRef = useRef<{ timer: ReconciledTimer; state: AppStateData } | null>(null);
+    const taskCompletionListenersRef = useRef(new Set<(taskId: string) => void>());
+    const terminalTaskIdsRef = useRef(new Set<string>());
     let soundApi: { play: (k: any) => void } | null = null;
     try { soundApi = useSounds(); } catch { /* optional sound setup */ }
     stateRef.current = state;
@@ -184,6 +189,19 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     useEffect(() => { void ensureNotification(); }, []);
 
+    useEffect(() => {
+        if (!state) return;
+        const terminal = new Set(Object.values(state.tasks)
+            .filter((task) => task.archived || task.completed_at !== null)
+            .map((task) => task.id));
+        for (const taskId of terminal) {
+            if (!terminalTaskIdsRef.current.has(taskId)) {
+                for (const listener of taskCompletionListenersRef.current) listener(taskId);
+            }
+        }
+        terminalTaskIdsRef.current = terminal;
+    }, [state]);
+
     // Runs a local command and adopts its EngineResult state directly. No
     // follow-up fetch and no sync call: the staged result is the new view.
     // Errors leave React state untouched (last persisted state stays visible)
@@ -231,6 +249,32 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
     const finalizeTask = (id: string) => adoptResult(() => data.finalizeTask(id));
+    const archiveTask = async (id: string) => {
+        try {
+            setError(null);
+            const result = await data.archiveTask(id);
+            setState(result.state);
+        } catch (err: any) {
+            setError(err?.message || err?.toString?.() || "Unknown error");
+            throw err;
+        }
+    };
+    const startTaskWork = async (id: string) => {
+        try {
+            setError(null);
+            if (stateRef.current?.timer) throw new Error("A timer is already running");
+            await data.setActiveTask(id);
+            const started = await data.startWorkTimer();
+            setState(started.state);
+        } catch (err: any) {
+            setError(err?.message || err?.toString?.() || "Unknown error");
+            throw err;
+        }
+    };
+    const subscribeTaskCompletions = useCallback((listener: (taskId: string) => void) => {
+        taskCompletionListenersRef.current.add(listener);
+        return () => taskCompletionListenersRef.current.delete(listener);
+    }, []);
     const pauseTimer = () => { if (state?.timer && !state.timer.paused) void adoptResult(() => data.pauseTimer()); };
     const resumeTimer = () => { if (state?.timer?.paused) void adoptResult(() => data.resumeTimer()); };
     const resetAll = async () => {
@@ -243,7 +287,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     };
 
-    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
+    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, archiveTask, startTaskWork, subscribeTaskCompletions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
 };
 
 export const useAppState = () => {
@@ -251,3 +295,5 @@ export const useAppState = () => {
     if (!ctx) throw new Error("useAppState must be inside provider");
     return ctx;
 };
+
+export const useOptionalAppState = () => useContext(AppStateContext);

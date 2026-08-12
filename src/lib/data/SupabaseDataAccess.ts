@@ -90,6 +90,8 @@ function todoRow(todo: Todo, updatedAt?: string) {
         title: todo.title,
         rule: todo.rule,
         due_date: todo.dueDate,
+        estimate: todo.estimate,
+        current_task_id: todo.currentTaskId,
         position: todo.position,
         is_archived: todo.isArchived,
         created_at: todo.createdAt,
@@ -234,6 +236,8 @@ export class SupabaseDataAccess implements SyncRemote {
             !row || typeof row.id !== "string" || typeof row.title !== "string" ||
             (row.rule !== null && !isValidRule(row.rule as TodoRule)) ||
             (row.due_date !== null && typeof row.due_date !== "string") ||
+            (row.estimate !== undefined && typeof row.estimate !== "number") ||
+            (row.current_task_id !== undefined && row.current_task_id !== null && typeof row.current_task_id !== "string") ||
             typeof row.position !== "number" || typeof row.is_archived !== "boolean" ||
             typeof row.created_at !== "string" || typeof row.updated_at !== "string"
         ) {
@@ -241,6 +245,8 @@ export class SupabaseDataAccess implements SyncRemote {
         }
         return {
             id: row.id, title: row.title, rule: clone(row.rule), dueDate: row.due_date,
+            estimate: Number.isFinite(row.estimate) ? Math.max(1, Math.trunc(row.estimate)) : 1,
+            currentTaskId: typeof row.current_task_id === "string" ? row.current_task_id : null,
             position: row.position, isArchived: row.is_archived,
             createdAt: row.created_at, updatedAt: row.updated_at,
         };

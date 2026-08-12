@@ -4,6 +4,7 @@ import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
 import { TaskInspector } from "./ProjectManager/TaskInspector";
 import { EPSILON, computeElapsedSecs, formatDurationMinutes, formatMs, formatPomodoroCount, parseDueDateKey, toLocalDateKey } from "../lib/timer";
+import { useOptionalTodos } from "../state/TodoContext";
 
 type FinishProjection =
     | {
@@ -32,6 +33,7 @@ export const TimerPanel: React.FC = () => {
     const stopWork = app.stopWork; // preserve existing functionality
     const { play } = useSounds();
     const { state: pmState, setSelectedTask } = usePM();
+    const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
     const autoSelectedTaskRef = useRef<string | null>(null);
@@ -53,19 +55,21 @@ export const TimerPanel: React.FC = () => {
 
     const activeAppTaskId = timer?.task_id ?? state?.active_task ?? null;
     const activeAppTask = activeAppTaskId ? state?.tasks[activeAppTaskId] : null;
+    const activeIsTodoTask = Boolean(activeAppTaskId && Object.values(todoContext?.state.todos ?? {})
+        .some((todo) => todo.currentTaskId === activeAppTaskId));
 
     const linkedTask = useMemo(() => {
         if (!activeAppTaskId) return null;
         const tasks = Object.values(pmState.tasks);
         const linked = tasks.find((t) => t.appTaskId === activeAppTaskId);
         if (linked) return linked;
-        if (activeAppTask?.name) {
+        if (activeAppTask?.name && !activeAppTask.archived && !activeIsTodoTask) {
             const normalized = activeAppTask.name.trim().toLowerCase();
             const byTitle = tasks.find((t) => t.title.trim().toLowerCase() === normalized);
             if (byTitle) return byTitle;
         }
         return null;
-    }, [pmState.tasks, activeAppTaskId, activeAppTask?.name]);
+    }, [pmState.tasks, activeAppTaskId, activeAppTask?.name, activeIsTodoTask]);
     const linkedTaskId = linkedTask?.id ?? null;
 
     const inspectorTaskId = pmSelectedId ?? linkedTaskId ?? null;

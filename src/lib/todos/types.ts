@@ -50,6 +50,10 @@ export interface Todo {
     title: string;
     rule: TodoRule | null;
     dueDate: LocalDateKey | null;
+    /** Planned work for each occurrence, in pomodoros. */
+    estimate: number;
+    /** Pomodoro task for the currently pending occurrence, if one exists. */
+    currentTaskId: string | null;
     position: number;
     isArchived: boolean;
     createdAt: string;
@@ -61,4 +65,5 @@ export interface NewTodoInput {
     rule?: TodoRule | null;
     dueDate?: LocalDateKey | null;
     position?: number;
+    estimate?: number;
 }

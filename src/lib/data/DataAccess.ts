@@ -104,6 +104,7 @@ export interface DataAccess {
     skipBreak(): Promise<EngineResult<AppStateData>>;
     updateSettings(settings: Settings): Promise<EngineResult<Settings>>;
     finalizeTask(taskId: string): Promise<EngineResult<Task>>;
+    archiveTask(taskId: string): Promise<EngineResult<Task>>;
     setTaskTarget(taskId: string, target: number): Promise<EngineResult<Task>>;
     deleteTask(taskId: string): Promise<EngineResult<void>>;
     deletePomodoroLog(logId: string): Promise<EngineResult<void>>;

@@ -1,8 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { isValidRule, normalizeRule } from "../lib/todos";
+import { completeTodoOccurrence, isValidRule, normalizeRule, normalizeTodoEstimate, reconcileTodoTasks } from "../lib/todos";
 import type { NewTodoInput, Todo, TodoRule } from "../lib/todos";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
+import { useOptionalAppState } from "./AppStateContext";
 
 export interface TodoState {
     todos: Record<string, Todo>;
@@ -16,7 +17,9 @@ export interface TodoContextValue {
     createTodo(input: NewTodoInput): Todo;
     updateTodo(id: string, patch: Partial<Todo>): void;
     archiveTodo(id: string, archive?: boolean): void;
-    deleteTodo(id: string): void;
+    completeTodo(id: string): Promise<void>;
+    startPomodoro(id: string): Promise<void>;
+    deleteTodo(id: string): Promise<void>;
     reorderTodos(idsInOrder: string[]): void;
     setSelectedTodo(id: string | null): void;
     refreshTodos(): Promise<void>;
@@ -50,6 +53,8 @@ function normalizeTodo(value: unknown): Todo | null {
         title: typeof value.title === "string" ? value.title : "Untitled to-do",
         rule,
         dueDate: typeof value.dueDate === "string" ? value.dueDate as Todo["dueDate"] : null,
+        estimate: normalizeTodoEstimate(value.estimate),
+        currentTaskId: typeof value.currentTaskId === "string" && value.currentTaskId ? value.currentTaskId : null,
         position: Number.isFinite(Number(value.position)) ? Number(value.position) : 0,
         isArchived: Boolean(value.isArchived),
         createdAt,
@@ -71,6 +76,7 @@ const TodoContext = createContext<TodoContextValue | undefined>(undefined);
 
 export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const data = useData();
+    const app = useOptionalAppState();
     const { initialized, revision, sync } = useSync();
     const [state, setState] = useState<TodoState>(defaultState);
     const [hydrated, setHydrated] = useState(false);
@@ -81,6 +87,24 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const lastReloadRef = useRef<string | null>(null);
 
     useLayoutEffect(() => { stateRef.current = state; }, [state]);
+
+    const commitTodos = useCallback(async (todos: Record<string, Todo>, selected = stateRef.current.ui.selected) => {
+        const serialized = serialize(todos);
+        pendingRef.current = serialized;
+        const nextState = { ...stateRef.current, todos, ui: { selected: selected && todos[selected] ? selected : null } };
+        stateRef.current = nextState;
+        setState(nextState);
+        try {
+            await data.saveTodos(Object.values(todos));
+            if (pendingRef.current === serialized) {
+                lastSavedRef.current = serialized;
+                pendingRef.current = null;
+            }
+        } catch (error) {
+            if (pendingRef.current === serialized) pendingRef.current = null;
+            throw error;
+        }
+    }, [data]);
 
     const readSelected = useCallback((): string | null => {
         try {
@@ -147,6 +171,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const todo: Todo = {
             id: uuid(), title: input.title.trim() || "Untitled to-do", rule,
             dueDate: input.dueDate ?? (rule?.type === "one-off" ? rule.date as Todo["dueDate"] : null),
+            estimate: normalizeTodoEstimate(input.estimate), currentTaskId: null,
             position, isArchived: false, createdAt: timestamp, updatedAt: timestamp,
         };
         setState((previous) => ({ ...previous, todos: { ...previous.todos, [todo.id]: todo } }));
@@ -158,11 +183,61 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { ...previous, todos: { ...previous.todos, [id]: { ...current, ...patch, id, updatedAt: isoNow() } } };
     });
     const archiveTodo = (id: string, archive = true) => updateTodo(id, { isArchived: archive });
-    const deleteTodo = (id: string) => setState((previous) => {
-        if (!previous.todos[id]) return previous;
-        const todos = { ...previous.todos }; delete todos[id];
-        return { ...previous, todos, ui: { selected: previous.ui.selected === id ? null : previous.ui.selected } };
-    });
+    const archiveLinkedTaskIfExists = useCallback(async (taskId: string) => {
+        try { await data.archiveTask(taskId); }
+        catch (error) {
+            if (error instanceof Error && error.message.includes("Task not found")) return;
+            throw error;
+        }
+    }, [data]);
+    const completeTodo = useCallback(async (id: string) => {
+        const todo = stateRef.current.todos[id];
+        if (!todo || todo.isArchived) return;
+        const linkedTaskId = todo.currentTaskId;
+        if (linkedTaskId && app?.state?.timer?.task_id === linkedTaskId) {
+            throw new Error("Stop or skip the active timer before completing this to-do");
+        }
+        const completed = completeTodoOccurrence(todo, new Date());
+        await commitTodos({ ...stateRef.current.todos, [id]: completed });
+        if (linkedTaskId) await archiveLinkedTaskIfExists(linkedTaskId);
+    }, [app, archiveLinkedTaskIfExists, commitTodos]);
+    const completeTodoForTask = useCallback(async (taskId: string) => {
+        const todo = Object.values(stateRef.current.todos)
+            .find((candidate) => !candidate.isArchived && candidate.currentTaskId === taskId);
+        if (!todo) return;
+        await commitTodos({ ...stateRef.current.todos, [todo.id]: completeTodoOccurrence(todo, new Date()) });
+    }, [commitTodos]);
+    const startPomodoro = useCallback(async (id: string) => {
+        let todo = stateRef.current.todos[id];
+        if (!todo || todo.isArchived) throw new Error("To-do is no longer active");
+        if (app?.state?.timer) throw new Error("A timer is already running");
+
+        let task = todo.currentTaskId ? app?.state?.tasks[todo.currentTaskId] : null;
+        if (task && (task.archived || task.completed_at !== null)) {
+            await completeTodoForTask(task.id);
+            todo = stateRef.current.todos[id];
+            if (!todo || todo.isArchived) throw new Error("This to-do occurrence is already complete");
+            task = null;
+        }
+        if (!task) {
+            if (!app) throw new Error("Pomodoro state is unavailable");
+            task = await app.createTask(todo.title, todo.estimate);
+            const linked = { ...todo, currentTaskId: task.id, updatedAt: isoNow() };
+            await commitTodos({ ...stateRef.current.todos, [id]: linked });
+        }
+        await app!.startTaskWork(task.id);
+    }, [app, commitTodos, completeTodoForTask]);
+    const deleteTodo = useCallback(async (id: string) => {
+        const todo = stateRef.current.todos[id];
+        if (!todo) return;
+        if (todo.currentTaskId && app?.state?.timer?.task_id === todo.currentTaskId) {
+            throw new Error("Stop or skip the active timer before deleting this to-do");
+        }
+        const todos = { ...stateRef.current.todos };
+        delete todos[id];
+        await commitTodos(todos, stateRef.current.ui.selected === id ? null : stateRef.current.ui.selected);
+        if (todo.currentTaskId) await archiveLinkedTaskIfExists(todo.currentTaskId);
+    }, [app?.state?.timer, archiveLinkedTaskIfExists, commitTodos]);
     const reorderTodos = (ids: string[]) => setState((previous) => {
         const todos = { ...previous.todos };
         ids.forEach((id, position) => { if (todos[id]) todos[id] = { ...todos[id], position, updatedAt: isoNow() }; });
@@ -171,13 +246,28 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const setSelectedTodo = (selected: string | null) => setState((previous) => ({ ...previous, ui: { selected } }));
     const refreshTodos = useCallback(async () => { await sync({ reason: "manual" }); await reload(); }, [reload, sync]);
 
-    return <TodoContext.Provider value={{ state, hydrated, createTodo, updateTodo, archiveTodo, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;
+    useEffect(() => {
+        if (!app) return;
+        return app.subscribeTaskCompletions((taskId) => { void completeTodoForTask(taskId); });
+    }, [app, completeTodoForTask]);
+
+    useEffect(() => {
+        if (!hydrated || !app?.state) return;
+        const result = reconcileTodoTasks(stateRef.current.todos, app.state.tasks, new Date());
+        if (result.changed) void commitTodos(result.todos);
+    }, [app?.state, commitTodos, hydrated]);
+
+    return <TodoContext.Provider value={{ state, hydrated, createTodo, updateTodo, archiveTodo, completeTodo, startPomodoro, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;
 };
 
 export function useTodos(): TodoContextValue {
     const context = useContext(TodoContext);
     if (!context) throw new Error("useTodos must be inside TodoProvider");
     return context;
+}
+
+export function useOptionalTodos(): TodoContextValue | undefined {
+    return useContext(TodoContext);
 }
 
 export { LS_KEY as TODO_UI_STORAGE_KEY };

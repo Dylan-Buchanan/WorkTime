@@ -1,6 +1,7 @@
 import type { EngineResult } from "../engine";
 import {
     DEFAULT_SETTINGS,
+    archiveTask,
     EngineError,
     cloneAppState,
     createTask,
@@ -196,6 +197,7 @@ export class InMemoryDataAccess implements DataAccess {
     async skipBreak() { return this.result(skipBreak(this.store.state, this.now(), this.createLogId())); }
     async updateSettings(settings: Settings) { return this.result(updateSettings(this.store.state, settings)); }
     async finalizeTask(taskId: string) { return this.result(finalizeTask(this.store.state, taskId, this.now())); }
+    async archiveTask(taskId: string) { return this.result(archiveTask(this.store.state, taskId)); }
     async setTaskTarget(taskId: string, target: number) { return this.result(setTaskTarget(this.store.state, taskId, target)); }
 
     async resetAppState() {

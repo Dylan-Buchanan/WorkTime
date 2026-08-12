@@ -50,7 +50,7 @@ function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {
 }
 
 function TD(id: string, overrides: Partial<Todo> = {}): Todo {
-    return { id, title: `Todo ${id}`, rule: null, dueDate: null, position: 0, isArchived: false,
+    return { id, title: `Todo ${id}`, rule: null, dueDate: null, estimate: 1, currentTaskId: null, position: 0, isArchived: false,
         createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...overrides };
 }
 

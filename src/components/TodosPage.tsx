@@ -30,6 +30,7 @@ type BucketKey = "overdue" | "today" | "upcoming" | "no-date";
 
 type TodoDraft = {
     title: string;
+    estimate: number;
     schedule: ScheduleType;
     date: string;
     weekdays: number[];
@@ -48,21 +49,21 @@ const BUCKETS: Array<{ key: BucketKey; label: string }> = [
 function todayKey(): LocalDateKey { return localDateKey(new Date()) as LocalDateKey; }
 
 function blankDraft(): TodoDraft {
-    return { title: "", schedule: "none", date: "", weekdays: [], monthlyDays: [], monthlyLastDayOffset: null, yearlyDates: [{ month: 1, day: 1 }] };
+    return { title: "", estimate: 1, schedule: "none", date: "", weekdays: [], monthlyDays: [], monthlyLastDayOffset: null, yearlyDates: [{ month: 1, day: 1 }] };
 }
 
 function draftFromTodo(todo: Todo): TodoDraft {
     const rule = todo.rule;
-    if (!rule) return { ...blankDraft(), title: todo.title };
-    if (rule.type === "one-off") return { ...blankDraft(), title: todo.title, schedule: rule.type, date: rule.date };
-    if (rule.type === "weekly") return { ...blankDraft(), title: todo.title, schedule: rule.type, date: todo.dueDate ?? "", weekdays: [...rule.weekdays] };
+    if (!rule) return { ...blankDraft(), title: todo.title, estimate: todo.estimate };
+    if (rule.type === "one-off") return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: rule.date };
+    if (rule.type === "weekly") return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", weekdays: [...rule.weekdays] };
     if (rule.type === "monthly") {
         const numeric = rule.days.filter((day): day is number => typeof day === "number");
         const last = rule.days.find((day) => typeof day !== "number");
         const offset = last && typeof last === "object" ? last.lastDayOffset : last === "last-day" ? 0 : null;
-        return { ...blankDraft(), title: todo.title, schedule: rule.type, date: todo.dueDate ?? "", monthlyDays: numeric, monthlyLastDayOffset: offset };
+        return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", monthlyDays: numeric, monthlyLastDayOffset: offset };
     }
-    return { ...blankDraft(), title: todo.title, schedule: rule.type, date: todo.dueDate ?? "", yearlyDates: rule.dates.map((date) => ({ ...date })) };
+    return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", yearlyDates: rule.dates.map((date) => ({ ...date })) };
 }
 
 function parseDate(value: string): LocalDateKey | null {
@@ -156,12 +157,13 @@ function rulesEqual(left: TodoRule | null, right: TodoRule | null): boolean {
 }
 
 export const TodosPage: React.FC = () => {
-    const { state, hydrated, createTodo, updateTodo, archiveTodo, deleteTodo, reorderTodos, setSelectedTodo } = useTodos();
+    const { state, hydrated, createTodo, updateTodo, archiveTodo, completeTodo, startPomodoro, deleteTodo, reorderTodos, setSelectedTodo } = useTodos();
     const { play } = useSounds();
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [draft, setDraft] = useState<TodoDraft>(blankDraft);
     const [formError, setFormError] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
     const [showArchived, setShowArchived] = useState(false);
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -194,9 +196,9 @@ export const TodosPage: React.FC = () => {
                 const recomputedDueDate = ruleChanged && rule && rule.type !== "one-off" && next
                     ? localDateKey(next) as LocalDateKey
                     : ruleChanged && rule && rule.type !== "one-off" ? null : dueDate;
-                updateTodo(editingId, { title, rule, dueDate: recomputedDueDate });
+                updateTodo(editingId, { title, estimate: draft.estimate, rule, dueDate: recomputedDueDate });
             }
-            else createTodo({ title, rule, dueDate });
+            else createTodo({ title, estimate: draft.estimate, rule, dueDate });
             closeForm();
         } catch (error) {
             setFormError(error instanceof Error ? error.message : "Check the recurrence details.");
@@ -209,16 +211,17 @@ export const TodosPage: React.FC = () => {
         if (oldIndex < 0 || newIndex < 0) return;
         reorderTodos(arrayMove(orderedActiveTodos.map((todo) => todo.id), oldIndex, newIndex));
     };
-    const completeTodo = (todo: Todo) => {
+    const handleComplete = async (todo: Todo) => {
         play("completeTask");
-        if (todo.rule) {
-            const next = nextOccurrence(todo.rule, new Date());
-            if (next) { updateTodo(todo.id, { dueDate: localDateKey(next) as LocalDateKey }); return; }
-        }
-        archiveTodo(todo.id);
+        setActionError(null);
+        try { await completeTodo(todo.id); }
+        catch (error) { setActionError(error instanceof Error ? error.message : "Could not complete the to-do"); }
     };
     const removeTodo = (todo: Todo) => {
-        if (window.confirm(`Delete “${todo.title}”? This cannot be undone.`)) deleteTodo(todo.id);
+        if (window.confirm(`Delete “${todo.title}”? This cannot be undone.`)) {
+            setActionError(null);
+            void deleteTodo(todo.id).catch((error) => setActionError(error instanceof Error ? error.message : "Could not delete the to-do"));
+        }
     };
 
     return (
@@ -237,6 +240,7 @@ export const TodosPage: React.FC = () => {
             </header>
 
             {showForm && <TodoForm draft={draft} editing={Boolean(editingId)} error={formError} onChange={setDraft} onSubmit={submitForm} onCancel={closeForm} />}
+            {actionError && <p role="alert" className="border-b border-red-900/50 bg-red-950/30 px-4 py-2 text-[11px] text-red-300">{actionError}</p>}
 
             <main className="min-h-0 flex-1 overflow-auto p-4">
                 {!hydrated ? <LoadingState /> : activeTodos.length === 0 && !showArchived ? <EmptyState hasArchived={archivedTodos.length > 0} onAdd={openCreate} /> : (
@@ -248,7 +252,7 @@ export const TodosPage: React.FC = () => {
                                         {BUCKETS.map(({ key, label }) => grouped[key].length > 0 && (
                                             <section key={key} aria-labelledby={`todo-${key}-heading`} className="space-y-2">
                                                 <h2 id={`todo-${key}-heading`} className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">{label}<span className="ml-1 text-neutral-700">({grouped[key].length})</span></h2>
-                                                <div className="space-y-2">{grouped[key].map((todo) => <SortableTodoCard key={todo.id} todo={todo} bucket={key} selected={state.ui.selected === todo.id} onSelect={() => setSelectedTodo(todo.id)} onComplete={() => completeTodo(todo)} onEdit={() => openEdit(todo)} onArchive={() => archiveTodo(todo.id)} onDelete={() => removeTodo(todo)} />)}</div>
+                                                <div className="space-y-2">{grouped[key].map((todo) => <SortableTodoCard key={todo.id} todo={todo} bucket={key} selected={state.ui.selected === todo.id} onSelect={() => setSelectedTodo(todo.id)} onComplete={() => void handleComplete(todo)} onStart={() => { setActionError(null); void startPomodoro(todo.id).then(() => play("startPomodoro")).catch((error) => setActionError(error instanceof Error ? error.message : "Could not start pomodoro")); }} onEdit={() => openEdit(todo)} onArchive={() => archiveTodo(todo.id)} onDelete={() => removeTodo(todo)} />)}</div>
                                             </section>
                                         ))}
                                     </div>
@@ -258,7 +262,7 @@ export const TodosPage: React.FC = () => {
                         {showArchived && archivedTodos.length > 0 && (
                             <section aria-label="Archived to-dos" className="space-y-2 pt-3">
                                 <h2 className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">Archived ({archivedTodos.length})</h2>
-                                <div className="space-y-2">{archivedTodos.map((todo) => <TodoCard key={todo.id} todo={todo} bucket={bucketFor(todo, today)} archived selected={state.ui.selected === todo.id} onSelect={() => setSelectedTodo(todo.id)} onComplete={() => undefined} onEdit={() => openEdit(todo)} onArchive={() => archiveTodo(todo.id, false)} onDelete={() => removeTodo(todo)} />)}</div>
+                                <div className="space-y-2">{archivedTodos.map((todo) => <TodoCard key={todo.id} todo={todo} bucket={bucketFor(todo, today)} archived selected={state.ui.selected === todo.id} onSelect={() => setSelectedTodo(todo.id)} onComplete={() => undefined} onStart={() => undefined} onEdit={() => openEdit(todo)} onArchive={() => archiveTodo(todo.id, false)} onDelete={() => removeTodo(todo)} />)}</div>
                             </section>
                         )}
                     </div>
@@ -292,6 +296,8 @@ const TodoForm: React.FC<{
             <div className="space-y-2">
                 <label className="block text-[10px] text-neutral-400" htmlFor="todo-title">Title</label>
                 <input id="todo-title" autoFocus value={draft.title} onChange={(event) => onChange((current) => ({ ...current, title: event.target.value }))} placeholder="Send the project update" className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs" />
+                <label className="block text-[10px] text-neutral-400" htmlFor="todo-estimate">Estimate (pomodoros)</label>
+                <input id="todo-estimate" type="number" min="1" step="1" value={draft.estimate} onChange={(event) => onChange((current) => ({ ...current, estimate: Math.max(1, Math.trunc(Number(event.target.value) || 1)) }))} className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs" />
                 <label className="block text-[10px] text-neutral-400" htmlFor="todo-schedule">Schedule</label>
                 <select id="todo-schedule" value={draft.schedule} onChange={(event) => onChange((current) => ({ ...current, schedule: event.target.value as ScheduleType }))} className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs">
                     <option value="none">No due date</option><option value="one-off">One-off</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option>
@@ -344,6 +350,7 @@ type TodoCardProps = {
     archived?: boolean;
     onSelect: () => void;
     onComplete: () => void;
+    onStart: () => void;
     onEdit: () => void;
     onArchive: () => void;
     onDelete: () => void;
@@ -353,17 +360,18 @@ type TodoCardProps = {
     dragListeners?: DraggableSyntheticListeners;
 };
 
-const TodoCard: React.FC<TodoCardProps> = ({ todo, bucket, selected, archived = false, onSelect, onComplete, onEdit, onArchive, onDelete, setNodeRef, style, dragAttributes, dragListeners }) => {
+const TodoCard: React.FC<TodoCardProps> = ({ todo, bucket, selected, archived = false, onSelect, onComplete, onStart, onEdit, onArchive, onDelete, setNodeRef, style, dragAttributes, dragListeners }) => {
     const future = bucket === "upcoming";
     return <article ref={setNodeRef} style={style} onClick={onSelect} className={`rounded-lg border bg-neutral-900/70 p-3 shadow-sm transition-colors ${selected ? "border-indigo-500/70 ring-1 ring-indigo-500/30" : "border-neutral-800 hover:border-neutral-700"} ${archived ? "opacity-70" : ""}`}>
         <div className="flex items-start gap-3">
             {!archived && <button type="button" {...dragAttributes} {...dragListeners} onClick={(event) => event.stopPropagation()} aria-label={`Drag ${todo.title} to reorder`} title="Drag to reorder" className="grid w-4 shrink-0 cursor-grab grid-cols-2 gap-0.5 pt-1 active:cursor-grabbing">{Array.from({ length: 6 }, (_, index) => <span key={index} className="h-1 w-1 rounded-full bg-neutral-500" />)}</button>}
             <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0"><h3 className={`text-sm font-semibold ${bucket === "overdue" ? "text-red-200" : "text-neutral-100"}`}>{todo.title || "Untitled to-do"}</h3><p className="mt-0.5 text-[10px] text-neutral-500">{formatDueDate(todo, bucket)} · {scheduleLabel(todo.rule)}{archived ? " · Archived" : ""}</p></div>
+                    <div className="min-w-0"><h3 className={`text-sm font-semibold ${bucket === "overdue" ? "text-red-200" : "text-neutral-100"}`}>{todo.title || "Untitled to-do"}</h3><p className="mt-0.5 text-[10px] text-neutral-500">{formatDueDate(todo, bucket)} · {scheduleLabel(todo.rule)} · {todo.estimate} {todo.estimate === 1 ? "pomodoro" : "pomodoros"}{archived ? " · Archived" : ""}</p></div>
                     {!archived && <button type="button" disabled={future} aria-label={`Complete ${todo.title}`} title={future ? "This to-do is not due yet" : "Mark complete"} onClick={(event) => { event.stopPropagation(); onComplete(); }} className="rounded border border-emerald-700/70 px-2.5 py-1.5 text-[10px] text-emerald-300 hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:opacity-40">Complete</button>}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-end gap-1">
+                    {!archived && <button type="button" onClick={(event) => { event.stopPropagation(); onStart(); }} className="rounded bg-indigo-600/80 px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-white hover:bg-indigo-500">{todo.currentTaskId ? "Resume pomodoro" : "Start pomodoro"}</button>}
                     <button type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }} className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">Edit</button>
                     <button type="button" onClick={(event) => { event.stopPropagation(); onArchive(); }} className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100">{archived ? "Restore" : "Archive"}</button>
                     <button type="button" onClick={(event) => { event.stopPropagation(); onDelete(); }} className="rounded px-2.5 py-1.5 sm:px-2 sm:py-1 text-[10px] text-red-300 hover:bg-red-950/50">Delete</button>

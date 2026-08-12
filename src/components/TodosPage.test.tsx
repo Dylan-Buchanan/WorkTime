@@ -23,6 +23,8 @@ function todo(id: string, dueDate: Todo["dueDate"], overrides: Partial<Todo> = {
         title: id,
         rule: dueDate ? { type: "one-off", date: dueDate } : null,
         dueDate,
+        estimate: 1,
+        currentTaskId: null,
         position: 0,
         isArchived: false,
         createdAt: "2026-01-01T00:00:00.000Z",

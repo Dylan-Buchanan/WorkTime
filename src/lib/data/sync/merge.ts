@@ -64,6 +64,8 @@ const TODO_FIELDS: ReadonlyArray<keyof Todo> = [
     "title",
     "rule",
     "dueDate",
+    "estimate",
+    "currentTaskId",
     "position",
     "isArchived",
     "createdAt",

@@ -1,5 +1,6 @@
 import type { EngineResult } from "../engine";
 import {
+    archiveTask,
     cloneAppState,
     completeTimer as engineCompleteTimer,
     createTask,
@@ -314,6 +315,10 @@ export class StagedDataAccess implements DataAccess {
 
     async finalizeTask(taskId: string) {
         return this.transition((state) => finalizeTask(state, taskId, this.now()));
+    }
+
+    async archiveTask(taskId: string) {
+        return this.transition((state) => archiveTask(state, taskId));
     }
 
     async setTaskTarget(taskId: string, target: number) {

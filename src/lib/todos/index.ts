@@ -26,3 +26,5 @@ export {
 export { isDueOn, isValidRule, nextOccurrence, normalizeRule, validateRule } from "./recurrence";
 
 export { formatMonthlyDay, formatTodoRule, formatYearlyDate } from "./format";
+
+export { completeTodoOccurrence, normalizeTodoEstimate, reconcileTodoTasks } from "./integration";

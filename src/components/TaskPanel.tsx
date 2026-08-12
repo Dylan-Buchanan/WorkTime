@@ -4,6 +4,7 @@ import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
 import { PMTask, TaskPriority } from "../state/types";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useOptionalTodos } from "../state/TodoContext";
 
 export const TASK_SORT_LS_KEY = "task_panel_sort_v1";
 
@@ -31,12 +32,15 @@ function saveTaskSort(value: TaskSortOption): void {
 export const TaskPanel: React.FC = () => {
     const { state, createTask, setActiveTask, finalizeTask } = useAppState();
     const { state: pmState } = usePM();
+    const todoContext = useOptionalTodos();
     const { play } = useSounds();
     const [name, setName] = useState("");
     const [targetInput, setTargetInput] = useState("4");
     const [sortOption, setSortOption] = useState<TaskSortOption>(loadSavedTaskSort);
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
+    const todoTaskIds = useMemo(() => new Set(Object.values(todoContext?.state.todos ?? {})
+        .map((todo) => todo.currentTaskId).filter((id): id is string => Boolean(id))), [todoContext?.state.todos]);
 
     const pmTasksByAppTaskId = useMemo(() => {
         const map: Record<string, PMTask> = {};
@@ -81,7 +85,7 @@ export const TaskPanel: React.FC = () => {
 
     const decoratedTasks = useMemo(() => {
         return tasks.map((task, index) => {
-            const pmTask = pmTasksByAppTaskId[task.id] || pmTasksByTitle[task.name?.trim().toLowerCase()];
+            const pmTask = pmTasksByAppTaskId[task.id] || (!todoTaskIds.has(task.id) ? pmTasksByTitle[task.name?.trim().toLowerCase()] : undefined);
             const project = pmTask?.projectId ? pmState.projects[pmTask.projectId] : undefined;
             const projectName = pmTask ? (pmTask.projectId ? project?.name || "Unknown project" : "No project") : "No project";
             const dueTimestamp = pmTask?.dueDate ? (Number.isNaN(Date.parse(pmTask.dueDate)) ? null : new Date(pmTask.dueDate).getTime()) : null;
@@ -104,7 +108,7 @@ export const TaskPanel: React.FC = () => {
                 groupLabel,
             };
         });
-    }, [tasks, pmTasksByAppTaskId, pmTasksByTitle, pmState.projects]);
+    }, [tasks, pmTasksByAppTaskId, pmTasksByTitle, pmState.projects, todoTaskIds]);
 
     const sortedTasks = useMemo(() => {
         if (sortOption === "default") return decoratedTasks;
