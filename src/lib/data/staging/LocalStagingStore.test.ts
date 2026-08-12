@@ -67,6 +67,7 @@ function makeBaseline(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         habits: {},
         habitCompletions: {},
         todos: {},
+        todoCompletions: {},
         settings: { value: { ...state.settings }, updatedAt: "2026-01-01T00:00:00.000Z" },
         timerState: {
             value: { active_task: null, current_cycle_pomodoros: 0, timer: null },
@@ -278,8 +279,8 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, "{not json");
         expect(() => store.read(OWNER_A)).toThrow(/not valid JSON/);
 
-        // Only numeric literal versions 1 through 3 are accepted.
-        for (const version of [0, 4, 999]) {
+        // Only numeric literal versions 1 through 4 are accepted.
+        for (const version of [0, 5, 999]) {
             window.localStorage.setItem(key, JSON.stringify({ schemaVersion: version, ownerId: OWNER_A }));
             expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
         }
@@ -494,7 +495,7 @@ describe("LocalStagingStore", () => {
         expect(store.pendingCount(OWNER_A)).toBe(2);
     });
 
-    it("round-trips a populated v3 record losslessly through serialize then parse", async () => {
+    it("round-trips a populated v4 record losslessly through serialize then parse", async () => {
         const store = new LocalStagingStore(window.localStorage);
         const baseline = makeBaseline({
             habits: { h1: { value: H("h1"), updatedAt: "2026-01-01T00:00:00.000Z" } },
@@ -511,7 +512,7 @@ describe("LocalStagingStore", () => {
         }));
 
         const record = store.read(OWNER_A);
-        expect(record.schemaVersion).toBe(3);
+        expect(record.schemaVersion).toBe(4);
         expect(record.habits.h1.name).toBe("Saved");
         expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
         expect(record.habitCompletions.c1.bucket).toBe("2026-01-02");
@@ -535,15 +536,17 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(v2));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(3);
+        expect(migrated.schemaVersion).toBe(4);
         expect(migrated.todos).toEqual({});
         expect(migrated.todoUpdatedAt).toEqual({});
         expect(migrated.todoTombstones).toEqual({});
+        expect(migrated.todoCompletions).toEqual({});
+        expect(migrated.todoCompletionTombstones).toEqual({});
         expect(migrated.lastSynced?.todos).toEqual({});
         expect(migrated.state.tasks.t1).toBeDefined();
     });
 
-    it("migrates a complete v1 record through v3 in memory without changing the storage key", async () => {
+    it("migrates a complete v1 record through v4 in memory without changing the storage key", async () => {
         const store = new LocalStagingStore(window.localStorage);
         // Persist a fully-populated record, then degrade it to the legacy v1
         // shape by stripping the five new top-level fields and both snapshot
@@ -577,7 +580,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(degraded));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(3);
+        expect(migrated.schemaVersion).toBe(4);
         // Every legacy value survives the in-memory migration.
         expect(migrated.state.tasks.t1.name).toBe("Legacy task");
         expect(migrated.state.logs).toEqual([{ ...BASE_LOG }]);
@@ -602,7 +605,7 @@ describe("LocalStagingStore", () => {
         // One safe staged update stays schema 3 on the same v1-prefixed key and
         // never creates a worktime:staging:v2:* key.
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "t1" } }));
-        expect(store.read(OWNER_A).schemaVersion).toBe(3);
+        expect(store.read(OWNER_A).schemaVersion).toBe(4);
         const keys: string[] = [];
         for (let i = 0; i < window.localStorage.length; i += 1) keys.push(window.localStorage.key(i) as string);
         expect(keys.filter((candidate) => candidate.startsWith("worktime:staging:"))).toEqual([key]);

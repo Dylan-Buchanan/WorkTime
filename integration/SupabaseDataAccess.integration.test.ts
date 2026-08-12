@@ -34,6 +34,8 @@ function emptyPlan(): PushPlan {
         habitCompletionTombstones: [],
         todoUpserts: [],
         todoTombstones: [],
+        todoCompletionUpserts: [],
+        todoCompletionTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -49,6 +51,8 @@ function emptyPlan(): PushPlan {
             habitCompletionTombstones: {},
             todoUpserts: {},
             todoTombstones: {},
+            todoCompletionUpserts: {},
+            todoCompletionTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -67,7 +71,7 @@ function completion(id: string, habitId: string, bucket = "2026-01-02") {
 
 function todo(id = TODO_ID) {
     return { id, title: "Pushed to-do", rule: { type: "weekly" as const, weekdays: [1, 3] },
-        dueDate: "2026-01-07" as const, position: 1, isArchived: false, createdAt: T0, updatedAt: T0 };
+        dueDate: "2026-01-07" as const, estimate: 1, currentTaskId: null, position: 1, isArchived: false, createdAt: T0, updatedAt: T0 };
 }
 
 // PostgREST serializes timestamptz columns with an offset (+00:00) rather than

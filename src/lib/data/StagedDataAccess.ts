@@ -20,7 +20,7 @@ import {
 } from "../engine";
 import { EngineError } from "../engine";
 import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
-import type { Todo } from "../todos";
+import type { Todo, TodoCompletion } from "../todos";
 import type { LocalStagingStore } from "./staging/LocalStagingStore";
 import { deepValuesEqual } from "./staging/serialization";
 import type { PendingTimerCompletion, StagedOwnerRecord } from "./staging/types";
@@ -462,13 +462,15 @@ export class StagedDataAccess implements DataAccess {
         return this.syncExecutor.sync(options);
     }
 
-    /** Replaces the staged to-do collection and maintains LWW stamps/tombstones. */
-    async saveTodos(todos: Todo[]): Promise<void> {
+    /** Replaces staged to-dos and immutable occurrence completions atomically. */
+    async saveTodos(todos: Todo[], completions: TodoCompletion[]): Promise<void> {
         const stamp = this.now().toISOString();
         const nextTodos = Object.fromEntries(todos.map((todo) => [todo.id, clone(todo)]));
+        const nextCompletions = Object.fromEntries(completions.map((completion) => [completion.id, clone(completion)]));
         await this.store.update(this.ownerId, (current) => {
             const todoUpdatedAt = { ...current.todoUpdatedAt };
             const todoTombstones = { ...current.todoTombstones };
+            const todoCompletionTombstones = { ...current.todoCompletionTombstones };
             for (const id of Object.keys(nextTodos)) {
                 if (current.todos[id] === undefined || !equal(current.todos[id], nextTodos[id])) {
                     todoUpdatedAt[id] = stamp;
@@ -480,12 +482,25 @@ export class StagedDataAccess implements DataAccess {
                 delete todoUpdatedAt[id];
                 todoTombstones[id] = { id, deletedAt: stamp };
             }
-            return { ...current, todos: nextTodos, todoUpdatedAt, todoTombstones };
+            for (const id of Object.keys(nextCompletions)) delete todoCompletionTombstones[id];
+            for (const id of Object.keys(current.todoCompletions)) {
+                if (nextCompletions[id]) continue;
+                const removed = current.todoCompletions[id];
+                const todoId = nextTodos[removed.todoId] ? undefined : removed.todoId;
+                todoCompletionTombstones[id] = todoId === undefined
+                    ? { id, deletedAt: stamp }
+                    : { id, deletedAt: stamp, todoId };
+            }
+            return { ...current, todos: nextTodos, todoUpdatedAt, todoTombstones, todoCompletions: nextCompletions, todoCompletionTombstones };
         });
     }
 
-    async loadTodos(): Promise<Todo[]> {
-        return Object.values(this.store.read(this.ownerId).todos).map((todo) => clone(todo));
+    async loadTodos(): Promise<{ todos: Todo[]; completions: TodoCompletion[] }> {
+        const record = this.store.read(this.ownerId);
+        return {
+            todos: Object.values(record.todos).map((todo) => clone(todo)),
+            completions: Object.values(record.todoCompletions).map((completion) => clone(completion)),
+        };
     }
 
     async discardPendingChanges(): Promise<void> {

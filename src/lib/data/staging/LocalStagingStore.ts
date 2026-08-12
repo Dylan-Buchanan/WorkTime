@@ -62,6 +62,8 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         todos: {},
         todoUpdatedAt: {},
         todoTombstones: {},
+        todoCompletions: {},
+        todoCompletionTombstones: {},
     };
 }
 
@@ -161,6 +163,21 @@ function countTodoDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number 
     return count;
 }
 
+function countTodoCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const ids = new Set([...Object.keys(record.todoCompletions), ...Object.keys(base.todoCompletions)]);
+    for (const id of ids) {
+        const current = record.todoCompletions[id];
+        if (!current) continue;
+        if (base.todoCompletions[id] && deepValuesEqual(current, base.todoCompletions[id])) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.todoCompletionTombstones)) {
+        if (base.todoCompletions[id]) count += 1;
+    }
+    return count;
+}
+
 /**
  * Entity-based pending work relative to `lastSynced`. Task upserts, task
  * tombstones, new/changed logs, log tombstones, habit upserts, habit
@@ -183,6 +200,7 @@ function countPending(record: StagedOwnerRecord): number {
         count += countHabitDeltas(record, base);
         count += countHabitCompletionDeltas(record, base);
         count += countTodoDeltas(record, base);
+        count += countTodoCompletionDeltas(record, base);
         return count;
     }
 
@@ -244,6 +262,7 @@ function countPending(record: StagedOwnerRecord): number {
     count += countHabitDeltas(record, base);
     count += countHabitCompletionDeltas(record, base);
     count += countTodoDeltas(record, base);
+    count += countTodoCompletionDeltas(record, base);
 
     return count;
 }
@@ -364,6 +383,7 @@ export class LocalStagingStore {
                     todos: Object.fromEntries(
                         Object.entries(baseline.todos).map(([id, row]) => [id, row.value]),
                     ),
+                    todoCompletions: { ...baseline.todoCompletions },
                 };
             const stored = { ...next, revision: current.revision + 1 };
             try {

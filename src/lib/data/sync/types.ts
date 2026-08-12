@@ -1,7 +1,7 @@
 import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
-import type { Todo } from "../../todos";
-import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone } from "../staging/types";
+import type { Todo, TodoCompletion } from "../../todos";
+import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone, TodoCompletionTombstone } from "../staging/types";
 
 /**
  * The authenticated remote transport consumed by the sync coordinator. Every
@@ -49,6 +49,8 @@ export interface AcknowledgedChanges {
     habitCompletionTombstones: Record<string, Omit<HabitCompletionTombstone, "id">>;
     todoUpserts: Record<string, { value: Todo; updatedAt: string }>;
     todoTombstones: Record<string, { deletedAt: string }>;
+    todoCompletionUpserts: Record<string, TodoCompletion>;
+    todoCompletionTombstones: Record<string, Omit<TodoCompletionTombstone, "id">>;
     settings: VersionedValue<Settings> | null;
     timerState: VersionedValue<TimerStateSlice> | null;
     pmState: VersionedValue<SyncedPMState> | null;
@@ -73,6 +75,8 @@ export interface PushPlan {
     habitCompletionTombstones: Array<HabitCompletionTombstone>;
     todoUpserts: Array<{ value: Todo; updatedAt: string }>;
     todoTombstones: Array<{ id: string; deletedAt: string }>;
+    todoCompletionUpserts: TodoCompletion[];
+    todoCompletionTombstones: TodoCompletionTombstone[];
     settings: VersionedValue<Settings> | null;
     timerState: (VersionedValue<TimerStateSlice> & { newGeneration: boolean }) | null;
     pmState: VersionedValue<SyncedPMState> | null;

@@ -20,6 +20,7 @@ const COMPLETION_A = "00000000-0000-4000-8000-300000000012";
 const COMPLETION_B = "00000000-0000-4000-8000-300000000013";
 const TODO_A = "00000000-0000-4000-8000-300000000020";
 const TODO_B = "00000000-0000-4000-8000-300000000021";
+const TODO_COMPLETION_A = "00000000-0000-4000-8000-300000000022";
 const T0 = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T00:00:00.000Z";
 
@@ -53,6 +54,8 @@ function emptyPlan(): PushPlan {
         habitCompletionTombstones: [],
         todoUpserts: [],
         todoTombstones: [],
+        todoCompletionUpserts: [],
+        todoCompletionTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -68,6 +71,8 @@ function emptyPlan(): PushPlan {
             habitCompletionTombstones: {},
             todoUpserts: {},
             todoTombstones: {},
+            todoCompletionUpserts: {},
+            todoCompletionTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -93,7 +98,11 @@ function completion(id: string, habitId: string, bucket = "2026-01-01") {
 }
 
 function todo(id: string, title: string, updatedAt = T0) {
-    return { id, title, rule: null, dueDate: null, position: 0, isArchived: false, createdAt: T0, updatedAt };
+    return { id, title, rule: null, dueDate: null, estimate: 1, currentTaskId: null, position: 0, isArchived: false, createdAt: T0, updatedAt };
+}
+
+function todoCompletion(id: string, todoId: string) {
+    return { id, todoId, bucket: `created:${T0}`, createdAt: T0, updatedAt: T0 };
 }
 
 describe("local-first staged sync transport", () => {
@@ -529,10 +538,12 @@ describe("local-first staged sync transport", () => {
         const seed = { ...emptyPlan(), todoUpserts: [
             { value: todo(TODO_A, "Survivor"), updatedAt: T0 },
             { value: todo(TODO_B, "Delete me"), updatedAt: T0 },
-        ] };
+        ], todoCompletionUpserts: [todoCompletion(TODO_COMPLETION_A, TODO_A)] };
         await data.push(owner.userId, seed);
         await data.push(owner.userId, seed);
         expect((await owner.client.from("todos").select("id")).data).toHaveLength(2);
+        expect((await owner.client.from("todo_completions").select("id")).data).toHaveLength(1);
+        expect((await data.pull(owner.userId)).todoCompletions[TODO_COMPLETION_A].todoId).toBe(TODO_A);
 
         await owner.client.from("todos").update({ title: "Newer server title" }).eq("id", TODO_A);
         await data.push(owner.userId, {
@@ -540,6 +551,7 @@ describe("local-first staged sync transport", () => {
             todoTombstones: [{ id: TODO_B, deletedAt: LATER }],
         });
         expect((await data.pull(owner.userId)).todos[TODO_A].value.title).toBe("Newer server title");
+        expect((await data.pull(owner.userId)).todoCompletions[TODO_COMPLETION_A]).toBeDefined();
         expect((await owner.client.from("todos").select("id").eq("id", TODO_B)).data).toHaveLength(0);
 
         await data.push(owner.userId, {
@@ -548,12 +560,13 @@ describe("local-first staged sync transport", () => {
             timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: LATER, newGeneration: true },
         });
         expect((await data.pull(owner.userId)).todos[TODO_A].value.title).toBe("Newer server title");
+        expect((await data.pull(owner.userId)).todoCompletions[TODO_COMPLETION_A]).toBeDefined();
     });
 
-    it("removes the old pre-to-do apply_staged_sync signature", async () => {
+    it("removes the pre-completion apply_staged_sync signature", async () => {
         const owner = track(await createLocalUser());
-        // The old 16-argument named-argument call must no longer resolve after
-        // the forward-only migration adds the two to-do parameters.
+        // The old 18-argument named-argument call must no longer resolve after
+        // the forward-only migration adds the two completion parameters.
         const response = await owner.client.rpc("apply_staged_sync", {
             p_task_upserts: null,
             p_task_tombstones: null,
@@ -563,6 +576,8 @@ describe("local-first staged sync transport", () => {
             p_habit_tombstones: null,
             p_habit_completion_upserts: null,
             p_habit_completion_tombstones: null,
+            p_todo_upserts: null,
+            p_todo_tombstones: null,
             p_settings_data: null,
             p_settings_updated_at: null,
             p_timer_data: null,

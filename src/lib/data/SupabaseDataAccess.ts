@@ -5,7 +5,7 @@ import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./st
 import type { PushPlan, SyncRemote } from "./sync/types";
 import { completionRpcPayload } from "./sync/timerCompletions";
 import { isValidRule } from "../todos";
-import type { Todo, TodoRule } from "../todos";
+import type { Todo, TodoCompletion, TodoRule } from "../todos";
 
 const PAGE_SIZE = 500;
 type JsonRecord = Record<string, unknown>;
@@ -97,6 +97,10 @@ function todoRow(todo: Todo, updatedAt?: string) {
         created_at: todo.createdAt,
         updated_at: updatedAt ?? todo.updatedAt,
     };
+}
+
+function todoCompletionRow(completion: TodoCompletion) {
+    return { id: completion.id, todo_id: completion.todoId, bucket: completion.bucket, created_at: completion.createdAt, updated_at: completion.updatedAt };
 }
 
 /**
@@ -252,6 +256,14 @@ export class SupabaseDataAccess implements SyncRemote {
         };
     }
 
+    private validateTodoCompletion(row: any): TodoCompletion {
+        if (!row || typeof row.id !== "string" || typeof row.todo_id !== "string" || typeof row.bucket !== "string" ||
+            typeof row.created_at !== "string" || typeof row.updated_at !== "string") {
+            this.fail("todo_completions", new Error(`invalid to-do completion row for ${row?.id ?? "unknown"}`));
+        }
+        return { id: row.id, todoId: row.todo_id, bucket: row.bucket, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+
     private validateTimer(value: unknown): ActiveTimer | null {
         if (value === null || value === undefined) return null;
         if (!isRecord(value) || typeof value.task_id !== "string" || typeof value.started_at !== "string" || typeof value.ends_at !== "string" || !["Work", "ShortBreak", "LongBreak"].includes(String(value.kind))) {
@@ -274,12 +286,13 @@ export class SupabaseDataAccess implements SyncRemote {
     async pull(expectedOwnerId: string): Promise<SyncSnapshot> {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
 
-        const [taskRows, logRows, habitRows, completionRows, todoRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
+        const [taskRows, logRows, habitRows, completionRows, todoRows, todoCompletionRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
             this.page("tasks", ownerId, [{ column: "id" }]),
             this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
             this.page("habits", ownerId, [{ column: "id" }]),
             this.page("habit_completions", ownerId, [{ column: "habit_id" }, { column: "bucket" }, { column: "id" }]),
             this.page("todos", ownerId, [{ column: "id" }]),
+            this.page("todo_completions", ownerId, [{ column: "todo_id" }, { column: "bucket" }, { column: "id" }]),
             this.client.from("settings").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("timer_state").select("data, completed, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("pm_state").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
@@ -317,6 +330,11 @@ export class SupabaseDataAccess implements SyncRemote {
             const todo = this.validateTodo(row);
             todos[row.id] = { value: todo, updatedAt: row.updated_at };
         }
+        const todoCompletions: SyncSnapshot["todoCompletions"] = {};
+        for (const row of todoCompletionRows) {
+            const completion = this.validateTodoCompletion(row);
+            todoCompletions[row.id] = completion;
+        }
 
         const settingsData = settingsResponse.data?.data;
         if (settingsData !== undefined && !isSettings(settingsData)) {
@@ -337,6 +355,7 @@ export class SupabaseDataAccess implements SyncRemote {
             habits,
             habitCompletions,
             todos,
+            todoCompletions,
             settings: {
                 value: settingsResponse.data ? clone(settingsData) : null,
                 updatedAt: settingsResponse.data?.updated_at ?? null,
@@ -412,6 +431,10 @@ export class SupabaseDataAccess implements SyncRemote {
      */
     async push(expectedOwnerId: string, plan: PushPlan): Promise<void> {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
+        // Keep transport tolerant of an older in-memory plan during a rolling
+        // frontend update; omitted new-domain arrays are equivalent to empty.
+        const todoCompletionUpserts = plan.todoCompletionUpserts ?? [];
+        const todoCompletionTombstones = plan.todoCompletionTombstones ?? [];
         const response = await this.client.rpc("apply_staged_sync", {
             p_task_upserts: plan.taskUpserts.length
                 ? plan.taskUpserts.map(({ value, updatedAt }) => taskRow(ownerId, value, updatedAt))
@@ -444,6 +467,12 @@ export class SupabaseDataAccess implements SyncRemote {
                 : null,
             p_todo_tombstones: plan.todoTombstones.length
                 ? plan.todoTombstones.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt }))
+                : null,
+            p_todo_completion_upserts: todoCompletionUpserts.length
+                ? todoCompletionUpserts.map(todoCompletionRow)
+                : null,
+            p_todo_completion_tombstones: todoCompletionTombstones.length
+                ? todoCompletionTombstones.map(({ id, deletedAt, todoId }) => ({ id, deleted_at: deletedAt, ...(todoId !== undefined ? { todo_id: todoId } : {}) }))
                 : null,
             p_settings_data: plan.settings?.value ?? null,
             p_settings_updated_at: plan.settings?.updatedAt ?? null,

@@ -7,7 +7,7 @@ import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
 import { timerGenerationKey } from "./sync/timerCompletions";
 import type { ActiveTimer, Habit, HabitCompletion } from "../../state/types";
-import type { Todo } from "../todos";
+import type { Todo, TodoCompletion } from "../todos";
 
 const OWNER_A = "owner-a";
 const OWNER_B = "owner-b";
@@ -54,6 +54,10 @@ function TD(id: string, overrides: Partial<Todo> = {}): Todo {
         createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...overrides };
 }
 
+function TC(id: string, todoId: string): TodoCompletion {
+    return { id, todoId, bucket: "2026-01-03", createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
+}
+
 function throwingStorage(): StorageLike {
     return {
         getItem: () => null,
@@ -97,6 +101,7 @@ function makeBaseline(timer: ActiveTimer | null, overrides: Partial<SyncSnapshot
         habits: {},
         habitCompletions: {},
         todos: {},
+        todoCompletions: {},
         settings: { value: { ...defaultSettings }, updatedAt: "2026-01-01T00:00:00.000Z" },
         timerState: {
             value: { active_task: "t1", current_cycle_pomodoros: 0, timer },
@@ -485,14 +490,15 @@ describe("StagedDataAccess", () => {
         const { executor, sync } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);
         const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-02T00:00:00.000Z") });
-        await data.saveTodos([TD("todo-1", { dueDate: "2026-01-03" })]);
+        await data.saveTodos([TD("todo-1", { dueDate: "2026-01-03" })], [TC("completion-1", "todo-1")]);
         expect(sync).not.toHaveBeenCalled();
         expect(store.read(OWNER_A).todoUpdatedAt["todo-1"]).toBe("2026-01-02T00:00:00.000Z");
         const loaded = await data.loadTodos();
-        loaded[0].title = "mutated";
-        expect((await data.loadTodos())[0].title).toBe("Todo todo-1");
+        expect(loaded.completions).toEqual([TC("completion-1", "todo-1")]);
+        loaded.todos[0].title = "mutated";
+        expect((await data.loadTodos()).todos[0].title).toBe("Todo todo-1");
 
-        await data.saveTodos([]);
+        await data.saveTodos([], []);
         expect(store.read(OWNER_A).todoTombstones["todo-1"]).toEqual({
             id: "todo-1", deletedAt: "2026-01-02T00:00:00.000Z",
         });

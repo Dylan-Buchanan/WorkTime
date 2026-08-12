@@ -21,7 +21,7 @@ import {
     skipBreak,
 } from "../engine";
 import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
-import type { Todo } from "../todos";
+import type { Todo, TodoCompletion } from "../todos";
 import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncOptions, SyncResult, SyncedPMState } from "./DataAccess";
 
 function clone<T>(value: T): T {
@@ -52,6 +52,7 @@ export interface InMemoryDataStore {
     habits: Habit[];
     habitCompletions: HabitCompletion[];
     todos: Todo[];
+    todoCompletions: TodoCompletion[];
     completed: boolean;
 }
 
@@ -96,7 +97,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], todos: [], completed: false };
+            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.pmState = this.store.pmState ? clone(this.store.pmState) : null;
@@ -105,6 +106,7 @@ export class InMemoryDataAccess implements DataAccess {
             ? this.store.habitCompletions.map((completion) => clone(completion))
             : [];
         this.store.todos = this.store.todos ? this.store.todos.map((todo) => clone(todo)) : [];
+        this.store.todoCompletions = this.store.todoCompletions ? this.store.todoCompletions.map((completion) => clone(completion)) : [];
         this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
         this.createTaskId = options.createTaskId ?? randomId;
@@ -258,14 +260,15 @@ export class InMemoryDataAccess implements DataAccess {
         };
     }
 
-    async saveTodos(todos: Todo[]): Promise<void> {
+    async saveTodos(todos: Todo[], completions: TodoCompletion[]): Promise<void> {
         this.store.todos = todos.map((todo) => clone(todo));
+        this.store.todoCompletions = completions.map((completion) => clone(completion));
         this.pending += 1;
         this.notify();
     }
 
-    async loadTodos(): Promise<Todo[]> {
-        return this.store.todos.map((todo) => clone(todo));
+    async loadTodos(): Promise<{ todos: Todo[]; completions: TodoCompletion[] }> {
+        return { todos: this.store.todos.map((todo) => clone(todo)), completions: this.store.todoCompletions.map((completion) => clone(completion)) };
     }
 
     async discardPendingChanges(): Promise<void> {
@@ -274,6 +277,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.habits = this.baseline.habits.map((habit) => clone(habit));
         this.store.habitCompletions = this.baseline.habitCompletions.map((completion) => clone(completion));
         this.store.todos = this.baseline.todos.map((todo) => clone(todo));
+        this.store.todoCompletions = this.baseline.todoCompletions.map((completion) => clone(completion));
         this.store.completed = this.baseline.completed;
         this.pending = 0;
         this.notify();
@@ -309,6 +313,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         habits: [],
         habitCompletions: [],
         todos: [],
+        todoCompletions: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };

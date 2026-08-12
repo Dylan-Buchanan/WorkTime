@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "../../state/types";
-import { completeTodoOccurrence, reconcileTodoTasks } from "./integration";
+import { completeTodoOccurrence, computeTodoCompletionMetrics, reconcileTodoTasks } from "./integration";
+import type { TodoCompletion } from "./types";
 import type { Todo } from "./types";
 
 const NOW = new Date("2026-08-11T12:00:00.000Z");
@@ -40,5 +41,18 @@ describe("to-do pomodoro integration", () => {
 
         const stale = reconcileTodoTasks({ td1: todo({ currentTaskId: "missing" }) }, {}, NOW);
         expect(stale.todos.td1).toMatchObject({ currentTaskId: null, isArchived: false });
+    });
+
+    it("computes range counts and a current daily completion streak", () => {
+        const completion = (id: string, createdAt: string): TodoCompletion => ({
+            id, todoId: "td1", bucket: id, createdAt, updatedAt: createdAt,
+        });
+        const metrics = computeTodoCompletionMetrics([
+            completion("c1", "2026-08-09T12:00:00.000Z"),
+            completion("c2", "2026-08-10T12:00:00.000Z"),
+            completion("c3", "2026-08-11T12:00:00.000Z"),
+            completion("c4", "2026-08-11T15:00:00.000Z"),
+        ], new Date("2026-08-10T00:00:00.000Z"), new Date("2026-08-11T23:59:59.999Z"), NOW);
+        expect(metrics).toEqual({ today: 2, inRange: 3, streak: 3 });
     });
 });

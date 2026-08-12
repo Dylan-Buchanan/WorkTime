@@ -9,7 +9,7 @@ import type {
 } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
 import { isValidRule } from "../../todos";
-import type { Todo, TodoRule } from "../../todos";
+import type { Todo, TodoCompletion, TodoRule } from "../../todos";
 
 /**
  * The versioned, serializable schema persisted for each owner under
@@ -45,6 +45,7 @@ export interface SyncSnapshot {
     habits: Record<string, { value: Habit; updatedAt: string }>;
     habitCompletions: Record<string, HabitCompletion>;
     todos: Record<string, { value: Todo; updatedAt: string }>;
+    todoCompletions: Record<string, TodoCompletion>;
     settings: VersionedValue<Settings>;
     timerState: VersionedValue<TimerStateSlice> & { completed: boolean };
     pmState: VersionedValue<SyncedPMState>;
@@ -82,9 +83,15 @@ export interface HabitCompletionTombstone {
     habitId?: string;
 }
 
+export interface TodoCompletionTombstone {
+    id: string;
+    deletedAt: string;
+    todoId?: string;
+}
+
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 3;
+    schemaVersion: 4;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -125,9 +132,11 @@ export interface StagedOwnerRecord {
     /** `updated_at` LWW transport stamps per locally-changed to-do. */
     todoUpdatedAt: Record<string, string>;
     todoTombstones: Record<string, { id: string; deletedAt: string }>;
+    todoCompletions: Record<string, TodoCompletion>;
+    todoCompletionTombstones: Record<string, TodoCompletionTombstone>;
 }
 
-export const STAGING_SCHEMA_VERSION = 3 as const;
+export const STAGING_SCHEMA_VERSION = 4 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -246,6 +255,13 @@ function isTodo(value: unknown): boolean {
     );
 }
 
+function isTodoCompletion(value: unknown): boolean {
+    return (
+        isObject(value) && typeof value.id === "string" && typeof value.todoId === "string" &&
+        typeof value.bucket === "string" && typeof value.createdAt === "string" && typeof value.updatedAt === "string"
+    );
+}
+
 function isTombstone(value: unknown): boolean {
     return isObject(value) && typeof value.id === "string" && typeof value.deletedAt === "string";
 }
@@ -262,6 +278,15 @@ function isCompletionTombstone(value: unknown): boolean {
 
 function isCompletionTombstoneMap(value: unknown): boolean {
     return isObject(value) && Object.values(value).every(isCompletionTombstone);
+}
+
+function isTodoCompletionTombstone(value: unknown): boolean {
+    if (!isObject(value) || typeof value.id !== "string" || typeof value.deletedAt !== "string") return false;
+    return value.todoId === undefined || typeof value.todoId === "string";
+}
+
+function isTodoCompletionTombstoneMap(value: unknown): boolean {
+    return isObject(value) && Object.values(value).every(isTodoCompletionTombstone);
 }
 
 function isAppState(value: unknown): boolean {
@@ -306,6 +331,8 @@ function isSyncSnapshot(value: unknown): boolean {
         Object.values(value.todos).every(
             (row) => isObject(row) && isTodo(row.value) && typeof row.updatedAt === "string",
         ) &&
+        isObject(value.todoCompletions) &&
+        Object.values(value.todoCompletions).every(isTodoCompletion) &&
         isVersionedValue(value.settings, isSettings) &&
         isVersionedValue(timerState, isTimerSlice) &&
         typeof timerState.completed === "boolean" &&
@@ -353,11 +380,13 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["todos", (v): boolean => isObject(v) && Object.values(v).every(isTodo)],
     ["todoUpdatedAt", (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string")],
     ["todoTombstones", isTombstoneMap],
+    ["todoCompletions", (v): boolean => isObject(v) && Object.values(v).every(isTodoCompletion)],
+    ["todoCompletionTombstones", isTodoCompletionTombstoneMap],
 ];
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `3` are accepted; records at the unchanged v1 key migrate in memory
+ * through `4` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -375,7 +404,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     if (!isObject(parsed)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" is not an object`);
     }
-    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3 && parsed.schemaVersion !== 4) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
         );
@@ -416,6 +445,17 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
                 record.lastSynced === null
                     ? null
                     : { ...(record.lastSynced as Record<string, unknown>), todos: {} },
+        };
+    }
+    if (record.schemaVersion === 3) {
+        record = {
+            ...record,
+            schemaVersion: 4,
+            todoCompletions: {},
+            todoCompletionTombstones: {},
+            lastSynced: record.lastSynced === null
+                ? null
+                : { ...(record.lastSynced as Record<string, unknown>), todoCompletions: {} },
         };
     }
     if (record.ownerId !== ownerId) {

@@ -2,10 +2,10 @@ import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PomodoroLogEntr
 import type { SyncedPMState } from "../DataAccess";
 import { defaultAppState } from "../../engine";
 import { deepValuesEqual } from "../staging/serialization";
-import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone } from "../staging/types";
+import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone, TodoCompletionTombstone } from "../staging/types";
 import type { AcknowledgedChanges, MergeResult, PushPlan } from "./types";
 import { completionMask } from "./timerCompletions";
-import type { Todo } from "../../todos";
+import type { Todo, TodoCompletion } from "../../todos";
 
 /**
  * Pure three-way merge, push-plan construction, and post-push commit for the
@@ -30,6 +30,7 @@ const EMPTY_SNAPSHOT: SyncSnapshot = {
     habits: {},
     habitCompletions: {},
     todos: {},
+    todoCompletions: {},
     settings: { value: null, updatedAt: null },
     timerState: { value: null, updatedAt: null, completed: false },
     pmState: { value: null, updatedAt: null },
@@ -631,6 +632,39 @@ function mergeHabitCompletions(
     return { habitCompletions: Object.fromEntries(merged), tombstones };
 }
 
+function mergeTodoCompletions(
+    localCompletions: Record<string, TodoCompletion>,
+    completionTombstones: Record<string, TodoCompletionTombstone>,
+    remote: SyncSnapshot,
+    mergedTodos: Record<string, Todo>,
+): { todoCompletions: Record<string, TodoCompletion>; tombstones: Record<string, TodoCompletionTombstone> } {
+    const effective: Record<string, TodoCompletionTombstone> = {};
+    for (const [id, tombstone] of Object.entries(completionTombstones)) {
+        if (tombstone.todoId !== undefined && mergedTodos[tombstone.todoId]) continue;
+        effective[id] = tombstone;
+    }
+    const merged = new Map<string, TodoCompletion>();
+    for (const [id, completion] of Object.entries(localCompletions)) if (!effective[id]) merged.set(id, completion);
+    const bucketOwner = new Map<string, string>();
+    for (const [id, completion] of merged) bucketOwner.set(`${completion.todoId}\u0000${completion.bucket}`, id);
+    for (const [id, completion] of Object.entries(remote.todoCompletions)) {
+        if (effective[id]) continue;
+        const key = `${completion.todoId}\u0000${completion.bucket}`;
+        if (merged.has(id)) merged.set(id, completion);
+        else {
+            const occupant = bucketOwner.get(key);
+            if (occupant !== undefined && occupant !== id) merged.delete(occupant);
+            merged.set(id, completion);
+            bucketOwner.set(key, id);
+        }
+    }
+    const tombstones: Record<string, TodoCompletionTombstone> = {};
+    for (const [id, tombstone] of Object.entries(effective)) {
+        if (remote.todoCompletions[id]) tombstones[id] = { ...tombstone };
+    }
+    return { todoCompletions: Object.fromEntries(merged), tombstones };
+}
+
 /**
  * Whole-row three-way merge for settings/timer/PM singleton rows. An unchanged
  * branch yields to the changed branch; a true conflict uses `updatedAt` with
@@ -750,6 +784,19 @@ function countTodoDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number 
     return count;
 }
 
+function countTodoCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = 0;
+    const ids = new Set([...Object.keys(record.todoCompletions), ...Object.keys(base.todoCompletions)]);
+    for (const id of ids) {
+        const current = record.todoCompletions[id];
+        if (!current) continue;
+        if (base.todoCompletions[id] && valuesEqual(current, base.todoCompletions[id])) continue;
+        count += 1;
+    }
+    for (const id of Object.keys(record.todoCompletionTombstones)) if (base.todoCompletions[id]) count += 1;
+    return count;
+}
+
 /**
  * Pending work in a record relative to `base`, mirroring the staging store's
  * entity-based counting so `MergeResult.pendingCount` matches the persisted
@@ -765,6 +812,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
         count += countHabitDeltas(record, base);
         count += countHabitCompletionDeltas(record, base);
         count += countTodoDeltas(record, base);
+        count += countTodoCompletionDeltas(record, base);
         return count;
     }
 
@@ -818,6 +866,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
     count += countHabitDeltas(record, base);
     count += countHabitCompletionDeltas(record, base);
     count += countTodoDeltas(record, base);
+    count += countTodoCompletionDeltas(record, base);
 
     return count;
 }
@@ -846,6 +895,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             habits.habits,
         );
         const todos = mergeTodos(record.todos, record.todoUpdatedAt, record.todoTombstones, base, remote, now);
+        const todoCompletions = mergeTodoCompletions(record.todoCompletions, record.todoCompletionTombstones, remote, todos.todos);
         const merged: StagedOwnerRecord = {
             ...record,
             initialized: true,
@@ -866,6 +916,8 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             todos: todos.todos,
             todoUpdatedAt: todos.stamps,
             todoTombstones: todos.tombstones,
+            todoCompletions: todoCompletions.todoCompletions,
+            todoCompletionTombstones: todoCompletions.tombstones,
             unbootstrapped: false,
         };
         return { record: merged, remoteBaseline: remote, pendingCount: countPending(merged, remote) };
@@ -881,6 +933,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         habits.habits,
     );
     const todos = mergeTodos(record.todos, record.todoUpdatedAt, record.todoTombstones, base, remote, now);
+    const todoCompletions = mergeTodoCompletions(record.todoCompletions, record.todoCompletionTombstones, remote, todos.todos);
     const settings = mergeSingletonValue<Settings>(
         record.state.settings,
         record.settingsUpdatedAt,
@@ -936,6 +989,8 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         todos: todos.todos,
         todoUpdatedAt: todos.stamps,
         todoTombstones: todos.tombstones,
+        todoCompletions: todoCompletions.todoCompletions,
+        todoCompletionTombstones: todoCompletions.tombstones,
         unbootstrapped: false,
     };
 
@@ -1050,6 +1105,26 @@ function completionDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot): Comp
     return { upserts, upsertAcks, tombstones, tombstoneAcks };
 }
 
+function todoCompletionDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
+    const upserts: PushPlan["todoCompletionUpserts"] = [];
+    const upsertAcks: AcknowledgedChanges["todoCompletionUpserts"] = {};
+    for (const [id, completion] of Object.entries(record.todoCompletions)) {
+        if (base.todoCompletions[id] && valuesEqual(completion, base.todoCompletions[id])) continue;
+        upserts.push({ ...completion });
+        upsertAcks[id] = { ...completion };
+    }
+    const tombstones: PushPlan["todoCompletionTombstones"] = [];
+    const tombstoneAcks: AcknowledgedChanges["todoCompletionTombstones"] = {};
+    for (const [id, tombstone] of Object.entries(record.todoCompletionTombstones)) {
+        if (!base.todoCompletions[id]) continue;
+        tombstones.push({ ...tombstone });
+        tombstoneAcks[id] = tombstone.todoId === undefined
+            ? { deletedAt: tombstone.deletedAt }
+            : { deletedAt: tombstone.deletedAt, todoId: tombstone.todoId };
+    }
+    return { upserts, upsertAcks, tombstones, tombstoneAcks };
+}
+
 /**
  * Builds the idempotent push delta for the current staging record against its
  * baseline. Throws a bootstrap error before the first successful pull. The
@@ -1082,6 +1157,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         habitCompletionTombstones: {},
         todoUpserts: {},
         todoTombstones: {},
+        todoCompletionUpserts: {},
+        todoCompletionTombstones: {},
         settings: null,
         timerState: null,
         pmState: null,
@@ -1110,6 +1187,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         const habits = habitDeltasOf(record, base);
         const completions = completionDeltasOf(record, base);
         const todos = todoDeltasOf(record, base);
+        const todoCompletions = todoCompletionDeltasOf(record, base);
         return {
             baseRevision: record.revision,
             taskUpserts: [],
@@ -1122,6 +1200,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             habitCompletionTombstones: completions.tombstones,
             todoUpserts: todos.upserts,
             todoTombstones: todos.tombstones,
+            todoCompletionUpserts: todoCompletions.upserts,
+            todoCompletionTombstones: todoCompletions.tombstones,
             settings,
             timerState,
             pmState,
@@ -1134,6 +1214,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
                 habitCompletionTombstones: completions.tombstoneAcks,
                 todoUpserts: todos.upsertAcks,
                 todoTombstones: todos.tombstoneAcks,
+                todoCompletionUpserts: todoCompletions.upsertAcks,
+                todoCompletionTombstones: todoCompletions.tombstoneAcks,
                 settings,
                 timerState,
                 pmState,
@@ -1229,6 +1311,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
     const habits = habitDeltasOf(record, base);
     const completions = completionDeltasOf(record, base);
     const todos = todoDeltasOf(record, base);
+    const todoCompletions = todoCompletionDeltasOf(record, base);
 
     return {
         baseRevision: record.revision,
@@ -1242,6 +1325,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         habitCompletionTombstones: completions.tombstones,
         todoUpserts: todos.upserts,
         todoTombstones: todos.tombstones,
+        todoCompletionUpserts: todoCompletions.upserts,
+        todoCompletionTombstones: todoCompletions.tombstones,
         settings,
         timerState,
         pmState,
@@ -1258,6 +1343,8 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             habitCompletionTombstones: completions.tombstoneAcks,
             todoUpserts: todos.upsertAcks,
             todoTombstones: todos.tombstoneAcks,
+            todoCompletionUpserts: todoCompletions.upsertAcks,
+            todoCompletionTombstones: todoCompletions.tombstoneAcks,
         },
     };
 }
@@ -1357,7 +1444,16 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
     }
     next = { ...next, todoTombstones };
 
-    // Log upserts and habit completion upserts have no marker to clear; once
+    let todoCompletionTombstones = next.todoCompletionTombstones;
+    for (const [id, acknowledged] of Object.entries(ack.todoCompletionTombstones)) {
+        const current = todoCompletionTombstones[id];
+        if (current && current.deletedAt === acknowledged.deletedAt) {
+            todoCompletionTombstones = omitTombstone(todoCompletionTombstones, id);
+        }
+    }
+    next = { ...next, todoCompletionTombstones };
+
+    // Log upserts and immutable completion upserts have no marker to clear; once
     // `pushed` contains them the entity-based pending detection stops counting
     // them.
 

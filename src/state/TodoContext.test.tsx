@@ -42,6 +42,7 @@ function IntegrationProbe() {
     return <div>
         <span data-testid="todo-archived">{String(todo?.isArchived ?? false)}</span>
         <span data-testid="todo-link">{todo?.currentTaskId ?? ""}</span>
+        <span data-testid="todo-completions">{Object.keys(todos.state.completions).length}</span>
         <span data-testid="timer-task">{app.state?.timer?.task_id ?? ""}</span>
         <span data-testid="action-error">{actionError}</span>
         <button onClick={() => todo && void todos.startPomodoro(todo.id)}>start-todo</button>
@@ -60,7 +61,7 @@ beforeEach(() => localStorage.clear());
 describe("TodoContext", () => {
     it("hydrates staged to-dos and restores only local selection", async () => {
         const data = new InMemoryDataAccess(makeAppState());
-        await data.saveTodos([todo("td1", "Hydrated")]);
+        await data.saveTodos([todo("td1", "Hydrated")], []);
         localStorage.setItem("todo_state_v1", JSON.stringify({ selected: "td1" }));
         render(wrap(data));
         await waitFor(() => expect(screen.getByTestId("title")).toHaveTextContent("Hydrated"));
@@ -88,7 +89,7 @@ describe("TodoContext", () => {
 
     it("creates, links, starts, and reverse-completes a to-do pomodoro", async () => {
         const data = new InMemoryDataAccess(makeAppState());
-        await data.saveTodos([todo("td1", "Integrated")]);
+        await data.saveTodos([todo("td1", "Integrated")], []);
         render(wrapIntegration(data));
         await waitFor(() => expect(screen.getByTestId("todo-archived")).toHaveTextContent("false"));
 
@@ -105,18 +106,20 @@ describe("TodoContext", () => {
         await act(async () => screen.getByText("finalize-linked").click());
         await waitFor(() => expect(screen.getByTestId("todo-archived")).toHaveTextContent("true"));
         expect(screen.getByTestId("todo-link")).toHaveTextContent("");
+        expect(screen.getByTestId("todo-completions")).toHaveTextContent("1");
     });
 
     it("reconciles a linked archived task after hydration", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const created = await data.createTask("Interrupted", 1);
         await data.archiveTask(created.value.id);
-        await data.saveTodos([todo("td1", "Interrupted")]);
+        await data.saveTodos([todo("td1", "Interrupted")], []);
         const saved = await data.loadTodos();
-        await data.saveTodos([{ ...saved[0], currentTaskId: created.value.id }]);
+        await data.saveTodos([{ ...saved.todos[0], currentTaskId: created.value.id }], []);
 
         render(wrapIntegration(data));
         await waitFor(() => expect(screen.getByTestId("todo-archived")).toHaveTextContent("true"));
         expect(screen.getByTestId("todo-link")).toHaveTextContent("");
+        expect(screen.getByTestId("todo-completions")).toHaveTextContent("1");
     });
 });

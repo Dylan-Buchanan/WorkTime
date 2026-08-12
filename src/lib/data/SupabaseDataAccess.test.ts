@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "./SupabaseDataAccess";
 import type { Habit, HabitCompletion } from "../../state/types";
 import type { PushPlan } from "./sync/types";
-import type { Todo } from "../todos";
+import type { Todo, TodoCompletion } from "../todos";
 
 const OWNER = "00000000-0000-4000-8000-000000000001";
 
@@ -37,6 +37,9 @@ function TD(id: string): Todo {
     return { id, title: "Submit report", rule: { type: "weekly", weekdays: [1, 3] }, dueDate: "2026-01-07", estimate: 1, currentTaskId: null,
         position: 2, isArchived: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
 }
+function TC(id: string, todoId: string): TodoCompletion {
+    return { id, todoId, bucket: "2026-01-07", createdAt: "2026-01-03T00:00:00.000Z", updatedAt: "2026-01-03T00:00:00.000Z" };
+}
 
 function mockClient(): { client: SupabaseClient; rpc: ReturnType<typeof vi.fn> } {
     const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
@@ -66,6 +69,8 @@ function emptyPlan(): PushPlan {
         habitCompletionTombstones: [],
         todoUpserts: [],
         todoTombstones: [],
+        todoCompletionUpserts: [],
+        todoCompletionTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -81,6 +86,8 @@ function emptyPlan(): PushPlan {
             habitCompletionTombstones: {},
             todoUpserts: {},
             todoTombstones: {},
+            todoCompletionUpserts: {},
+            todoCompletionTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -177,6 +184,8 @@ describe("SupabaseDataAccess habit transport mapping", () => {
             ...emptyPlan(),
             todoUpserts: [{ value: todo, updatedAt: "2026-01-03T00:00:00.000Z" }],
             todoTombstones: [{ id: "todo-2", deletedAt: "2026-01-04T00:00:00.000Z" }],
+            todoCompletionUpserts: [TC("completion-1", "todo-1")],
+            todoCompletionTombstones: [{ id: "completion-2", deletedAt: "2026-01-04T00:00:00.000Z", todoId: "todo-2" }],
         });
         const args = rpc.mock.calls[0][1];
         expect(args.p_todo_upserts).toEqual([{
@@ -185,5 +194,12 @@ describe("SupabaseDataAccess habit transport mapping", () => {
             created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-03T00:00:00.000Z",
         }]);
         expect(args.p_todo_tombstones).toEqual([{ id: "todo-2", deleted_at: "2026-01-04T00:00:00.000Z" }]);
+        expect(args.p_todo_completion_upserts).toEqual([{
+            id: "completion-1", todo_id: "todo-1", bucket: "2026-01-07",
+            created_at: "2026-01-03T00:00:00.000Z", updated_at: "2026-01-03T00:00:00.000Z",
+        }]);
+        expect(args.p_todo_completion_tombstones).toEqual([{
+            id: "completion-2", deleted_at: "2026-01-04T00:00:00.000Z", todo_id: "todo-2",
+        }]);
     });
 });

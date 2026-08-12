@@ -60,6 +60,16 @@ export interface Todo {
     updatedAt: string;
 }
 
+/** Immutable history row for one completed to-do occurrence. */
+export interface TodoCompletion {
+    id: string;
+    todoId: string;
+    /** Stable occurrence identity used for idempotent replay. */
+    bucket: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
 export interface NewTodoInput {
     title: string;
     rule?: TodoRule | null;

@@ -23,6 +23,8 @@ function isPlanNonEmpty(plan: PushPlan): boolean {
         plan.habitCompletionTombstones.length > 0 ||
         plan.todoUpserts.length > 0 ||
         plan.todoTombstones.length > 0 ||
+        plan.todoCompletionUpserts.length > 0 ||
+        plan.todoCompletionTombstones.length > 0 ||
         plan.settings !== null ||
         plan.timerState !== null ||
         plan.pmState !== null ||
@@ -46,6 +48,7 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
         habits: { ...base.habits },
         habitCompletions: { ...base.habitCompletions },
         todos: { ...base.todos },
+        todoCompletions: { ...base.todoCompletions },
         settings: { ...base.settings },
         timerState: { ...base.timerState },
         pmState: { ...base.pmState },
@@ -81,6 +84,12 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
     }
     for (const id of Object.keys(ack.todoTombstones)) {
         delete pushed.todos[id];
+    }
+    for (const [id, completion] of Object.entries(ack.todoCompletionUpserts)) {
+        pushed.todoCompletions[id] = clone(completion);
+    }
+    for (const id of Object.keys(ack.todoCompletionTombstones)) {
+        delete pushed.todoCompletions[id];
     }
     if (ack.settings) pushed.settings = clone(ack.settings);
     if (ack.timerState) {

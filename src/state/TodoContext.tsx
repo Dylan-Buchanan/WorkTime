@@ -1,12 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { completeTodoOccurrence, isValidRule, normalizeRule, normalizeTodoEstimate, reconcileTodoTasks } from "../lib/todos";
-import type { NewTodoInput, Todo, TodoRule } from "../lib/todos";
+import { completeTodoOccurrence, createTodoCompletion, isValidRule, normalizeRule, normalizeTodoEstimate, reconcileTodoTasks, todoCompletionBucket } from "../lib/todos";
+import type { NewTodoInput, Todo, TodoCompletion, TodoRule } from "../lib/todos";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
 import { useOptionalAppState } from "./AppStateContext";
 
 export interface TodoState {
     todos: Record<string, Todo>;
+    completions: Record<string, TodoCompletion>;
     ui: { selected: string | null };
     meta: { initializedAt: string };
 }
@@ -41,7 +42,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function defaultState(): TodoState {
-    return { todos: {}, ui: { selected: null }, meta: { initializedAt: isoNow() } };
+    return { todos: {}, completions: {}, ui: { selected: null }, meta: { initializedAt: isoNow() } };
 }
 function normalizeTodo(value: unknown): Todo | null {
     if (!isRecord(value) || typeof value.id !== "string" || !value.id) return null;
@@ -61,16 +62,23 @@ function normalizeTodo(value: unknown): Todo | null {
         updatedAt: typeof value.updatedAt === "string" && value.updatedAt ? value.updatedAt : createdAt,
     };
 }
-function applyLoaded(loaded: Todo[] | null, selected: string | null): TodoState {
+function applyLoaded(loaded: { todos: Todo[]; completions: TodoCompletion[] } | null, selected: string | null): TodoState {
     const state = defaultState();
-    for (const candidate of loaded ?? []) {
+    for (const candidate of loaded?.todos ?? []) {
         const todo = normalizeTodo(candidate);
         if (todo) state.todos[todo.id] = todo;
+    }
+    for (const completion of loaded?.completions ?? []) {
+        if (completion?.id && completion.todoId && completion.bucket && state.todos[completion.todoId]) {
+            state.completions[completion.id] = completion;
+        }
     }
     state.ui.selected = selected && state.todos[selected] ? selected : null;
     return state;
 }
-function serialize(todos: Record<string, Todo>): string { return JSON.stringify(Object.values(todos)); }
+function serialize(todos: Record<string, Todo>, completions: Record<string, TodoCompletion>): string {
+    return JSON.stringify({ todos: Object.values(todos), completions: Object.values(completions) });
+}
 
 const TodoContext = createContext<TodoContextValue | undefined>(undefined);
 
@@ -88,14 +96,14 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useLayoutEffect(() => { stateRef.current = state; }, [state]);
 
-    const commitTodos = useCallback(async (todos: Record<string, Todo>, selected = stateRef.current.ui.selected) => {
-        const serialized = serialize(todos);
+    const commitTodos = useCallback(async (todos: Record<string, Todo>, completions = stateRef.current.completions, selected = stateRef.current.ui.selected) => {
+        const serialized = serialize(todos, completions);
         pendingRef.current = serialized;
-        const nextState = { ...stateRef.current, todos, ui: { selected: selected && todos[selected] ? selected : null } };
+        const nextState = { ...stateRef.current, todos, completions, ui: { selected: selected && todos[selected] ? selected : null } };
         stateRef.current = nextState;
         setState(nextState);
         try {
-            await data.saveTodos(Object.values(todos));
+            await data.saveTodos(Object.values(todos), Object.values(completions));
             if (pendingRef.current === serialized) {
                 lastSavedRef.current = serialized;
                 pendingRef.current = null;
@@ -113,7 +121,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return isRecord(parsed) && typeof parsed.selected === "string" ? parsed.selected : null;
         } catch { return null; }
     }, []);
-    const load = useCallback(async (): Promise<Todo[] | null> => {
+    const load = useCallback(async (): Promise<{ todos: Todo[]; completions: TodoCompletion[] } | null> => {
         try { return await data.loadTodos(); }
         catch (error) { console.warn("[Todo] failed to load to-dos", error); return null; }
     }, [data]);
@@ -123,7 +131,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         void load().then((loaded) => {
             if (cancelled) return;
             const next = applyLoaded(loaded, readSelected());
-            lastSavedRef.current = serialize(next.todos);
+            lastSavedRef.current = serialize(next.todos, next.completions);
             suppressSaveRef.current = true;
             setState(next);
             setHydrated(true);
@@ -133,17 +141,17 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         if (!hydrated || !initialized) return;
-        const serialized = serialize(state.todos);
+        const serialized = serialize(state.todos, state.completions);
         if (suppressSaveRef.current && serialized === lastSavedRef.current) { suppressSaveRef.current = false; return; }
         if (serialized === lastSavedRef.current || serialized === pendingRef.current) return;
         pendingRef.current = serialized;
-        void data.saveTodos(Object.values(state.todos)).then(() => {
+        void data.saveTodos(Object.values(state.todos), Object.values(state.completions)).then(() => {
             if (pendingRef.current === serialized) { lastSavedRef.current = serialized; pendingRef.current = null; }
         }).catch((error) => {
             if (pendingRef.current === serialized) pendingRef.current = null;
             console.warn("[Todo] failed to persist to-dos", error);
         });
-    }, [data, hydrated, initialized, revision, state.todos]);
+    }, [data, hydrated, initialized, revision, state.completions, state.todos]);
 
     useEffect(() => {
         if (!hydrated) return;
@@ -153,12 +161,12 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const reload = useCallback(async () => {
         const loaded = await load();
         const loadedSerialized = JSON.stringify(loaded);
-        const currentSerialized = serialize(stateRef.current.todos);
+        const currentSerialized = serialize(stateRef.current.todos, stateRef.current.completions);
         if (lastSavedRef.current !== null && currentSerialized !== lastSavedRef.current) return;
         if (loadedSerialized === currentSerialized || loadedSerialized === lastReloadRef.current) return;
         const next = applyLoaded(loaded, stateRef.current.ui.selected);
         lastReloadRef.current = loadedSerialized;
-        lastSavedRef.current = serialize(next.todos);
+        lastSavedRef.current = serialize(next.todos, next.completions);
         suppressSaveRef.current = true;
         setState(next);
     }, [load]);
@@ -190,6 +198,18 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
             throw error;
         }
     }, [data]);
+    const completedOccurrenceState = useCallback((todo: Todo, at: Date) => {
+        const bucket = todoCompletionBucket(todo);
+        const completions = { ...stateRef.current.completions };
+        if (!Object.values(completions).some((completion) => completion.todoId === todo.id && completion.bucket === bucket)) {
+            const completion = createTodoCompletion(todo, at, uuid());
+            completions[completion.id] = completion;
+        }
+        return {
+            todos: { ...stateRef.current.todos, [todo.id]: completeTodoOccurrence(todo, at) },
+            completions,
+        };
+    }, []);
     const completeTodo = useCallback(async (id: string) => {
         const todo = stateRef.current.todos[id];
         if (!todo || todo.isArchived) return;
@@ -197,16 +217,17 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (linkedTaskId && app?.state?.timer?.task_id === linkedTaskId) {
             throw new Error("Stop or skip the active timer before completing this to-do");
         }
-        const completed = completeTodoOccurrence(todo, new Date());
-        await commitTodos({ ...stateRef.current.todos, [id]: completed });
+        const completed = completedOccurrenceState(todo, new Date());
+        await commitTodos(completed.todos, completed.completions);
         if (linkedTaskId) await archiveLinkedTaskIfExists(linkedTaskId);
-    }, [app, archiveLinkedTaskIfExists, commitTodos]);
+    }, [app, archiveLinkedTaskIfExists, commitTodos, completedOccurrenceState]);
     const completeTodoForTask = useCallback(async (taskId: string) => {
         const todo = Object.values(stateRef.current.todos)
             .find((candidate) => !candidate.isArchived && candidate.currentTaskId === taskId);
         if (!todo) return;
-        await commitTodos({ ...stateRef.current.todos, [todo.id]: completeTodoOccurrence(todo, new Date()) });
-    }, [commitTodos]);
+        const completed = completedOccurrenceState(todo, new Date());
+        await commitTodos(completed.todos, completed.completions);
+    }, [commitTodos, completedOccurrenceState]);
     const startPomodoro = useCallback(async (id: string) => {
         let todo = stateRef.current.todos[id];
         if (!todo || todo.isArchived) throw new Error("To-do is no longer active");
@@ -235,7 +256,9 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         const todos = { ...stateRef.current.todos };
         delete todos[id];
-        await commitTodos(todos, stateRef.current.ui.selected === id ? null : stateRef.current.ui.selected);
+        const completions = Object.fromEntries(Object.entries(stateRef.current.completions)
+            .filter(([, completion]) => completion.todoId !== id));
+        await commitTodos(todos, completions, stateRef.current.ui.selected === id ? null : stateRef.current.ui.selected);
         if (todo.currentTaskId) await archiveLinkedTaskIfExists(todo.currentTaskId);
     }, [app?.state?.timer, archiveLinkedTaskIfExists, commitTodos]);
     const reorderTodos = (ids: string[]) => setState((previous) => {
@@ -253,8 +276,22 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         if (!hydrated || !app?.state) return;
-        const result = reconcileTodoTasks(stateRef.current.todos, app.state.tasks, new Date());
-        if (result.changed) void commitTodos(result.todos);
+        const before = stateRef.current.todos;
+        const at = new Date();
+        const result = reconcileTodoTasks(before, app.state.tasks, at);
+        if (!result.changed) return;
+        let completions = stateRef.current.completions;
+        for (const todo of Object.values(before)) {
+            const task = todo.currentTaskId ? app.state.tasks[todo.currentTaskId] : null;
+            if (!todo.isArchived && task && (task.archived || task.completed_at !== null)) {
+                const bucket = todoCompletionBucket(todo);
+                if (!Object.values(completions).some((completion) => completion.todoId === todo.id && completion.bucket === bucket)) {
+                    const completion = createTodoCompletion(todo, at, uuid());
+                    completions = { ...completions, [completion.id]: completion };
+                }
+            }
+        }
+        void commitTodos(result.todos, completions);
     }, [app?.state, commitTodos, hydrated]);
 
     return <TodoContext.Provider value={{ state, hydrated, createTodo, updateTodo, archiveTodo, completeTodo, startPomodoro, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;

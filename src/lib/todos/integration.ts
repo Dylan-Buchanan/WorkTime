@@ -1,11 +1,45 @@
 import type { Task } from "../../state/types";
 import { localDateKey } from "./calendar";
 import { nextOccurrence } from "./recurrence";
-import type { LocalDateKey, Todo } from "./types";
+import type { LocalDateKey, Todo, TodoCompletion } from "./types";
 
 export function normalizeTodoEstimate(value: unknown): number {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? Math.max(1, Math.trunc(numeric)) : 1;
+}
+
+export function todoCompletionBucket(todo: Todo): string {
+    return todo.dueDate ?? `created:${todo.createdAt}`;
+}
+
+export function createTodoCompletion(todo: Todo, now: Date, id: string): TodoCompletion {
+    const timestamp = now.toISOString();
+    return { id, todoId: todo.id, bucket: todoCompletionBucket(todo), createdAt: timestamp, updatedAt: timestamp };
+}
+
+export function computeTodoCompletionMetrics(
+    completions: TodoCompletion[],
+    from: Date,
+    to: Date,
+    now: Date,
+): { today: number; inRange: number; streak: number } {
+    const dayKeys = new Set(completions.map((completion) => localDateKey(new Date(completion.createdAt))));
+    const todayKey = localDateKey(now);
+    let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+    if (!dayKeys.has(todayKey)) cursor.setDate(cursor.getDate() - 1);
+    let streak = 0;
+    while (dayKeys.has(localDateKey(cursor))) {
+        streak += 1;
+        cursor.setDate(cursor.getDate() - 1);
+    }
+    return {
+        today: completions.filter((completion) => localDateKey(new Date(completion.createdAt)) === todayKey).length,
+        inRange: completions.filter((completion) => {
+            const time = new Date(completion.createdAt).getTime();
+            return time >= from.getTime() && time <= to.getTime();
+        }).length,
+        streak,
+    };
 }
 
 /** Completes exactly one occurrence and severs its task link. */

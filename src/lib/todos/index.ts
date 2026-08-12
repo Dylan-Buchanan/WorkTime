@@ -6,6 +6,7 @@ export type {
     TodoRule,
     TodoRuleType,
     Todo,
+    TodoCompletion,
     NewTodoInput,
     WeeklyTodoRule,
     YearlyDate,
@@ -27,4 +28,4 @@ export { isDueOn, isValidRule, nextOccurrence, normalizeRule, validateRule } fro
 
 export { formatMonthlyDay, formatTodoRule, formatYearlyDate } from "./format";
 
-export { completeTodoOccurrence, normalizeTodoEstimate, reconcileTodoTasks } from "./integration";
+export { completeTodoOccurrence, computeTodoCompletionMetrics, createTodoCompletion, normalizeTodoEstimate, reconcileTodoTasks, todoCompletionBucket } from "./integration";

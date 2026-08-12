@@ -4,7 +4,7 @@ import { defaultAppState } from "../../engine";
 import { LocalStagingStore } from "../staging/LocalStagingStore";
 import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice } from "../staging/types";
 import { buildPushPlan, commitAcknowledgedPush, isLiveTimer, mergePulledSnapshot, MergeError } from "./merge";
-import type { Todo } from "../../todos";
+import type { Todo, TodoCompletion } from "../../todos";
 
 const NOW = new Date("2026-01-10T00:00:00.000Z");
 const T1 = "2026-01-01T00:00:00.000Z";
@@ -68,6 +68,9 @@ function TD(id: string, overrides: Partial<Todo> = {}): Todo {
     return { id, title: `Todo ${id}`, rule: null, dueDate: null, estimate: 1, currentTaskId: null, position: 0, isArchived: false,
         createdAt: T1, updatedAt: T1, ...overrides };
 }
+function TC(id: string, todoId: string, overrides: Partial<TodoCompletion> = {}): TodoCompletion {
+    return { id, todoId, bucket: "2026-01-05", createdAt: T2, updatedAt: T2, ...overrides };
+}
 
 /**
  * A pulled habit snapshot row: the domain `updatedAt` mirrors the transport
@@ -88,6 +91,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         habits: {},
         habitCompletions: {},
         todos: {},
+        todoCompletions: {},
         settings: { value: { ...defaultAppState().settings }, updatedAt: T1 },
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T1, completed: false },
         pmState: { value: null, updatedAt: null },
@@ -99,7 +103,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 3,
+        schemaVersion: 4,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -133,13 +137,15 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         todos: Object.fromEntries(Object.entries(baseline.todos).map(([id, row]) => [id, { ...row.value }])),
         todoUpdatedAt: {},
         todoTombstones: {},
+        todoCompletions: { ...baseline.todoCompletions },
+        todoCompletionTombstones: {},
         ...overrides,
     };
 }
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 3,
+        schemaVersion: 4,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
@@ -164,6 +170,8 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         todos: {},
         todoUpdatedAt: {},
         todoTombstones: {},
+        todoCompletions: {},
+        todoCompletionTombstones: {},
         ...overrides,
     };
 }
@@ -1405,6 +1413,21 @@ describe("pending count parity", () => {
 });
 
 describe("to-do staged merge", () => {
+    it("pushes completion history and converges duplicate occurrence ids to the remote row", () => {
+        const todo = TD("td1");
+        const base = snapshot({ todos: { td1: { value: todo, updatedAt: T1 } } });
+        const local = TC("local-c", "td1");
+        const record = recordFromBaseline(base, { todoCompletions: { [local.id]: local } });
+        expect(buildPushPlan(record).todoCompletionUpserts).toEqual([local]);
+
+        const remote = TC("remote-c", "td1");
+        const merged = mergePulledSnapshot(record, snapshot({
+            todos: base.todos,
+            todoCompletions: { [remote.id]: remote },
+        }), NOW);
+        expect(merged.record.todoCompletions).toEqual({ [remote.id]: remote });
+    });
+
     it("builds and acknowledges LWW to-do upserts", () => {
         const base = snapshot();
         const record = recordFromBaseline(base, {

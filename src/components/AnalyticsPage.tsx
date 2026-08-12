@@ -18,10 +18,13 @@ import {
     Legend,
 } from "recharts";
 import { AnalyticsFilters, filterLogs, computeDeepWorkSessions, computeMetrics } from "../lib/analytics";
+import { useTodos } from "../state/TodoContext";
+import { computeTodoCompletionMetrics } from "../lib/todos";
 
 export const AnalyticsPage: React.FC = () => {
     const { state: app } = useAppState();
     const { state: pm } = usePM();
+    const { state: todoState } = useTodos();
     const [range, setRange] = useState<{ from: Date; to: Date }>(() => ({
         from: subWeeks(new Date(), 8),
         to: new Date(),
@@ -98,6 +101,11 @@ export const AnalyticsPage: React.FC = () => {
         [filtered, app]
     );
 
+    const todoMetrics = useMemo(() => {
+        const completions = Object.values(todoState.completions);
+        return computeTodoCompletionMetrics(completions, range.from, range.to, new Date());
+    }, [range.from, range.to, todoState.completions]);
+
     // Weekly trend (8 weeks)
     const trendData = useMemo(() => {
         const days = eachDayOfInterval({
@@ -116,9 +124,11 @@ export const AnalyticsPage: React.FC = () => {
             const breakMins = sessions
                 .filter((s: any) => s.was_break)
                 .reduce((a: any, b: any) => a + b.duration_minutes, 0);
-            return { date: format(d, "MM-dd"), focusMins, breakMins };
+            const todoCompletions = Object.values(todoState.completions)
+                .filter((completion) => format(parseISO(completion.createdAt), "yyyy-MM-dd") === key).length;
+            return { date: format(d, "MM-dd"), focusMins, breakMins, todoCompletions };
         });
-    }, [filtered, filters.from, filters.to]);
+    }, [filtered, filters.from, filters.to, todoState.completions]);
 
     // Heatmap (weekday vs hour) focused minutes
     const heatmap = useMemo(() => {
@@ -324,7 +334,7 @@ export const AnalyticsPage: React.FC = () => {
             >
                 <section>
                     <h2 className="text-sm font-semibold mb-2">Overview</h2>
-                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
                         <MetricCard
                             title="Completed Pomodoros"
                             onNavigate={() => scrollTo("weekly-trend")}
@@ -371,6 +381,18 @@ export const AnalyticsPage: React.FC = () => {
                             primary={`${metrics.streak}`}
                             secondary="days"
                         />
+                        <MetricCard
+                            title="To-dos Completed"
+                            onNavigate={() => scrollTo("weekly-trend")}
+                            primary={`${todoMetrics.today}`}
+                            secondary={`Today / ${todoMetrics.inRange} Range`}
+                        />
+                        <MetricCard
+                            title="To-do Streak"
+                            onNavigate={() => scrollTo("streaks")}
+                            primary={`${todoMetrics.streak}`}
+                            secondary="days"
+                        />
                     </div>
                 </section>
                 <section id="weekly-trend" className="space-y-2">
@@ -406,6 +428,7 @@ export const AnalyticsPage: React.FC = () => {
                                     fill="#10B981"
                                     name="Break"
                                 />
+                                <Bar dataKey="todoCompletions" fill="#F59E0B" name="To-dos" />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>
@@ -514,6 +537,7 @@ export const AnalyticsPage: React.FC = () => {
                             Current streak: <strong>{metrics.streak}</strong>{" "}
                             days (&gt;=4 sessions)
                         </div>
+                        <div className="text-[11px]">To-do completion streak: <strong>{todoMetrics.streak}</strong> days</div>
                         <CapacityForecast filtered={filtered} />
                     </div>
                 </section>

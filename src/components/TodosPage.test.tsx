@@ -47,7 +47,7 @@ describe("TodosPage", () => {
             todo("Today item", dateOffset(0), { position: 1 }),
             todo("Upcoming item", dateOffset(1), { position: 2 }),
             todo("No date item", null, { position: 3 }),
-        ]);
+        ], []);
 
         render(wrap(data));
         await screen.findByText("Overdue item");
@@ -61,7 +61,7 @@ describe("TodosPage", () => {
         const data = new InMemoryDataAccess(makeAppState());
         const today = new Date();
         const todayDate = localDateKey(today) as Todo["dueDate"];
-        await data.saveTodos([todo("Recurring", todayDate, { rule: { type: "weekly", weekdays: [today.getDay()] } })]);
+        await data.saveTodos([todo("Recurring", todayDate, { rule: { type: "weekly", weekdays: [today.getDay()] } })], []);
         const user = userEvent.setup();
 
         render(wrap(data));
@@ -69,7 +69,7 @@ describe("TodosPage", () => {
         await user.click(screen.getByRole("button", { name: "Complete Recurring" }));
         await waitFor(async () => {
             const saved = await data.loadTodos();
-            expect(saved?.[0].dueDate).not.toBe(todayDate);
+            expect(saved.todos[0].dueDate).not.toBe(todayDate);
         });
 
         await user.click(screen.getByRole("button", { name: "Add to-do" }));
@@ -86,7 +86,7 @@ describe("TodosPage", () => {
         const nextWeekday = (currentWeekday + 1) % 7;
         const weekdayLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         const currentDate = localDateKey(today) as Todo["dueDate"];
-        await data.saveTodos([todo("Editable recurring", currentDate, { rule: { type: "weekly", weekdays: [currentWeekday] } })]);
+        await data.saveTodos([todo("Editable recurring", currentDate, { rule: { type: "weekly", weekdays: [currentWeekday] } })], []);
         const user = userEvent.setup();
 
         render(wrap(data));
@@ -100,7 +100,7 @@ describe("TodosPage", () => {
         const expected = nextOccurrence({ type: "weekly", weekdays: [nextWeekday] }, new Date());
         await waitFor(async () => {
             const saved = await data.loadTodos();
-            expect(saved?.[0].dueDate).toBe(expected ? localDateKey(expected) : null);
+            expect(saved.todos[0].dueDate).toBe(expected ? localDateKey(expected) : null);
         });
     });
 });
