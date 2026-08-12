@@ -6,6 +6,8 @@ import { TaskInspector } from "./ProjectManager/TaskInspector";
 import { EPSILON, computeElapsedSecs, formatDurationMinutes, formatMs, formatPomodoroCount, parseDueDateKey, toLocalDateKey } from "../lib/timer";
 import { useOptionalTodos } from "../state/TodoContext";
 
+const PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.";
+
 type FinishProjection =
     | {
           hasWork: true;
@@ -16,6 +18,7 @@ type FinishProjection =
           totalPomodoros: number;
           dueTodayPomodoros: number;
           unscheduledPomodoros: number;
+          futureDuePomodoros: number;
           totalMinutes: number;
           workMinutes: number;
           breakMinutes: number;
@@ -25,6 +28,7 @@ type FinishProjection =
           totalPomodoros: number;
           dueTodayPomodoros: number;
           unscheduledPomodoros: number;
+          futureDuePomodoros: number;
       };
 
 export const TimerPanel: React.FC = () => {
@@ -36,6 +40,7 @@ export const TimerPanel: React.FC = () => {
     const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
+    const [projectionInfoOpen, setProjectionInfoOpen] = useState(false);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
     const ms = remainingMs();
@@ -169,6 +174,7 @@ export const TimerPanel: React.FC = () => {
                 totalPomodoros: 0,
                 dueTodayPomodoros: 0,
                 unscheduledPomodoros: 0,
+                futureDuePomodoros: 0,
             };
         }
 
@@ -183,6 +189,7 @@ export const TimerPanel: React.FC = () => {
         let totalRemaining = 0;
         let dueTodayRemaining = 0;
         let unscheduledRemaining = 0;
+        let futureDueRemaining = 0;
 
         pmTasks.forEach((pmTask) => {
             if (pmTask.isArchived) return;
@@ -206,8 +213,10 @@ export const TimerPanel: React.FC = () => {
             if (remaining <= EPSILON) return;
 
             const dueKey = parseDueDateKey(pmTask.dueDate);
-            const include = !dueKey || dueKey <= todayKey; // include tasks with no due date or due today/overdue
-            if (!include) return;
+            if (dueKey && dueKey > todayKey) {
+                futureDueRemaining += remaining;
+                return;
+            }
 
             if (dueKey) {
                 dueTodayRemaining += remaining;
@@ -223,6 +232,7 @@ export const TimerPanel: React.FC = () => {
                 totalPomodoros: 0,
                 dueTodayPomodoros: dueTodayRemaining,
                 unscheduledPomodoros: unscheduledRemaining,
+                futureDuePomodoros: futureDueRemaining,
             };
         }
 
@@ -290,6 +300,7 @@ export const TimerPanel: React.FC = () => {
             totalPomodoros: totalRemaining,
             dueTodayPomodoros: dueTodayRemaining,
             unscheduledPomodoros: unscheduledRemaining,
+            futureDuePomodoros: futureDueRemaining,
             totalMinutes,
             workMinutes: workMinutesTotal,
             breakMinutes: breakMinutesTotal,
@@ -461,7 +472,18 @@ export const TimerPanel: React.FC = () => {
                                 <div className="w-full bg-neutral-900/70 border border-neutral-800 rounded-lg px-4 py-3 text-left shadow-sm">
                                     <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-neutral-500">
                                         <span className="font-medium text-neutral-300">Projected finish</span>
-                                        <span>{finishProjection.dayLabel}</span>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                className="rounded border border-neutral-700 px-1.5 py-0.5 text-[9px] normal-case tracking-normal text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+                                                onClick={() => setProjectionInfoOpen((open) => !open)}
+                                                aria-expanded={projectionInfoOpen}
+                                                aria-controls="projected-finish-rules"
+                                            >
+                                                Info
+                                            </button>
+                                            <span>{finishProjection.dayLabel}</span>
+                                        </div>
                                     </div>
                                     <div className="mt-1 text-2xl font-semibold text-neutral-100">{finishProjection.finishLabel}</div>
                                     <div className="mt-2 text-[11px] text-neutral-400">
@@ -471,6 +493,7 @@ export const TimerPanel: React.FC = () => {
                                         <span className="text-neutral-600"> + </span>
                                         Breaks {formatDurationMinutes(finishProjection.breakMinutes)}
                                     </div>
+                                    {projectionInfoOpen && <div id="projected-finish-rules" className="mt-2 text-[10px] text-neutral-500">{PROJECTED_FINISH_RULES}</div>}
                                     <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-neutral-500">
                                         {finishProjection.dueTodayPomodoros > EPSILON && <span>Due today/overdue: {formatPomodoroCount(finishProjection.dueTodayPomodoros)}</span>}
                                         {finishProjection.unscheduledPomodoros > EPSILON && <span>No due date: {formatPomodoroCount(finishProjection.unscheduledPomodoros)}</span>}
@@ -478,8 +501,26 @@ export const TimerPanel: React.FC = () => {
                                     {finishProjection.extendsPastToday && <div className="mt-2 text-[10px] text-amber-300/90">May spill into tomorrow—consider reprioritizing.</div>}
                                 </div>
                             ) : (
-                                <div className="w-full bg-emerald-600/10 border border-emerald-500/30 text-emerald-200 rounded-lg px-4 py-3 text-left text-[12px]">
-                                    You're all caught up for today. Great work!
+                                <div className={`w-full rounded-lg px-4 py-3 text-left text-[12px] ${
+                                    finishProjection.futureDuePomodoros > EPSILON
+                                        ? "bg-amber-600/10 border border-amber-500/30 text-amber-200"
+                                        : "bg-emerald-600/10 border border-emerald-500/30 text-emerald-200"
+                                }`}>
+                                    <div className="flex items-start justify-between gap-3">
+                                        {finishProjection.futureDuePomodoros > EPSILON
+                                            ? `No work due today. ${formatPomodoroCount(finishProjection.futureDuePomodoros)} future-due work remains outside this projection.`
+                                            : "You're all caught up for today. Great work!"}
+                                        <button
+                                            type="button"
+                                            className="shrink-0 rounded border border-current/30 px-1.5 py-0.5 text-[9px] text-current/80 hover:bg-black/10 hover:text-current"
+                                            onClick={() => setProjectionInfoOpen((open) => !open)}
+                                            aria-expanded={projectionInfoOpen}
+                                            aria-controls="projected-finish-rules"
+                                        >
+                                            Info
+                                        </button>
+                                    </div>
+                                    {projectionInfoOpen && <div id="projected-finish-rules" className="mt-2 text-[10px] text-neutral-400">{PROJECTED_FINISH_RULES}</div>}
                                 </div>
                             )}
                         </div>
