@@ -19,7 +19,7 @@ export interface ShortcutStoryPayload {
 /** The PMTask fields needed by the preview and the existing createTask path. */
 export interface ShortcutTaskProposal {
     title: string;
-    projectId: null;
+    projectId: string | null;
     status: TaskStatus;
     priority: TaskPriority;
     dueDate?: string;
@@ -34,7 +34,7 @@ export interface ShortcutTaskProposal {
 export interface ShortcutClassificationCounts {
     new: number;
     skippedAlreadyAdded: number;
-    skippedStatusExcluded: number;
+    skippedStatusNotIncluded: number;
     skippedArchived: number;
 }
 
@@ -46,7 +46,8 @@ export interface ShortcutClassificationResult {
 export interface ClassifyShortcutStoriesInput {
     stories: readonly ShortcutStoryPayload[];
     currentTasks: readonly PMTask[];
-    excludedStatuses: readonly string[];
+    includedStatuses: readonly string[];
+    defaultProjectId: string | null;
 }
 
 /**
@@ -62,10 +63,13 @@ export function normalizeShortcutUrl(value: string): string {
     return path.replace(/\/+$/, "") + suffix;
 }
 
-export function buildShortcutTaskProposal(story: ShortcutStoryPayload): ShortcutTaskProposal {
+export function buildShortcutTaskProposal(
+    story: ShortcutStoryPayload,
+    projectId: string | null = null,
+): ShortcutTaskProposal {
     return {
         title: story.name,
-        projectId: null,
+        projectId,
         status: "Backlog",
         priority: "Medium",
         ...(story.deadline !== null ? { dueDate: story.deadline } : {}),
@@ -82,11 +86,11 @@ function classifyShortcutStoriesInput(input: ClassifyShortcutStoriesInput): Shor
     const existingLinks = new Set(
         input.currentTasks.flatMap((task) => task.links.map(normalizeShortcutUrl)),
     );
-    const excludedStatuses = new Set(input.excludedStatuses);
+    const includedStatuses = new Set(input.includedStatuses);
     const counts: ShortcutClassificationCounts = {
         new: 0,
         skippedAlreadyAdded: 0,
-        skippedStatusExcluded: 0,
+        skippedStatusNotIncluded: 0,
         skippedArchived: 0,
     };
     const proposals: ShortcutTaskProposal[] = [];
@@ -96,8 +100,8 @@ function classifyShortcutStoriesInput(input: ClassifyShortcutStoriesInput): Shor
             counts.skippedAlreadyAdded += 1;
             continue;
         }
-        if (excludedStatuses.has(story.status_name)) {
-            counts.skippedStatusExcluded += 1;
+        if (!includedStatuses.has(story.status_name)) {
+            counts.skippedStatusNotIncluded += 1;
             continue;
         }
         if (story.archived) {
@@ -105,7 +109,7 @@ function classifyShortcutStoriesInput(input: ClassifyShortcutStoriesInput): Shor
             continue;
         }
         counts.new += 1;
-        proposals.push(buildShortcutTaskProposal(story));
+        proposals.push(buildShortcutTaskProposal(story, input.defaultProjectId));
     }
 
     return { proposals, counts };
@@ -115,15 +119,22 @@ export function classifyShortcutStories(input: ClassifyShortcutStoriesInput): Sh
 export function classifyShortcutStories(
     stories: readonly ShortcutStoryPayload[],
     currentTasks: readonly PMTask[],
-    excludedStatuses: readonly string[],
+    includedStatuses: readonly string[],
+    defaultProjectId?: string | null,
 ): ShortcutClassificationResult;
 export function classifyShortcutStories(
     inputOrStories: ClassifyShortcutStoriesInput | readonly ShortcutStoryPayload[],
     currentTasks?: readonly PMTask[],
-    excludedStatuses?: readonly string[],
+    includedStatuses?: readonly string[],
+    defaultProjectId?: string | null,
 ): ShortcutClassificationResult {
     const input: ClassifyShortcutStoriesInput = Array.isArray(inputOrStories)
-        ? { stories: inputOrStories, currentTasks: currentTasks ?? [], excludedStatuses: excludedStatuses ?? [] }
+        ? {
+            stories: inputOrStories,
+            currentTasks: currentTasks ?? [],
+            includedStatuses: includedStatuses ?? [],
+            defaultProjectId: defaultProjectId ?? null,
+        }
         : inputOrStories as ClassifyShortcutStoriesInput;
     return classifyShortcutStoriesInput(input);
 }

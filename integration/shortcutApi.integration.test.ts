@@ -38,7 +38,10 @@ describe("Shortcut API client", () => {
             if (url.searchParams.get("next") === "page-2") {
                 return jsonResponse({ data: [story({ id: 75, workflow_state_id: 999, description: null, estimate: null, deadline: null })], next: null });
             }
-            return jsonResponse({ data: [story()], next: "/api/v3/search/stories?next=page-2" });
+            return jsonResponse({
+                data: [story(), story({ id: 76, archived: true })],
+                next: "/api/v3/search/stories?next=page-2",
+            });
         };
 
         const stories = await fetchShortcutStories({ token: "never-log-me", teamName: "Data Thinkers" }, fetcher);
@@ -48,9 +51,10 @@ describe("Shortcut API client", () => {
             expect.objectContaining({ id: 75, status_name: "Unknown", description: "", estimate: null, deadline: null }),
         ]);
         expect(stories[0].labels).toEqual([{ id: 5, name: "integration" }]);
+        expect(stories.some((candidate) => candidate.archived)).toBe(false);
         expect(requested).toHaveLength(4);
         const firstSearch = requested[2];
-        expect(firstSearch.searchParams.get("query")).toBe('team:"Data Thinkers" owner:dylan');
+        expect(firstSearch.searchParams.get("query")).toBe('team:"Data Thinkers" owner:dylan -is:archived');
         expect(firstSearch.searchParams.get("page_size")).toBe("250");
         expect(firstSearch.searchParams.get("detail")).toBe("full");
     });

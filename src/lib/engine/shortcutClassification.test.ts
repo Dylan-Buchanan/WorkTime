@@ -54,16 +54,17 @@ describe("shortcut story classification", () => {
         const result = classifyShortcutStories({
             stories: [story(42, { app_url: " https://app.shortcut.com/worktime/story/42/ " })],
             currentTasks: [task("unrelated", ["https://example.test/task"]), task("linked", ["https://another.test", "https://app.shortcut.com/worktime/story/42"])],
-            excludedStatuses: [],
+            includedStatuses: ["In Development"],
+            defaultProjectId: "project-1",
         });
 
         expect(result).toEqual({
             proposals: [],
-            counts: { new: 0, skippedAlreadyAdded: 1, skippedStatusExcluded: 0, skippedArchived: 0 },
+            counts: { new: 0, skippedAlreadyAdded: 1, skippedStatusNotIncluded: 0, skippedArchived: 0 },
         });
     });
 
-    it("classifies excluded and archived stories and returns partitioned counts", () => {
+    it("classifies statuses outside the inclusion list and archived stories", () => {
         const result = classifyShortcutStories(
             [
                 story(1),
@@ -72,15 +73,17 @@ describe("shortcut story classification", () => {
                 story(4, { app_url: "https://app.shortcut.com/worktime/story/linked" }),
             ],
             [task("existing", ["https://app.shortcut.com/worktime/story/linked/"])],
-            ["Done", "Ready for Review"],
+            ["In Development", "Ready for Dev"],
+            "project-1",
         );
 
         expect(result.proposals).toHaveLength(1);
         expect(result.proposals[0].title).toBe("Story 1");
+        expect(result.proposals[0].projectId).toBe("project-1");
         expect(result.counts).toEqual({
             new: 1,
             skippedAlreadyAdded: 1,
-            skippedStatusExcluded: 1,
+            skippedStatusNotIncluded: 1,
             skippedArchived: 1,
         });
     });

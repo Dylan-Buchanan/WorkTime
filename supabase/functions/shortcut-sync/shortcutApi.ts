@@ -146,7 +146,7 @@ function quotedSearchValue(value: string): string {
 
 function searchUrl(teamName: string, mentionName: string): URL {
     const url = new URL(SEARCH_PATH, SHORTCUT_API_ORIGIN);
-    url.searchParams.set("query", `team:${quotedSearchValue(teamName)} owner:${mentionName}`);
+    url.searchParams.set("query", `team:${quotedSearchValue(teamName)} owner:${mentionName} -is:archived`);
     url.searchParams.set("page_size", String(PAGE_SIZE));
     // Full search detail retains description; the function maps it down to a slim response.
     url.searchParams.set("detail", "full");
@@ -192,7 +192,10 @@ export async function fetchShortcutStories(settings: ShortcutSyncSettings, fetch
         visited.add(url.href);
         const searchValue = await shortcutJson(url, settings.token, fetcher);
         if (!isRecord(searchValue) || !Array.isArray(searchValue.data)) throw invalidResponse();
-        stories.push(...searchValue.data.map((story) => mapStory(story, stateNames)));
+        const activeStories = searchValue.data
+            .map((story) => mapStory(story, stateNames))
+            .filter((story) => !story.archived);
+        stories.push(...activeStories);
         url = page === MAX_PAGES - 1 ? null : nextSearchUrl(searchValue.next, visited);
     }
     return stories;

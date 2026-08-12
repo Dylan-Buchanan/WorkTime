@@ -17,7 +17,10 @@ describe("integrationRegistry", () => {
             expect(integration.description).not.toBe("");
             expect(["calendar", "github", "shortcut"]).toContain(integration.icon);
             expect(["oauth2", "api-token"]).toContain(integration.authFlow);
-            expect(integration.isPlaceholder).toBe(true);
         }
+        expect(integrationRegistry.filter((integration) => integration.isPlaceholder).map((integration) => integration.id)).toEqual([
+            "google-calendar",
+            "github",
+        ]);
     });
 });

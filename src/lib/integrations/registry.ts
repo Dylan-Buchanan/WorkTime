@@ -26,7 +26,7 @@ export const integrationRegistry = [
         description: "Link stories and iterations to projects so planned work stays aligned with your team.",
         icon: "shortcut",
         authFlow: "api-token",
-        isPlaceholder: true,
+        isPlaceholder: false,
     },
     {
         id: "github",

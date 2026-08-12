@@ -7,7 +7,7 @@ import { TimerPanel } from "./components/TimerPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useSounds } from "./hooks/useSounds";
 import { useMediaQuery } from "./hooks/useMediaQuery";
-import { ProjectManagerProvider } from "./state/ProjectManagerContext";
+import { ProjectManagerProvider, usePM } from "./state/ProjectManagerContext";
 import { HabitProvider } from "./state/HabitContext";
 import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPage";
 import { AppStateProvider } from "./state/AppStateContext";
@@ -31,6 +31,8 @@ import { TodoProvider } from "./state/TodoContext";
 import { TodosPage } from "./components/TodosPage";
 import { WeekOverviewPage } from "./components/WeekOverviewPage";
 import { IntegrationsPage } from "./components/IntegrationsPage";
+import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
+import { supabase } from "./lib/supabase";
 
 const App: React.FC = () => (
     <BrowserRouter>
@@ -50,7 +52,7 @@ const App: React.FC = () => (
                         <Route path="/habits" element={<HabitsPage />} />
                         <Route path="/todos" element={<TodosPage />} />
                         <Route path="/week" element={<WeekOverviewPage />} />
-                        <Route path="/integrations" element={<ErrorBoundary><IntegrationsPage /></ErrorBoundary>} />
+                        <Route path="/integrations" element={<ErrorBoundary><ShortcutIntegrationsRoute /></ErrorBoundary>} />
                     </Route>
                 </Route>
                 <Route path="*" element={<UnknownRoute />} />
@@ -59,6 +61,18 @@ const App: React.FC = () => (
         </AuthProvider>
     </BrowserRouter>
 );
+
+const ShortcutIntegrationsRoute: React.FC = () => {
+    const { session } = useAuth();
+    const { state, createTask } = usePM();
+    const dataAccess = useMemo(
+        () => new SupabaseShortcutDataAccess(supabase, session!.user.id),
+        [session?.user.id],
+    );
+    const currentTasks = useMemo(() => Object.values(state.tasks), [state.tasks]);
+    const projects = useMemo(() => Object.values(state.projects), [state.projects]);
+    return <IntegrationsPage shortcut={{ dataAccess, currentTasks, projects, createTask }} />;
+};
 
 const AuthenticatedShell: React.FC = () => {
     const { session } = useAuth();

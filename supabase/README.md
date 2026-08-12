@@ -65,13 +65,24 @@ Manual Auth cases:
 await supabase.rpc("save_shortcut_settings", {
     p_shortcut_token: token,
     p_team_name: teamName,
-    p_excluded_statuses: excludedStatuses,
+    p_included_statuses: includedStatuses,
+    p_default_project_id: defaultProjectId,
 });
 ```
 
-Authenticated clients may select only `owner_id`, `team_name`, `excluded_statuses`, `last_synced_at`, and `updated_at`. Selecting `shortcut_token` is intentionally denied. The token is plaintext within Postgres under RLS and column privileges; it is readable by the `shortcut-sync` service-role path and database administrators, but is never returned by the save RPC or sync function.
+After connection, update only the non-secret preferences without retaining or re-entering the token:
 
-Invoke `shortcut-sync` with `POST` through the authenticated Supabase client. The function independently verifies the bearer JWT, derives the owner, resolves the current Shortcut member and workflow states, follows at most four 250-result search pages, and returns `{ stories, synced_at }`. A successful call updates `last_synced_at`. Stable error codes include `AUTH_REQUIRED`, `SHORTCUT_NOT_CONFIGURED`, `SHORTCUT_TOKEN_INVALID`, `SHORTCUT_RATE_LIMITED`, and `SHORTCUT_UPSTREAM_ERROR`; rate-limit responses may include `retry_after_seconds`.
+```ts
+await supabase.rpc("update_shortcut_preferences", {
+    p_team_name: teamName,
+    p_included_statuses: includedStatuses,
+    p_default_project_id: defaultProjectId,
+});
+```
+
+Authenticated clients may select only `owner_id`, `team_name`, `included_statuses`, `default_project_id`, `last_synced_at`, and `updated_at`. Selecting `shortcut_token` is intentionally denied. The token is plaintext within Postgres under RLS and column privileges; it is readable by the `shortcut-sync` service-role path and database administrators, but is never returned by the save RPC or sync function.
+
+Invoke `shortcut-sync` with `POST` through the authenticated Supabase client. The function independently verifies the bearer JWT, derives the owner, resolves the current Shortcut member and workflow states, explicitly excludes archived stories in its Shortcut search query, follows at most four 250-result search pages, and returns `{ stories, synced_at }`. A successful call updates `last_synced_at`. Stable error codes include `AUTH_REQUIRED`, `SHORTCUT_NOT_CONFIGURED`, `SHORTCUT_TOKEN_INVALID`, `SHORTCUT_RATE_LIMITED`, and `SHORTCUT_UPSTREAM_ERROR`; rate-limit responses may include `retry_after_seconds`.
 
 Deploy the authenticated function without `--no-verify-jwt`:
 
