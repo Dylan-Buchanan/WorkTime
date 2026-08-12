@@ -5,6 +5,7 @@ import { usePM } from "../state/ProjectManagerContext";
 import { TaskInspector } from "./ProjectManager/TaskInspector";
 import { EPSILON, computeElapsedSecs, formatDurationMinutes, formatMs, formatPomodoroCount, parseDueDateKey, toLocalDateKey } from "../lib/timer";
 import { useOptionalTodos } from "../state/TodoContext";
+import { addProjectedDuration } from "../lib/projection";
 
 const PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.";
 
@@ -178,7 +179,8 @@ export const TimerPanel: React.FC = () => {
             };
         }
 
-        const todayKey = toLocalDateKey(new Date());
+        const projectionStart = new Date();
+        const todayKey = toLocalDateKey(projectionStart);
         const workMs = workMinutes * 60000;
         const shortBreakMs = (settings.short_break_minutes || 0) * 60000;
         const longBreakMs = (settings.long_break_minutes || 0) * 60000;
@@ -281,7 +283,7 @@ export const TimerPanel: React.FC = () => {
             }
         }
 
-        const finishDate = new Date(Date.now() + totalMs);
+        const finishDate = addProjectedDuration(projectionStart, totalMs, settings.end_of_day);
         const finishDayKey = toLocalDateKey(finishDate);
         const extendsPastToday = finishDayKey !== todayKey;
         const dayLabelFormatter = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });

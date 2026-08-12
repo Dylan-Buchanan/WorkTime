@@ -130,7 +130,7 @@ describe("StagedDataAccess", () => {
         expect(started.value.kind).toBe("Work");
         await data.pauseTimer();
         await data.resumeTimer();
-        await data.updateSettings({ work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 });
+        await data.updateSettings({ work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" });
         await data.setTaskTarget(created.value.id, 3);
         await data.finalizeTask(created.value.id);
         await data.savePMState({ projects: {}, tasks: {}, meta: { initializedAt: "2026-01-01T00:00:00.000Z" } });

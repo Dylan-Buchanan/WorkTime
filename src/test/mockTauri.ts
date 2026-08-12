@@ -5,6 +5,7 @@ export const defaultSettings: Settings = {
     short_break_minutes: 5,
     long_break_minutes: 20,
     segment_length: 4,
+    end_of_day: "22:00",
 };
 
 export function makeAppState(overrides: Partial<AppStateData> = {}): AppStateData {

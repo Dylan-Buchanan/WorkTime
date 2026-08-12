@@ -82,7 +82,7 @@ function Probe() {
         <button onClick={() => stopWork()}>stop</button>
         <button onClick={() => skipBreak()}>skip</button>
         <button onClick={() => completeTimer()}>complete</button>
-        <button onClick={() => updateSettings({ work_minutes: 1, short_break_minutes: 1, long_break_minutes: 1, segment_length: 4 })}>settings</button>
+        <button onClick={() => updateSettings({ work_minutes: 1, short_break_minutes: 1, long_break_minutes: 1, segment_length: 4, end_of_day: "22:00" })}>settings</button>
         <button onClick={() => finalizeTask("t1")}>finalize</button>
         <button onClick={() => resetAll()}>reset</button>
     </div>;

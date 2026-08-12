@@ -133,7 +133,7 @@ const MainLayout: React.FC = () => {
     if (isDesktop) {
         return (
             <div className="flex h-full">
-                <aside className="w-72 border-r border-neutral-800 p-3 flex flex-col gap-6 overflow-y-auto bg-neutral-900/30 backdrop-blur-sm"><TaskPanel /><SettingsPanel /></aside>
+                <aside className="app-scrollbar w-72 border-r border-neutral-800 p-3 flex flex-col gap-6 overflow-y-auto bg-neutral-900/30 backdrop-blur-sm"><TaskPanel /><SettingsPanel /></aside>
                 <main className="flex-1 flex p-4 min-h-0 overflow-y-auto"><TimerPanel /></main>
             </div>
         );
@@ -167,7 +167,7 @@ const MainLayout: React.FC = () => {
                                 Close
                             </button>
                         </div>
-                        <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-3"><TaskPanel /><SettingsPanel /></div>
+                        <div className="app-scrollbar flex flex-1 flex-col gap-6 overflow-y-auto p-3"><TaskPanel /><SettingsPanel /></div>
                     </div>
                 </div>
             )}

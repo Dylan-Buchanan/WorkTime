@@ -12,6 +12,8 @@ import {
     subscribeToAgentApiKey,
     subscribeToAgentProvider,
 } from "../lib/agent";
+import { isEndOfDayTime } from "../lib/settings";
+import { TimeOfDayInput } from "./TimeOfDayInput";
 
 export const SettingsPanel: React.FC = () => {
     const { state, updateSettings, resetAll } = useAppState();
@@ -33,9 +35,9 @@ export const SettingsPanel: React.FC = () => {
         setHasAgentApiKey(Boolean(next));
     }), []);
     React.useEffect(() => subscribeToAgentProvider(setAgentProviderChoice), []);
-    const onChange = (k: keyof Settings, v: number) =>
+    const onNumberChange = (k: keyof Pick<Settings, "work_minutes" | "short_break_minutes" | "long_break_minutes" | "segment_length">, v: number) =>
         setLocal((prev) => (prev ? { ...prev, [k]: v } : prev));
-    const fields: (keyof Settings)[] = [
+    const fields: (keyof Pick<Settings, "work_minutes" | "short_break_minutes" | "long_break_minutes" | "segment_length">)[] = [
         "work_minutes",
         "short_break_minutes",
         "long_break_minutes",
@@ -59,12 +61,18 @@ export const SettingsPanel: React.FC = () => {
                                 min={1}
                                 value={local[key]}
                                 onChange={(e) =>
-                                    onChange(key, Number(e.target.value))
+                                    onNumberChange(key, Number(e.target.value))
                                 }
                                 className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                             />
                         </label>
                     ))}
+                    <TimeOfDayInput
+                        id="end-of-day"
+                        label="End of day"
+                        value={local.end_of_day}
+                        onChange={(endOfDay) => setLocal((previous) => previous ? { ...previous, end_of_day: endOfDay } : previous)}
+                    />
                 </div>
             ) : (
                 <div className="text-[11px] text-neutral-500 py-4">
@@ -73,12 +81,13 @@ export const SettingsPanel: React.FC = () => {
             )}
             {local && (
                 <button
+                    disabled={!isEndOfDayTime(local.end_of_day)}
                     onMouseEnter={() => play("hover")}
                     onClick={() => {
                         updateSettings(local);
                         play("pressSide");
                     }}
-                    className="w-full mt-2 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-[11px] font-medium tracking-wide"
+                    className="w-full mt-2 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 text-[11px] font-medium tracking-wide"
                 >
                     Save
                 </button>

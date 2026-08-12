@@ -1,4 +1,5 @@
 import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
+import { DEFAULT_END_OF_DAY } from "../settings";
 
 export interface EngineResult<T> {
     state: AppStateData;
@@ -18,6 +19,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
     short_break_minutes: 5,
     long_break_minutes: 20,
     segment_length: 4,
+    end_of_day: DEFAULT_END_OF_DAY,
 });
 
 export function defaultAppState(): AppStateData {

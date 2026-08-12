@@ -62,7 +62,7 @@ function timer(overrides: Partial<ActiveTimer> = {}): ActiveTimer {
 
 describe("engine core and state commands", () => {
     it("provides fresh defaults and the Rust cycle formula", () => {
-        expect(DEFAULT_SETTINGS).toEqual({ work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 });
+        expect(DEFAULT_SETTINGS).toEqual({ work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" });
         expect(fullCycleDurationSecs(DEFAULT_SETTINGS)).toBe(135 * 60);
         expect(fullCycleDurationSecs({ ...DEFAULT_SETTINGS, segment_length: 0 })).toBe(25 * 60 + 20 * 60);
         expect(defaultAppState()).toEqual({ tasks: {}, logs: [], settings: DEFAULT_SETTINGS, active_task: null, current_cycle_pomodoros: 0, timer: null });
@@ -96,7 +96,7 @@ describe("engine core and state commands", () => {
     });
 
     it("replaces settings exactly and resets to fresh defaults", () => {
-        const custom: Settings = { work_minutes: 0, short_break_minutes: 7, long_break_minutes: 0, segment_length: 0 };
+        const custom: Settings = { work_minutes: 0, short_break_minutes: 7, long_break_minutes: 0, segment_length: 0, end_of_day: "18:30" };
         const state = stateWithTask();
         expect(updateSettings(state, custom).value).toEqual(custom);
         const reset = resetAppState(state);

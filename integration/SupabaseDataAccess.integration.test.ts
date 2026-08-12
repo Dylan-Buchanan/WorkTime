@@ -117,7 +117,7 @@ describe("SupabaseDataAccess transport", () => {
             created_at: T0, completed_at: null, break_skips: 0, archived: false,
         };
         const log = { id: LOG_ID, task_id: TASK_ID, duration_minutes: 25, finished_at: "2026-01-01T00:26:00.000Z", was_break: false, break_skipped: false };
-        const settings = { work_minutes: 30, short_break_minutes: 6, long_break_minutes: 24, segment_length: 3 };
+        const settings = { work_minutes: 30, short_break_minutes: 6, long_break_minutes: 24, segment_length: 3, end_of_day: "18:30" };
         const timerSlice = { active_task: TASK_ID, current_cycle_pomodoros: 1, timer: null };
         const pushedHabit = habit(HABIT_ID, "Pushed habit");
         const pushedCompletion = completion(COMPLETION_ID, HABIT_ID);
@@ -284,7 +284,7 @@ describe("SupabaseDataAccess transport", () => {
             logUpserts: [{ id: LOG_ID, task_id: TASK_ID, duration_minutes: 25, finished_at: "2026-01-01T00:26:00.000Z", was_break: false, break_skipped: false }],
             habitUpserts: [{ value: habit(HABIT_ID, "Survivor habit"), updatedAt: T0 }],
             habitCompletionUpserts: [completion(COMPLETION_ID, HABIT_ID)],
-            settings: { value: { work_minutes: 40, short_break_minutes: 7, long_break_minutes: 30, segment_length: 5 }, updatedAt: T0 },
+            settings: { value: { work_minutes: 40, short_break_minutes: 7, long_break_minutes: 30, segment_length: 5, end_of_day: "20:00" }, updatedAt: T0 },
             timerState: { value: { active_task: TASK_ID, current_cycle_pomodoros: 3, timer: null }, updatedAt: T0, newGeneration: false },
         };
         await remote.push(user.userId, seed);

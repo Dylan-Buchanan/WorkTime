@@ -56,6 +56,36 @@ function mockClient(): { client: SupabaseClient; rpc: ReturnType<typeof vi.fn> }
     return { client, rpc };
 }
 
+function pullClient(settingsData: unknown): SupabaseClient {
+    const from = vi.fn((table: string) => {
+        if (table === "settings" || table === "timer_state" || table === "pm_state") {
+            const data = table === "settings"
+                ? { data: settingsData, updated_at: "2026-01-01T00:00:00.000Z" }
+                : null;
+            return {
+                select: () => ({
+                    eq: () => ({ maybeSingle: async () => ({ data, error: null }) }),
+                }),
+            };
+        }
+
+        const query: Record<string, unknown> = {};
+        query.eq = () => query;
+        query.order = () => query;
+        query.range = async () => ({ data: [], error: null });
+        return { select: () => query };
+    });
+    return {
+        auth: {
+            getSession: vi.fn().mockResolvedValue({
+                data: { session: { user: { id: OWNER } } },
+                error: null,
+            }),
+        },
+        from,
+    } as unknown as SupabaseClient;
+}
+
 function emptyPlan(): PushPlan {
     return {
         baseRevision: 1,
@@ -97,6 +127,15 @@ function emptyPlan(): PushPlan {
 }
 
 describe("SupabaseDataAccess habit transport mapping", () => {
+    it("normalizes legacy settings rows while rejecting malformed cutoffs", async () => {
+        const legacy = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+        const snapshot = await new SupabaseDataAccess(pullClient(legacy)).pull(OWNER);
+        expect(snapshot.settings.value).toEqual({ ...legacy, end_of_day: "22:00" });
+
+        await expect(new SupabaseDataAccess(pullClient({ ...legacy, end_of_day: "24:00" })).pull(OWNER))
+            .rejects.toThrow(/invalid settings row/);
+    });
+
     it("maps habit deltas to apply_staged_sync and sends empty arrays as null", async () => {
         const { client, rpc } = mockClient();
         const data = new SupabaseDataAccess(client);

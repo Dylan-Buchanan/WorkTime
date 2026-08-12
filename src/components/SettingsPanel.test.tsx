@@ -37,6 +37,39 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
 beforeEach(() => localStorage.clear());
 
 describe("SettingsPanel reset scope", () => {
+    it("edits and saves the global end-of-day cutoff", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const updateSpy = vi.spyOn(data, "updateSettings");
+        render(wrap(data, <SettingsPanel />));
+
+        const hour = await screen.findByLabelText("End of day hour");
+        const minute = screen.getByLabelText("End of day minute");
+        expect(hour).toHaveValue("10");
+        expect(minute).toHaveValue("00");
+        expect(screen.getByRole("button", { name: "PM" })).toHaveAttribute("aria-pressed", "true");
+
+        fireEvent.change(hour, { target: { value: "6" } });
+        fireEvent.blur(hour);
+        fireEvent.change(minute, { target: { value: "30" } });
+        fireEvent.blur(minute);
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() => expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ end_of_day: "18:30" })));
+    });
+
+    it("switches the cutoff period without opening a native time picker", async () => {
+        const data = new InMemoryDataAccess(makeAppState({ settings: { ...makeAppState().settings, end_of_day: "09:15" } }));
+        const updateSpy = vi.spyOn(data, "updateSettings");
+        render(wrap(data, <SettingsPanel />));
+
+        expect(await screen.findByLabelText("End of day hour")).toHaveAttribute("inputmode", "numeric");
+        expect(screen.queryByDisplayValue("09:15")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "PM" }));
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() => expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ end_of_day: "21:15" })));
+    });
+
     it("resets timer data once, keeps PM, and describes the scoped deletion", async () => {
         const data = new InMemoryDataAccess(makeAppState({
             tasks: { t1: { id: "t1", name: "Doomed", target_pomodoros: 2, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } },

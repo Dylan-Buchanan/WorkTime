@@ -10,6 +10,7 @@ import type {
 import type { SyncedPMState } from "../DataAccess";
 import { isValidRule } from "../../todos";
 import type { Todo, TodoCompletion, TodoRule } from "../../todos";
+import { isCompleteSettings, parsePersistedSettings } from "../../settings";
 
 /**
  * The versioned, serializable schema persisted for each owner under
@@ -91,7 +92,7 @@ export interface TodoCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 4;
+    schemaVersion: 5;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -136,7 +137,7 @@ export interface StagedOwnerRecord {
     todoCompletionTombstones: Record<string, TodoCompletionTombstone>;
 }
 
-export const STAGING_SCHEMA_VERSION = 4 as const;
+export const STAGING_SCHEMA_VERSION = 5 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -204,13 +205,7 @@ function isTimerSlice(value: unknown): boolean {
 }
 
 function isSettings(value: unknown): boolean {
-    return (
-        isObject(value) &&
-        isFiniteNumber(value.work_minutes) &&
-        isFiniteNumber(value.short_break_minutes) &&
-        isFiniteNumber(value.long_break_minutes) &&
-        isFiniteNumber(value.segment_length)
-    );
+    return isCompleteSettings(value);
 }
 
 function isHabit(value: unknown): boolean {
@@ -386,7 +381,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `4` are accepted; records at the unchanged v1 key migrate in memory
+ * through `5` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -404,7 +399,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     if (!isObject(parsed)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" is not an object`);
     }
-    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3 && parsed.schemaVersion !== 4) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3 && parsed.schemaVersion !== 4 && parsed.schemaVersion !== 5) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
         );
@@ -457,6 +452,23 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
                 ? null
                 : { ...(record.lastSynced as Record<string, unknown>), todoCompletions: {} },
         };
+    }
+    if (record.schemaVersion === 4) {
+        const state = isObject(record.state)
+            ? { ...record.state, settings: parsePersistedSettings(record.state.settings) ?? record.state.settings }
+            : record.state;
+        const lastSynced = isObject(record.lastSynced) && isObject(record.lastSynced.settings)
+            ? {
+                  ...record.lastSynced,
+                  settings: {
+                      ...record.lastSynced.settings,
+                      value: record.lastSynced.settings.value === null
+                          ? null
+                          : parsePersistedSettings(record.lastSynced.settings.value) ?? record.lastSynced.settings.value,
+                  },
+              }
+            : record.lastSynced;
+        record = { ...record, schemaVersion: 5, state, lastSynced };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

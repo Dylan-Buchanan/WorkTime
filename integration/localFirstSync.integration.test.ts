@@ -24,7 +24,7 @@ const TODO_COMPLETION_A = "00000000-0000-4000-8000-300000000022";
 const T0 = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T00:00:00.000Z";
 
-const DEFAULT_SETTINGS = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+const DEFAULT_SETTINGS = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" };
 
 let users: LocalUser[] = [];
 afterEach(async () => {

@@ -10,29 +10,40 @@ body {
     font-family: system-ui, sans-serif;
 }
 
-.habit-scroll {
+.habit-scroll,
+.app-scrollbar {
     scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklab, var(--color-neutral-600) 55%, transparent) transparent;
+    scrollbar-color: color-mix(in oklab, var(--color-neutral-600) 65%, transparent) color-mix(in oklab, var(--color-neutral-950) 45%, transparent);
 }
 
-.habit-scroll::-webkit-scrollbar {
+.habit-scroll::-webkit-scrollbar,
+.app-scrollbar::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-.habit-scroll::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.habit-scroll::-webkit-scrollbar-thumb {
-    background: color-mix(in oklab, var(--color-neutral-600) 55%, transparent);
+.habit-scroll::-webkit-scrollbar-track,
+.app-scrollbar::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--color-neutral-950) 45%, transparent);
     border-radius: 9999px;
 }
 
-.habit-scroll::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklab, var(--color-neutral-500) 70%, transparent);
+.habit-scroll::-webkit-scrollbar-thumb,
+.app-scrollbar::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-neutral-600) 65%, transparent);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 9999px;
 }
 
-.habit-scroll::-webkit-scrollbar-corner {
+.habit-scroll::-webkit-scrollbar-thumb:hover,
+.app-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-indigo-500) 75%, var(--color-neutral-600));
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+.habit-scroll::-webkit-scrollbar-corner,
+.app-scrollbar::-webkit-scrollbar-corner {
     background: transparent;
 }

@@ -1,11 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../state/types";
 import { DataAccessAuthError } from "./DataAccess";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./staging/types";
 import type { PushPlan, SyncRemote } from "./sync/types";
 import { completionRpcPayload } from "./sync/timerCompletions";
 import { isValidRule } from "../todos";
 import type { Todo, TodoCompletion, TodoRule } from "../todos";
+import { parsePersistedSettings } from "../settings";
 
 const PAGE_SIZE = 500;
 type JsonRecord = Record<string, unknown>;
@@ -16,16 +17,6 @@ function clone<T>(value: T): T {
 
 function isRecord(value: unknown): value is JsonRecord {
     return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isSettings(value: unknown): value is Settings {
-    return (
-        isRecord(value) &&
-        typeof value.work_minutes === "number" &&
-        typeof value.short_break_minutes === "number" &&
-        typeof value.long_break_minutes === "number" &&
-        typeof value.segment_length === "number"
-    );
 }
 
 /**
@@ -337,7 +328,8 @@ export class SupabaseDataAccess implements SyncRemote {
         }
 
         const settingsData = settingsResponse.data?.data;
-        if (settingsData !== undefined && !isSettings(settingsData)) {
+        const parsedSettings = settingsData === undefined ? null : parsePersistedSettings(settingsData);
+        if (settingsData !== undefined && parsedSettings === null) {
             this.fail("settings", new Error(`invalid settings row for ${ownerId}`));
         }
         const timerData = timerResponse.data?.data;
@@ -357,7 +349,7 @@ export class SupabaseDataAccess implements SyncRemote {
             todos,
             todoCompletions,
             settings: {
-                value: settingsResponse.data ? clone(settingsData) : null,
+                value: settingsResponse.data ? clone(parsedSettings) : null,
                 updatedAt: settingsResponse.data?.updated_at ?? null,
             },
             timerState: {
