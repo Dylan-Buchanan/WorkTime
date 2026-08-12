@@ -28,6 +28,18 @@ export {
 
 export { buildWeekOverview } from "./weekOverview";
 export type { BuildWeekOverviewInput, WeekOverview, WeekOverviewDay } from "./weekOverview";
+export {
+    buildShortcutTaskProposal,
+    classifyShortcutStories,
+    normalizeShortcutUrl,
+} from "./shortcutClassification";
+export type {
+    ClassifyShortcutStoriesInput,
+    ShortcutClassificationCounts,
+    ShortcutClassificationResult,
+    ShortcutStoryPayload,
+    ShortcutTaskProposal,
+} from "./shortcutClassification";
 export type {
     StartOfDayPlanItem,
     StartOfDayPlanIssue,
