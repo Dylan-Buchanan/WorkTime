@@ -25,6 +25,9 @@ export {
     START_OF_DAY_MAX_TASK_POMOS,
     validateStartOfDayPlan,
 } from "./startOfDay";
+
+export { buildWeekOverview } from "./weekOverview";
+export type { BuildWeekOverviewInput, WeekOverview, WeekOverviewDay } from "./weekOverview";
 export type {
     StartOfDayPlanItem,
     StartOfDayPlanIssue,

@@ -29,6 +29,7 @@ import { HabitsPage } from "./components/HabitsPage";
 import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 import { TodoProvider } from "./state/TodoContext";
 import { TodosPage } from "./components/TodosPage";
+import { WeekOverviewPage } from "./components/WeekOverviewPage";
 
 const App: React.FC = () => (
     <BrowserRouter>
@@ -47,6 +48,7 @@ const App: React.FC = () => (
                         <Route path="/analytics" element={<AnalyticsPage />} />
                         <Route path="/habits" element={<HabitsPage />} />
                         <Route path="/todos" element={<TodosPage />} />
+                        <Route path="/week" element={<WeekOverviewPage />} />
                     </Route>
                 </Route>
                 <Route path="*" element={<UnknownRoute />} />
@@ -114,6 +116,7 @@ const TopNav: React.FC = () => {
             <Link to="/analytics" onClick={() => handleClick("/analytics")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/analytics"))}>Analytics</Link>
             <Link to="/habits" onClick={() => handleClick("/habits")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/habits"))}>Habits</Link>
             <Link to="/todos" onClick={() => handleClick("/todos")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/todos"))}>To-dos</Link>
+            <Link to="/week" onClick={() => handleClick("/week")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/week"))}>Week</Link>
             <div className="ml-auto flex flex-wrap items-center gap-2">
                 {error && <span role="alert" className="text-red-300">{error}</span>}
                 <SyncControls />
