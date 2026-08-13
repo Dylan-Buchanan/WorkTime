@@ -32,6 +32,7 @@ export {
     buildShortcutTaskProposal,
     classifyShortcutStories,
     normalizeShortcutUrl,
+    shortcutPointsToPomodoros,
 } from "./shortcutClassification";
 export type {
     ClassifyShortcutStoriesInput,

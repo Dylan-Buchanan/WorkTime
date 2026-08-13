@@ -355,6 +355,11 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
                             ? { ...proposal, projectId }
                             : proposal),
                     } : current)}
+                    onRemove={(index) => setPreview((current) => current ? {
+                        ...current,
+                        proposals: current.proposals.filter((_, proposalIndex) => proposalIndex !== index),
+                        counts: { ...current.counts, new: Math.max(0, current.counts.new - 1) },
+                    } : current)}
                 />
             )}
         </article>
@@ -378,6 +383,7 @@ function ShortcutPreviewModal({
     onCancel,
     onConfirm,
     onProjectChange,
+    onRemove,
 }: {
     preview: ShortcutClassificationResult;
     projects: readonly Project[];
@@ -386,6 +392,7 @@ function ShortcutPreviewModal({
     onCancel: () => void;
     onConfirm: () => void;
     onProjectChange: (index: number, projectId: string | null) => void;
+    onRemove: (index: number) => void;
 }) {
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="shortcut-preview-title">
@@ -415,6 +422,7 @@ function ShortcutPreviewModal({
                             proposal={proposal}
                             projects={projects}
                             onProjectChange={(projectId) => onProjectChange(index, projectId)}
+                            onRemove={() => onRemove(index)}
                         />
                     ))}
                 </div>
@@ -440,14 +448,27 @@ function ProposalPreview({
     proposal,
     projects,
     onProjectChange,
+    onRemove,
 }: {
     proposal: ShortcutTaskProposal;
     projects: readonly Project[];
     onProjectChange: (projectId: string | null) => void;
+    onRemove: () => void;
 }) {
     return (
         <article className="rounded border border-neutral-800 bg-neutral-900/50 p-3">
-            <h3 className="text-[11px] font-medium text-neutral-100">{proposal.title}</h3>
+            <div className="flex items-start justify-between gap-3">
+                <h3 className="text-[11px] font-medium text-neutral-100">{proposal.title}</h3>
+                <button
+                    type="button"
+                    aria-label={`Remove ${proposal.title} from import`}
+                    title="Remove from import"
+                    onClick={onRemove}
+                    className="shrink-0 rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+                >
+                    <X aria-hidden="true" size={14} />
+                </button>
+            </div>
             {proposal.description && <p className="mt-1 line-clamp-2 text-[10px] text-neutral-500">{proposal.description}</p>}
             <label className="mt-2 block text-[9px] text-neutral-500">
                 Project

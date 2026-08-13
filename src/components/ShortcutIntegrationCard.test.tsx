@@ -124,12 +124,38 @@ describe("ShortcutIntegrationCard", () => {
         await waitFor(() => expect(createTask).toHaveBeenCalledWith("New story", expect.objectContaining({
             status: "Backlog",
             priority: "Medium",
-            estimatePomos: 3,
+            estimatePomos: 8,
             projectId: "project-2",
             links: [newStory.app_url],
         })));
         expect(await screen.findByLabelText("Shortcut sync result")).toHaveTextContent("Created 1");
         expect(screen.getByText(/Last synced:/)).not.toHaveTextContent("Never");
+    });
+
+    it("removes selected tasks from the preview before creating", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        access.sync.mockResolvedValue({
+            stories: [
+                newStory,
+                { ...newStory, id: 2, app_url: "https://app.shortcut.com/acme/story/2", name: "Keep this story" },
+            ],
+            syncedAt: "2026-08-12T12:00:00.000Z",
+        });
+        const createTask = vi.fn().mockResolvedValue(createdTask());
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync now" }));
+        const dialog = await screen.findByRole("dialog", { name: "Shortcut sync preview" });
+        await user.click(within(dialog).getByRole("button", { name: "Remove New story from import" }));
+
+        expect(within(dialog).queryByText("New story")).not.toBeInTheDocument();
+        expect(within(dialog).getByText("Keep this story")).toBeInTheDocument();
+        await user.click(within(dialog).getByRole("button", { name: "Create 1 task" }));
+
+        await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+        expect(createTask).toHaveBeenCalledWith("Keep this story", expect.anything());
+        expect(createTask).not.toHaveBeenCalledWith("New story", expect.anything());
     });
 
     it("reports a partial task-creation failure and keeps the preview open", async () => {

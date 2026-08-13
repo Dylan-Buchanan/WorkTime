@@ -4,6 +4,7 @@ import {
     buildShortcutTaskProposal,
     classifyShortcutStories,
     normalizeShortcutUrl,
+    shortcutPointsToPomodoros,
     type ShortcutStoryPayload,
 } from "./shortcutClassification";
 
@@ -111,9 +112,19 @@ describe("shortcut story classification", () => {
         });
     });
 
-    it("maps estimate and deadline when Shortcut provides them", () => {
+    it("maps Shortcut points to pomodoros and preserves the deadline", () => {
         const result = buildShortcutTaskProposal(story(8, { estimate: 5, deadline: "2026-09-01" }));
 
-        expect(result).toMatchObject({ estimatePomos: 5, dueDate: "2026-09-01" });
+        expect(result).toMatchObject({ estimatePomos: 12, dueDate: "2026-09-01" });
+    });
+
+    it.each([
+        [0, 1],
+        [1, 3],
+        [2, 5],
+        [3, 8],
+        [5, 12],
+    ])("converts %i Shortcut points to %i pomodoros", (points, pomodoros) => {
+        expect(shortcutPointsToPomodoros(points)).toBe(pomodoros);
     });
 });

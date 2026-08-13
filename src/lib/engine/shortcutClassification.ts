@@ -50,6 +50,21 @@ export interface ClassifyShortcutStoriesInput {
     defaultProjectId: string | null;
 }
 
+const SHORTCUT_POINTS_TO_POMODOROS: Readonly<Record<number, number>> = {
+    0: 1,
+    1: 3,
+    2: 5,
+    3: 8,
+    5: 12,
+};
+
+/** Convert Shortcut story points to the equivalent WorkTime pomodoro estimate. */
+export function shortcutPointsToPomodoros(points: number): number {
+    // Keep unsupported/non-standard point values compatible with the previous
+    // behavior until an explicit mapping for them is defined.
+    return SHORTCUT_POINTS_TO_POMODOROS[points] ?? points;
+}
+
 /**
  * Normalize a Shortcut app URL for deduplication without changing meaningful
  * URL components. Shortcut app URLs may be copied with surrounding whitespace
@@ -73,7 +88,7 @@ export function buildShortcutTaskProposal(
         status: "Backlog",
         priority: "Medium",
         ...(story.deadline !== null ? { dueDate: story.deadline } : {}),
-        ...(story.estimate !== null ? { estimatePomos: story.estimate } : {}),
+        ...(story.estimate !== null ? { estimatePomos: shortcutPointsToPomodoros(story.estimate) } : {}),
         description: story.description,
         tags: [story.story_type],
         links: [story.app_url],
