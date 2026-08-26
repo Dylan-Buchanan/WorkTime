@@ -81,12 +81,12 @@ export const TaskInspector: React.FC = () => {
         return parsed.toISOString().slice(0, 10);
     }, []);
 
-    if (!task) return <div className="h-full flex items-center justify-center text-xs opacity-60">Select a task</div>;
+    if (!task) return <div className="h-full flex items-center justify-center text-xs text-neutral-500">Select a task</div>;
 
     return (
-        <div className="flex flex-col h-full text-xs">
-            <div className="p-3 border-b border-neutral-800 space-y-2">
-                <InlineEditable value={task.title} onChange={(v) => updateTask(task.id, { title: v })} className="text-sm font-medium" />
+        <div className="flex flex-col h-full min-h-0 text-xs">
+            <div className="px-4 py-3 border-b border-neutral-800 space-y-2 bg-neutral-900/30">
+                <InlineEditable value={task.title} onChange={(v) => updateTask(task.id, { title: v })} className="text-sm font-medium text-neutral-100" />
                 <div className="flex items-center gap-2 flex-wrap">
                     <Select value={task.projectId || ""} onValueChange={(v) => updateTask(task.id, { projectId: v || null })}>
                         <option value="">No Project</option>
@@ -110,9 +110,9 @@ export const TaskInspector: React.FC = () => {
                     </Select>
                 </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-4">
+            <div className="flex-1 min-h-0 app-scrollbar overflow-y-auto px-4 py-4 space-y-5">
                 <Section title="When">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-2">
                         <label className="flex items-center gap-1">
                             Due{" "}
                             <input
@@ -123,43 +123,45 @@ export const TaskInspector: React.FC = () => {
                                         dueDate: e.target.value || undefined,
                                     })
                                 }
-                                className="bg-neutral-900 text-xs"
+                                className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs outline-none focus:border-neutral-600"
                             />
                         </label>
-                        <button
-                            className="text-[10px] underline"
-                            onClick={() =>
-                                updateTask(task.id, {
-                                    dueDate: new Date().toISOString().slice(0, 10),
-                                })
-                            }
-                        >
-                            Today
-                        </button>
-                        <button
-                            className="text-[10px] underline"
-                            onClick={() => {
-                                const d = new Date();
-                                d.setDate(d.getDate() + 1);
-                                updateTask(task.id, {
-                                    dueDate: d.toISOString().slice(0, 10),
-                                });
-                            }}
-                        >
-                            Tomorrow
-                        </button>
-                        <button
-                            className="text-[10px] underline"
-                            onClick={() => {
-                                const d = new Date();
-                                d.setDate(d.getDate() + 7);
-                                updateTask(task.id, {
-                                    dueDate: d.toISOString().slice(0, 10),
-                                });
-                            }}
-                        >
-                            Next Week
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                className="text-[10px] whitespace-nowrap text-neutral-400 underline underline-offset-2 hover:text-neutral-200"
+                                onClick={() =>
+                                    updateTask(task.id, {
+                                        dueDate: new Date().toISOString().slice(0, 10),
+                                    })
+                                }
+                            >
+                                Today
+                            </button>
+                            <button
+                                className="text-[10px] whitespace-nowrap text-neutral-400 underline underline-offset-2 hover:text-neutral-200"
+                                onClick={() => {
+                                    const d = new Date();
+                                    d.setDate(d.getDate() + 1);
+                                    updateTask(task.id, {
+                                        dueDate: d.toISOString().slice(0, 10),
+                                    });
+                                }}
+                            >
+                                Tomorrow
+                            </button>
+                            <button
+                                className="text-[10px] whitespace-nowrap text-neutral-400 underline underline-offset-2 hover:text-neutral-200"
+                                onClick={() => {
+                                    const d = new Date();
+                                    d.setDate(d.getDate() + 7);
+                                    updateTask(task.id, {
+                                        dueDate: d.toISOString().slice(0, 10),
+                                    });
+                                }}
+                            >
+                                Next Week
+                            </button>
+                        </div>
                     </div>
                 </Section>
                 <Section title="Estimate & Time">
@@ -184,13 +186,13 @@ export const TaskInspector: React.FC = () => {
                                         e.currentTarget.blur();
                                     }
                                 }}
-                                className="w-16 bg-neutral-900"
+                                className="w-16 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 outline-none focus:border-neutral-600"
                             />
                             p
                         </label>
-                        <div className="opacity-70">Spent {task.timeSpentMinutes}m</div>
+                        <div className="text-neutral-400">Spent {task.timeSpentMinutes}m</div>
                         <button
-                            className="text-[10px] px-2 py-1 rounded bg-neutral-800"
+                            className="text-[10px] px-2.5 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                             onClick={async () => {
                                 // Link or create timer task
                                 let appId = task.appTaskId;
@@ -219,7 +221,7 @@ export const TaskInspector: React.FC = () => {
                     {Number.isFinite(Number(task.estimatePomos)) && (
                         <div className="h-1 bg-neutral-800 rounded overflow-hidden mt-1">
                             <div
-                                className="h-full bg-neutral-400"
+                                className="h-full bg-indigo-500"
                                 style={{
                                     width: (() => {
                                         const spent = Number(task.timeSpentMinutes) || 0;
@@ -238,7 +240,7 @@ export const TaskInspector: React.FC = () => {
                         value={task.description || ""}
                         onChange={(e) => updateTask(task.id, { description: e.target.value })}
                         placeholder="Markdown notes"
-                        className="w-full h-28 bg-neutral-900 rounded p-2 text-xs"
+                        className="w-full h-28 bg-neutral-900 border border-neutral-800 rounded p-2 text-xs outline-none focus:border-neutral-600 resize-y"
                     />
                     <TagEditor tags={task.tags} onChange={(tags) => updateTask(task.id, { tags })} />
                     <LinksEditor links={task.links} onChange={(links) => updateTask(task.id, { links })} />
@@ -247,10 +249,13 @@ export const TaskInspector: React.FC = () => {
                     <Checklist task={task} update={(patch) => updateTask(task.id, patch)} />
                 </Section>
             </div>
-            <div className="p-3 border-t border-neutral-800 text-[10px] flex flex-wrap gap-2 items-center">
-                <div className="opacity-60">Created {formatMetaDate(task.createdAt)}</div>
-                <div className="opacity-60">Updated {formatMetaDate(task.updatedAt)}</div>
-                <button onClick={() => updateTask(task.id, { isArchived: !task.isArchived })} className="ml-auto underline">
+            <div className="px-4 py-2.5 border-t border-neutral-800 text-[10px] text-neutral-500 flex flex-wrap gap-x-3 gap-y-1 items-center bg-neutral-900/30">
+                <span>Created {formatMetaDate(task.createdAt)}</span>
+                <span>Updated {formatMetaDate(task.updatedAt)}</span>
+                <button
+                    onClick={() => updateTask(task.id, { isArchived: !task.isArchived })}
+                    className="ml-auto px-2 py-1 rounded text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 transition-colors"
+                >
                     {task.isArchived ? "Unarchive" : "Archive"} Task
                 </button>
             </div>
@@ -260,7 +265,7 @@ export const TaskInspector: React.FC = () => {
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
     <div className="space-y-2">
-        <div className="text-[10px] uppercase tracking-wide opacity-60">{title}</div>
+        <div className="text-[10px] uppercase tracking-wide font-medium text-neutral-500">{title}</div>
         {children}
     </div>
 );
@@ -269,7 +274,7 @@ interface MiniSelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElem
     onValueChange?: (v: string) => void;
 }
 const Select: React.FC<MiniSelectProps> = ({ onValueChange, ...rest }) => (
-    <select {...rest} onChange={(e) => onValueChange?.(e.target.value)} className={`bg-neutral-900 rounded px-2 py-1 text-[10px] outline-none ${rest.className || ""}`}>
+    <select {...rest} onChange={(e) => onValueChange?.(e.target.value)} className={`bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-[10px] text-neutral-300 outline-none focus:border-neutral-600 ${rest.className || ""}`}>
         {rest.children}
     </select>
 );
@@ -292,7 +297,7 @@ const InlineEditable: React.FC<{
                 }}
                 value={local}
                 onChange={(e) => setLocal(e.target.value)}
-                className={`bg-neutral-900 rounded px-2 py-1 text-xs w-full ${className || ""}`}
+                className={`bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs w-full outline-none focus:border-neutral-600 ${className || ""}`}
             />
         );
     return (
@@ -316,8 +321,8 @@ const TagEditor: React.FC<{
         <div className="space-y-1">
             <div className="flex flex-wrap gap-1">
                 {tags.map((t) => (
-                    <span key={t} className="px-2 py-0.5 bg-neutral-800 rounded-full text-[10px]">
-                        {t} <button onClick={() => onChange(tags.filter((x) => x !== t))}>×</button>
+                    <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 bg-neutral-800 rounded-full text-[10px] text-neutral-300">
+                        {t} <button onClick={() => onChange(tags.filter((x) => x !== t))} className="text-neutral-500 hover:text-neutral-200">×</button>
                     </span>
                 ))}
             </div>
@@ -326,7 +331,7 @@ const TagEditor: React.FC<{
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Add tag"
-                    className="bg-neutral-900 rounded px-2 py-1 text-[10px]"
+                    className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-[10px] outline-none focus:border-neutral-600"
                     onKeyDown={(e) => {
                         if (e.key === "Enter") {
                             e.preventDefault();
@@ -334,7 +339,7 @@ const TagEditor: React.FC<{
                         }
                     }}
                 />
-                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
+                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors">
                     Add
                 </button>
             </div>
@@ -356,11 +361,11 @@ const LinksEditor: React.FC<{
         <div className="space-y-1">
             <div className="space-y-1">
                 {links.map((l, i) => (
-                    <div key={i} className="flex items-center gap-2 text-[10px] bg-neutral-900 px-2 py-1 rounded">
+                    <div key={i} className="flex items-center gap-2 text-[10px] bg-neutral-900 border border-neutral-800 px-2 py-1 rounded">
                         <a href={l} target="_blank" rel="noreferrer" className="underline truncate flex-1">
                             {l}
                         </a>
-                        <button onClick={() => onChange(links.filter((x) => x !== l))}>×</button>
+                        <button onClick={() => onChange(links.filter((x) => x !== l))} className="text-neutral-500 hover:text-neutral-200">×</button>
                     </div>
                 ))}
             </div>
@@ -369,7 +374,7 @@ const LinksEditor: React.FC<{
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="https://"
-                    className="bg-neutral-900 rounded px-2 py-1 text-[10px] flex-1"
+                    className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-[10px] flex-1 outline-none focus:border-neutral-600"
                     onKeyDown={(e) => {
                         if (e.key === "Enter") {
                             e.preventDefault();
@@ -377,7 +382,7 @@ const LinksEditor: React.FC<{
                         }
                     }}
                 />
-                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
+                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors">
                     Add
                 </button>
             </div>
@@ -403,7 +408,7 @@ const Checklist: React.FC<{
         <div className="space-y-2">
             <div className="space-y-1">
                 {task.checklist.map((item) => (
-                    <label key={item.id} className="flex items-center gap-2 text-[11px] bg-neutral-900 px-2 py-1 rounded">
+                    <label key={item.id} className="flex items-center gap-2 text-[11px] bg-neutral-900 border border-neutral-800 px-2 py-1 rounded">
                         <input
                             type="checkbox"
                             checked={item.done}
@@ -422,7 +427,7 @@ const Checklist: React.FC<{
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Add checklist item"
-                    className="bg-neutral-900 rounded px-2 py-1 text-[10px] flex-1"
+                    className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-[10px] flex-1 outline-none focus:border-neutral-600"
                     onKeyDown={(e) => {
                         if (e.key === "Enter") {
                             e.preventDefault();
@@ -430,7 +435,7 @@ const Checklist: React.FC<{
                         }
                     }}
                 />
-                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800">
+                <button onClick={add} className="text-[10px] px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors">
                     Add
                 </button>
             </div>

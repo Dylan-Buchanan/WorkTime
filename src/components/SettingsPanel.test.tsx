@@ -48,6 +48,13 @@ describe("SettingsPanel reset scope", () => {
         expect(minute).toHaveValue("00");
         expect(screen.getByRole("button", { name: "PM" })).toHaveAttribute("aria-pressed", "true");
 
+        // Settle every pending provider update (PM hydration, sync bootstrap,
+        // Tauri adapter) before driving the controlled inputs. If a provider
+        // re-render is still pending when the change event dispatches, React
+        // restores the input's controlled value and drops the state update
+        // from onChange, silently losing the edit.
+        await act(async () => {});
+
         fireEvent.change(hour, { target: { value: "6" } });
         fireEvent.blur(hour);
         fireEvent.change(minute, { target: { value: "30" } });
