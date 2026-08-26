@@ -262,7 +262,7 @@ export const TimerPanel: React.FC = () => {
     }, [pmState.tasks, activeAppTaskId, activeAppTask?.name, activeIsTodoTask]);
     const linkedTaskId = linkedTask?.id ?? null;
 
-    const inspectorTaskId = pmSelectedId ?? linkedTaskId ?? null;
+    const inspectorTaskId = linkedTaskId ?? pmSelectedId ?? null;
     const inspectorTask = inspectorTaskId && pmState.tasks[inspectorTaskId] ? pmState.tasks[inspectorTaskId] : null;
     const metadataTask = inspectorTask ?? linkedTask ?? null;
 
@@ -271,11 +271,11 @@ export const TimerPanel: React.FC = () => {
     const canShowDetails = Boolean(pmSelectedId || linkedTaskId || activeAppTaskId);
 
     const openDetails = useCallback(() => {
-        const targetId = pmSelectedId ?? linkedTaskId ?? null;
+        const targetId = linkedTaskId ?? pmSelectedId ?? null;
         if (targetId && targetId !== pmSelectedId) {
             setSelectedTask(targetId);
         }
-        if (!pmSelectedId && targetId) {
+        if (linkedTaskId && linkedTaskId !== pmSelectedId) {
             autoSelectedTaskRef.current = targetId;
         } else {
             autoSelectedTaskRef.current = null;
@@ -323,13 +323,10 @@ export const TimerPanel: React.FC = () => {
             return;
         }
         if (pmSelectedId === linkedTaskId) {
-            autoSelectedTaskRef.current = linkedTaskId;
             return;
         }
-        if (!pmSelectedId || autoSelectedTaskRef.current) {
-            setSelectedTask(linkedTaskId);
-            autoSelectedTaskRef.current = linkedTaskId;
-        }
+        setSelectedTask(linkedTaskId);
+        autoSelectedTaskRef.current = linkedTaskId;
     }, [detailsOpen, pmSelectedId, linkedTaskId, setSelectedTask]);
 
     const kindBadge = timer ? (

@@ -1,15 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { TimerPanel } from "./TimerPanel";
-import { AppStateProvider } from "../state/AppStateContext";
+import { AppStateProvider, useAppState } from "../state/AppStateContext";
 import { DataProvider } from "../state/DataContext";
-import { ProjectManagerProvider } from "../state/ProjectManagerContext";
+import { ProjectManagerProvider, usePM } from "../state/ProjectManagerContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { toLocalDateKey } from "../lib/timer";
-import { makeAppState } from "../test/mockTauri";
-import type { PMTask } from "../state/types";
+import { makeActiveTimer, makeAppState } from "../test/mockTauri";
+import type { PMTask, Task } from "../state/types";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -44,17 +45,46 @@ function futureDateKey(): string {
     return toLocalDateKey(date);
 }
 
-function wrap(data: InMemoryDataAccess) {
+function makeAppTask(id: string, name: string): Task {
+    return {
+        id,
+        name,
+        target_pomodoros: 2,
+        completed_pomodoros: 0,
+        created_at: "2026-01-01T00:00:00.000Z",
+        completed_at: null,
+        break_skips: 0,
+        archived: false,
+    };
+}
+
+const SelectionProbe = () => {
+    const { state } = usePM();
+    return <span hidden data-testid="pm-selected-task">{state.ui.selectedTaskId ?? ""}</span>;
+};
+
+const ActiveTaskSwitcher: React.FC<{ taskId: string }> = ({ taskId }) => {
+    const { setActiveTask } = useAppState();
+    return <button onClick={() => void setActiveTask(taskId)}>Switch active timer task</button>;
+};
+
+function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
     return (
-        <TauriCloseProvider>
-            <DataProvider dataAccess={data}>
-                <SyncProvider ownerId={OWNER}>
-                    <AppStateProvider>
-                        <ProjectManagerProvider><TimerPanel /></ProjectManagerProvider>
-                    </AppStateProvider>
-                </SyncProvider>
-            </DataProvider>
-        </TauriCloseProvider>
+        <MemoryRouter>
+            <TauriCloseProvider>
+                <DataProvider dataAccess={data}>
+                    <SyncProvider ownerId={OWNER}>
+                        <AppStateProvider>
+                            <ProjectManagerProvider>
+                                <SelectionProbe />
+                                {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
+                                <TimerPanel />
+                            </ProjectManagerProvider>
+                        </AppStateProvider>
+                    </SyncProvider>
+                </DataProvider>
+            </TauriCloseProvider>
+        </MemoryRouter>
     );
 }
 
@@ -68,6 +98,46 @@ async function renderWithTasks(tasks: Record<string, PMTask>) {
     render(wrap(data));
     return data;
 }
+
+beforeEach(() => localStorage.clear());
+
+describe("TimerPanel task details", () => {
+    it("replaces a persisted Projects selection with the active timer task and follows timer task changes", async () => {
+        localStorage.setItem("pm_state_v1", JSON.stringify({ ui: { selectedTaskId: "projects-task" } }));
+        const appTaskOne = makeAppTask("app-active-one", "Active application task one");
+        const appTaskTwo = makeAppTask("app-active-two", "Active application task two");
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { [appTaskOne.id]: appTaskOne, [appTaskTwo.id]: appTaskTwo },
+            active_task: appTaskOne.id,
+            timer: makeActiveTimer({ task_id: appTaskOne.id }),
+        }));
+        await data.savePMState({
+            projects: {},
+            tasks: {
+                "projects-task": makePMTask({ id: "projects-task", title: "Previously selected project task" }),
+                "timer-task-one": makePMTask({ id: "timer-task-one", title: "Active timer task one", appTaskId: appTaskOne.id }),
+                "timer-task-two": makePMTask({ id: "timer-task-two", title: "Active timer task two", appTaskId: appTaskTwo.id }),
+            },
+            meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
+        });
+        render(wrap(data, appTaskTwo.id));
+
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("projects-task"));
+        fireEvent.click(screen.getByRole("button", { name: "Task Details" }));
+
+        const details = document.getElementById("timer-task-details-panel");
+        expect(details).not.toBeNull();
+        await waitFor(() => expect(within(details!).getByText("Active timer task one")).toBeInTheDocument());
+        expect(within(details!).queryByText("Previously selected project task")).not.toBeInTheDocument();
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("timer-task-one");
+
+        fireEvent.click(screen.getByRole("button", { name: "Switch active timer task" }));
+
+        await waitFor(() => expect(within(details!).getByText("Active timer task two")).toBeInTheDocument());
+        expect(within(details!).queryByText("Active timer task one")).not.toBeInTheDocument();
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("timer-task-two");
+    });
+});
 
 describe("TimerPanel projected finish", () => {
     it("discloses future-due work instead of claiming the day is complete", async () => {
