@@ -40,3 +40,5 @@ After dependency or source changes, run `pnpm install` and `pnpm run build`. Bef
 - `pnpm tauri build` — explicit Windows packaging smoke gate; requires all public Vite variables and should produce an MSI under `src-tauri/target/release/bundle/msi/`.
 
 Keep `DataProvider`, `AppStateProvider`, `ProjectManagerProvider`, and `StateSyncBridge` behind the authenticated route shell. Public auth pages must not trigger authenticated data reads. Preserve the existing notification entry point and its Web Notification fallback, and do not change timer/task semantics without updating the TypeScript engine tests.
+
+When finished implementing a feature run `pnpm version minor`. When finished implementing a bug fic run `pnpm version patch`. Major version upgrades should never be done.
