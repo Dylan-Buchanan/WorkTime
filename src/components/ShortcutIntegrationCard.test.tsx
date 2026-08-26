@@ -33,7 +33,7 @@ const newStory = {
     name: "New story",
     description: "Build the new flow",
     estimate: 3,
-    deadline: "2026-08-20",
+    deadline: "2026-08-20T00:00:00Z",
     workflow_state_id: 1,
     status_name: "Ready",
     completed: false,
@@ -112,6 +112,7 @@ describe("ShortcutIntegrationCard", () => {
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Shortcut sync preview" });
         expect(within(dialog).getByText("New story")).toBeInTheDocument();
+        expect(within(dialog).getByText("Due 2026-08-20")).toBeInTheDocument();
         expect(within(dialog).getByLabelText("Project for New story")).toHaveValue("project-1");
         expect(createTask).not.toHaveBeenCalled();
         await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -125,6 +126,7 @@ describe("ShortcutIntegrationCard", () => {
             status: "Backlog",
             priority: "Medium",
             estimatePomos: 8,
+            dueDate: "2026-08-20",
             projectId: "project-2",
             links: [newStory.app_url],
         })));

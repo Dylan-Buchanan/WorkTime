@@ -12,6 +12,7 @@ import {
 } from "../lib/agent/snapshotStore";
 import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/snapshotStore";
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
+import { normalizeTaskDueDate } from "../lib/taskDueDate";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -509,12 +510,16 @@ export const ProjectManagerProvider: React.FC<{
                 ? Object.values(prev.tasks).find((task) => task.appTaskId === opts.appTaskId)
                 : undefined;
             if (linked) {
+                const dueDate = Object.prototype.hasOwnProperty.call(opts, "dueDate")
+                    ? normalizeTaskDueDate(opts.dueDate)
+                    : linked.dueDate;
                 const task: PMTask = {
                     ...linked,
                     ...opts,
                     id: linked.id,
                     title,
                     projectId,
+                    dueDate,
                     updatedAt: now(),
                 };
                 created = task;
@@ -530,7 +535,7 @@ export const ProjectManagerProvider: React.FC<{
                 projectId,
                 status,
                 priority: opts.priority || "Medium",
-                dueDate: opts.dueDate,
+                dueDate: normalizeTaskDueDate(opts.dueDate),
                 estimatePomos: (opts as any).estimatePomos !== undefined ? (opts as any).estimatePomos : undefined,
                 timeSpentMinutes: opts.timeSpentMinutes || 0,
                 workedPomos: opts.workedPomos || 0,
@@ -599,7 +604,7 @@ export const ProjectManagerProvider: React.FC<{
                 patch.status = opts.status;
             }
             if (Object.prototype.hasOwnProperty.call(opts, "dueDate")) {
-                patch.dueDate = opts.dueDate;
+                patch.dueDate = normalizeTaskDueDate(opts.dueDate);
             }
             if (Object.prototype.hasOwnProperty.call(opts, "tags")) {
                 patch.tags = opts.tags;
@@ -634,7 +639,10 @@ export const ProjectManagerProvider: React.FC<{
     const updateTask = (id: string, patch: Partial<PMTask>) => {
         const t = state.tasks[id];
         if (!t) return;
-        const upd: PMTask = { ...t, ...patch, updatedAt: now() };
+        const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "dueDate")
+            ? { ...patch, dueDate: normalizeTaskDueDate(patch.dueDate) }
+            : patch;
+        const upd: PMTask = { ...t, ...normalizedPatch, updatedAt: now() };
         persist((prev) => ({
             ...prev,
             tasks: { ...prev.tasks, [id]: upd },
@@ -864,6 +872,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
                 projectId,
                 status,
                 priority,
+                dueDate: normalizeTaskDueDate(task.dueDate),
                 tags,
                 links,
                 checklist,

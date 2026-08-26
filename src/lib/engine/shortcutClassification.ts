@@ -1,4 +1,5 @@
 import type { PMTask, TaskPriority, TaskStatus } from "../../state/types";
+import { normalizeTaskDueDate } from "../taskDueDate";
 
 /** The slim story shape returned by the shortcut-sync Edge Function. */
 export interface ShortcutStoryPayload {
@@ -82,12 +83,13 @@ export function buildShortcutTaskProposal(
     story: ShortcutStoryPayload,
     projectId: string | null = null,
 ): ShortcutTaskProposal {
+    const dueDate = normalizeTaskDueDate(story.deadline);
     return {
         title: story.name,
         projectId,
         status: "Backlog",
         priority: "Medium",
-        ...(story.deadline !== null ? { dueDate: story.deadline } : {}),
+        ...(dueDate !== undefined ? { dueDate } : {}),
         ...(story.estimate !== null ? { estimatePomos: shortcutPointsToPomodoros(story.estimate) } : {}),
         description: story.description,
         tags: [story.story_type],

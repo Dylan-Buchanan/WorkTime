@@ -84,6 +84,21 @@ describe("normalizeState", () => {
         expect(s.tasks.t1.timeSpentMinutes).toBe(0);
     });
 
+    it("normalizes persisted task due-date timestamps for every PM surface", () => {
+        const s = normalizeState({
+            projects: { p1: { id: "p1", name: "P", color: "#fff", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } },
+            tasks: {
+                t1: {
+                    id: "t1", title: "Imported", projectId: "p1", status: "Backlog", priority: "Medium",
+                    dueDate: "2026-08-20T00:00:00Z", tags: [], links: [], checklist: [], relatedTo: [],
+                    timeSpentMinutes: 0, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+                },
+            },
+        });
+
+        expect(s.tasks.t1.dueDate).toBe("2026-08-20");
+    });
+
     it("fixes missing timestamps", () => {
         const s = normalizeState({
             projects: { p1: { id: "p1", name: "P", color: "#fff", isArchived: false, sortOrder: 0, createdAt: "", updatedAt: "" } },

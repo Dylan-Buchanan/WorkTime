@@ -112,10 +112,16 @@ describe("shortcut story classification", () => {
         });
     });
 
-    it("maps Shortcut points to pomodoros and preserves the deadline", () => {
-        const result = buildShortcutTaskProposal(story(8, { estimate: 5, deadline: "2026-09-01" }));
+    it("maps Shortcut points to pomodoros and normalizes the timestamp deadline", () => {
+        const result = buildShortcutTaskProposal(story(8, { estimate: 5, deadline: "2026-09-01T00:00:00Z" }));
 
         expect(result).toMatchObject({ estimatePomos: 12, dueDate: "2026-09-01" });
+    });
+
+    it("omits malformed Shortcut deadlines", () => {
+        const result = buildShortcutTaskProposal(story(9, { deadline: "not-a-date" }));
+
+        expect(result).not.toHaveProperty("dueDate");
     });
 
     it.each([
