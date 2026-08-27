@@ -2,16 +2,15 @@
 name: issue-scope-classifier
 description: Classifies the scope of a GitHub issue based on the relevant codebase context
 mode: subagent
-model: deepseek/deepseek-v4-flash
 color: "#dbd400"
 permission:
-  edit: deny
-  read: allow
-  glob: allow
-  list: allow
-  bash: deny
-  webfetch: allow
-  lsp: allow
+    edit: deny
+    read: allow
+    glob: allow
+    list: allow
+    bash: deny
+    webfetch: allow
+    lsp: allow
 ---
 
 You are a narrowly focused issue scope classification subagent.

@@ -92,19 +92,19 @@ describe("buildWeekOverview", () => {
         expect(result.days[6].unscheduledPomodoros).toBe(2);
     });
 
-    it("excludes completed, archived, and fully worked tasks and defaults missing estimates to one", () => {
+    it("excludes completed and archived tasks while keeping unfinished over-estimate tasks visible", () => {
         const result = buildWeekOverview({
             reference: WEDNESDAY,
             projects: {},
             tasks: [
                 task("done", { status: "Done", estimatePomos: 5 }),
                 task("archived", { isArchived: true, estimatePomos: 5 }),
-                task("worked", { estimatePomos: 2, workedPomos: 2 }),
+                task("worked", { estimatePomos: 2, workedPomos: 3 }),
                 task("unestimated"),
             ],
         });
 
-        expect(result.totalPomodoros).toBe(1);
-        expect(result.unscheduledPomodoros).toBe(1);
+        expect(result.totalPomodoros).toBe(2);
+        expect(result.unscheduledPomodoros).toBe(2);
     });
 });

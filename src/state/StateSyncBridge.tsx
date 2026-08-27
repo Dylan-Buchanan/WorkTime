@@ -10,7 +10,6 @@ interface PropagationTarget {
     appTaskId: string;
     pmTaskId: string;
     estimatePomos: number;
-    minTarget: number;
     desired: number;
     /** True only when the desired target differs from the current backend value. */
     push: boolean;
@@ -19,7 +18,7 @@ interface PropagationTarget {
 /**
  * Pure divergence scan for the estimate-propagation effect. For every PM task
  * with an app link and a numeric estimate, computes the normalized desired
- * backend target (clamped to the completed-work minimum). A task only needs a
+ * backend target (an integer of at least one). A task only needs a
  * push when its desired target differs from the current backend value; the
  * estimate normalization itself applies on the main path even when no push is
  * needed.
@@ -38,16 +37,13 @@ function collectPropagationTargets(
         if (typeof pmTask.estimatePomos !== "number") continue;
         const current = backendTargets[pmTask.appTaskId];
         if (current === undefined) continue;
-        const completed = appState.tasks[pmTask.appTaskId]?.completed_pomodoros ?? 0;
-        const minTarget = Math.max(1, Math.ceil(completed));
         let desired = Math.round(pmTask.estimatePomos);
-        if (!Number.isFinite(desired)) desired = minTarget;
-        if (desired < minTarget) desired = minTarget;
+        if (!Number.isFinite(desired)) desired = 1;
+        desired = Math.max(1, desired);
         targets.push({
             appTaskId: pmTask.appTaskId,
             pmTaskId: pmTask.id,
             estimatePomos: pmTask.estimatePomos,
-            minTarget,
             desired,
             push: desired !== current,
         });
@@ -126,12 +122,7 @@ export const StateSyncBridge: React.FC = () => {
         if (targets.length === 0) return cleanup;
 
         for (const target of targets) {
-            // Only normalize locally if the value actually violates constraints;
-            // otherwise leave user input intact.
-            if (
-                target.desired !== target.estimatePomos &&
-                (target.estimatePomos < target.minTarget || !Number.isFinite(target.estimatePomos))
-            ) {
+            if (target.desired !== target.estimatePomos) {
                 updateTaskRef.current(target.pmTaskId, { estimatePomos: target.desired });
             }
             if (target.push) {
@@ -317,7 +308,7 @@ export const StateSyncBridge: React.FC = () => {
             if (pendingTarget !== undefined && backendTask.target_pomodoros === pendingTarget && pmTask.appTaskId) {
                 delete pendingTargetsRef.current[pmTask.appTaskId];
             }
-            if (!shouldSkipEstimateUpdate && pmTask.estimatePomos !== backendTask.target_pomodoros) {
+            if (!shouldSkipEstimateUpdate && typeof pmTask.estimatePomos !== "number") {
                 patch.estimatePomos = backendTask.target_pomodoros;
             }
             if (touchedProgress) {

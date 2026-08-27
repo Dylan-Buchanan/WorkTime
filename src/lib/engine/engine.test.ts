@@ -118,6 +118,18 @@ describe("task lifecycle commands", () => {
         expect(result.state.active_task).toBe("t2");
     });
 
+    it("preserves the original target when switching tasks adds overage", () => {
+        const state = stateWithTask(1);
+        state.tasks.t1.completed_pomodoros = 0.75;
+        state.tasks.t2 = task("t2", 2);
+        state.timer = timer();
+
+        const result = setActiveTask(state, "t2", at(750), "log-overage-switch");
+
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(1.25);
+        expect(result.state.tasks.t1.target_pomodoros).toBe(1);
+    });
+
     it("does not prorate when selecting the same timer task", () => {
         const state = stateWithTask();
         state.timer = timer();
@@ -136,11 +148,11 @@ describe("task lifecycle commands", () => {
     });
 
     it("finalizes, archives, and clears a work timer and selection", () => {
-        const state = stateWithTask();
-        state.tasks.t1.completed_pomodoros = 3.5;
+        const state = stateWithTask(2);
+        state.tasks.t1.completed_pomodoros = 2.5;
         state.timer = timer();
         const result = finalizeTask(state, "t1", at(2000));
-        expect(result.value).toMatchObject({ target_pomodoros: 4, completed_at: at(2000).toISOString(), archived: true });
+        expect(result.value).toMatchObject({ target_pomodoros: 2, completed_pomodoros: 2.5, completed_at: at(2000).toISOString(), archived: true });
         expect(result.state.timer).toBeNull();
         expect(result.state.active_task).toBeNull();
     });
@@ -161,10 +173,11 @@ describe("task lifecycle commands", () => {
         expect(archived.state.active_task).toBe("t1");
     });
 
-    it("never sets a target below completed progress", () => {
+    it("allows estimates below completed progress while preserving the minimum target", () => {
         const state = stateWithTask();
         state.tasks.t1.completed_pomodoros = 2.5;
-        expect(setTaskTarget(state, "t1", 0).value.target_pomodoros).toBe(3);
+        expect(setTaskTarget(state, "t1", 1).value.target_pomodoros).toBe(1);
+        expect(setTaskTarget(state, "t1", 0).value.target_pomodoros).toBe(1);
     });
 });
 
@@ -199,6 +212,17 @@ describe("timer lifecycle commands", () => {
         expect(result.state.timer).toBeNull();
     });
 
+    it("preserves the original target when a completed timer adds overage", () => {
+        const state = stateWithTask(1);
+        state.tasks.t1.completed_pomodoros = 1;
+        state.timer = timer();
+
+        const result = completeTimer(state, at(1500), "log-overage-complete");
+
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(2);
+        expect(result.state.tasks.t1.target_pomodoros).toBe(1);
+    });
+
     it("does not auto-extend a finalized task on completion", () => {
         const state = stateWithTask(1);
         state.tasks.t1.completed_at = at(-100).toISOString();
@@ -216,6 +240,17 @@ describe("timer lifecycle commands", () => {
         expect(result.state.logs[0].duration_minutes).toBe(6.25);
         expect(result.state.logs[0].id).toBe("log-6");
         expect(result.state.tasks.t1.completed_at).toBeNull();
+    });
+
+    it("preserves the original target when a stopped timer adds fractional overage", () => {
+        const state = stateWithTask(1);
+        state.tasks.t1.completed_pomodoros = 0.75;
+        state.timer = timer();
+
+        const result = stopWorkTimer(state, at(750), "log-overage-stop");
+
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(1.25);
+        expect(result.state.tasks.t1.target_pomodoros).toBe(1);
     });
 });
 

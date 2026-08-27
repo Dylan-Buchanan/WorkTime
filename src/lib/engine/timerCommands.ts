@@ -78,9 +78,6 @@ export function completeTimer(state: AppStateData, now: Date, logId: string): En
             const workSecs = next.settings.work_minutes * 60;
             const fraction = workSecs > 0 ? clampFraction(planned / workSecs) : 1;
             task.completed_pomodoros += fraction;
-            if (task.completed_at === null && task.completed_pomodoros > task.target_pomodoros) {
-                task.target_pomodoros = Math.ceil(task.completed_pomodoros);
-            }
         }
         next.current_cycle_pomodoros += 1;
     }
@@ -102,9 +99,6 @@ export function stopWorkTimer(state: AppStateData, now: Date, logId: string): En
     const task = next.tasks[timer.task_id];
     if (task) {
         task.completed_pomodoros += fraction;
-        if (task.completed_pomodoros > task.target_pomodoros) {
-            task.target_pomodoros = Math.ceil(task.completed_pomodoros);
-        }
     }
     appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
     next.timer = null;

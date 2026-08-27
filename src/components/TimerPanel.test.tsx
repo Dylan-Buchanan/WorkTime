@@ -147,9 +147,9 @@ describe("TimerPanel projected finish", () => {
 
         await waitFor(() => expect(screen.getByText("No work due today. 2p future-due work remains outside this projection.")).toBeInTheDocument());
         expect(screen.queryByText("You're all caught up for today. Great work!")).not.toBeInTheDocument();
-        expect(screen.queryByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).not.toBeInTheDocument();
+        expect(screen.queryByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).not.toBeInTheDocument();
         fireEvent.click(screen.getAllByRole("button", { name: "Info" })[0]);
-        expect(screen.getByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).toBeInTheDocument();
+        expect(screen.getByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).toBeInTheDocument();
     });
 
     it("labels the included and excluded task rules when work is projected", async () => {
@@ -161,9 +161,9 @@ describe("TimerPanel projected finish", () => {
 
         await waitFor(() => expect(screen.getByText("Daily projected finish")).toBeInTheDocument());
         expect(screen.getByText("Due now · 1p")).toBeInTheDocument();
-        expect(screen.queryByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).not.toBeInTheDocument();
+        expect(screen.queryByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).not.toBeInTheDocument();
         fireEvent.click(screen.getAllByRole("button", { name: "Info" })[0]);
-        expect(screen.getByText("Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.")).toBeInTheDocument();
+        expect(screen.getByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).toBeInTheDocument();
     });
 
     it("includes later-this-week tasks in a distinct weekly projection", async () => {
@@ -183,5 +183,51 @@ describe("TimerPanel projected finish", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("shows overage against the original goal and keeps the unfinished task projected", async () => {
+        const now = Date.now();
+        const appTask = {
+            ...makeAppTask("app-overage", "Over estimate"),
+            completed_pomodoros: 2.5,
+        };
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { [appTask.id]: appTask },
+            active_task: appTask.id,
+            timer: makeActiveTimer({
+                task_id: appTask.id,
+                started_at: new Date(now - 12.5 * 60_000).toISOString(),
+                ends_at: new Date(now + 12.5 * 60_000).toISOString(),
+            }),
+        }));
+        await data.savePMState({
+            projects: {},
+            tasks: {
+                overage: makePMTask({
+                    id: "overage",
+                    title: "Over estimate",
+                    appTaskId: appTask.id,
+                    estimatePomos: 2,
+                    workedPomos: 3,
+                    dueDate: toLocalDateKey(new Date()),
+                }),
+            },
+            meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
+        });
+
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText("3p")).toBeInTheDocument());
+        expect(screen.queryByText("3.5p")).not.toBeInTheDocument();
+        expect(screen.getByText(/goal 2p/)).toBeInTheDocument();
+        expect(screen.getByText("0p")).toBeInTheDocument();
+        expect(screen.getByText("Due now · 1p")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Task Details" }));
+        const estimateInput = await screen.findByRole("spinbutton");
+        expect(estimateInput).toHaveAttribute("min", "1");
+        fireEvent.change(estimateInput, { target: { value: "1" } });
+        fireEvent.blur(estimateInput);
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.overage?.estimatePomos).toBe(1));
     });
 });

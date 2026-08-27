@@ -2,7 +2,6 @@
 name: codebase-research
 description: Research the codebase to understand a bug or task
 mode: primary
-model: deepseek/deepseek-v4-flash
 temperature: 0.1
 color: "#004d14"
 permission:

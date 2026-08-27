@@ -11,12 +11,7 @@ export const TaskInspector: React.FC = () => {
     const navigate = useNavigate();
     const id = state.ui.selectedTaskId;
     const task = id ? state.tasks[id] : null;
-    const minEstimate = React.useMemo(() => {
-        const worked = Number(task?.workedPomos);
-        const safeWorked = Number.isFinite(worked) && worked >= 0 ? worked : 0;
-        const min = Math.max(1, Math.ceil(safeWorked));
-        return Number.isFinite(min) ? min : 1;
-    }, [task?.workedPomos]);
+    const minEstimate = 1;
 
     const [estimateDraft, setEstimateDraft] = React.useState<string>("");
     const committingRef = React.useRef(false);

@@ -19,8 +19,8 @@ import { useOptionalTodos } from "../state/TodoContext";
 import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
 import { CalendarDays, CalendarRange, Check, Clock3, Coffee, Info, Target } from "lucide-react";
 
-const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Excludes future-due, Done, archived, no-estimate, and zero remaining.";
-const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Excludes later-due, Done, archived, no-estimate, and zero remaining.";
+const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
+const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
 
 type FinishProjection =
     | {
@@ -378,8 +378,8 @@ export const TimerPanel: React.FC = () => {
                 worked = Math.max(worked, (backendTask?.completed_pomodoros ?? 0) + activeFractionComplete);
             }
 
-            const remaining = Math.max(0, estimate - worked);
-            if (remaining <= EPSILON) return;
+            const estimatedRemaining = estimate - worked;
+            const remaining = estimatedRemaining > EPSILON ? estimatedRemaining : 1;
             const projectId = pmTask.projectId && pmState.projects[pmTask.projectId] ? pmTask.projectId : null;
             eligibleTasks.push({ dueDate: pmTask.dueDate, remainingPomodoros: remaining, projectId });
         });
@@ -489,12 +489,13 @@ export const TimerPanel: React.FC = () => {
 
         if (!Number.isFinite(target) || target <= EPSILON) return null;
 
-        let completed = backend?.completed_pomodoros ?? 0;
+        const backendCompleted = backend?.completed_pomodoros ?? 0;
+        let completed = backendCompleted;
         if (pmLinked && typeof pmLinked.workedPomos === "number") {
             completed = Math.max(completed, pmLinked.workedPomos);
         }
 
-        const withActive = Math.min(target, Math.max(0, completed + activeFractionComplete));
+        const withActive = Math.max(0, completed, backendCompleted + activeFractionComplete);
         const remaining = Math.max(0, target - withActive);
 
         return {

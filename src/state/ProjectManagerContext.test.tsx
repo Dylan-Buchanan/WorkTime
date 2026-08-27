@@ -432,6 +432,30 @@ describe("StateSyncBridge", () => {
         expect(data.syncCalls.filter((c) => c.reason === "bridge")).toHaveLength(1);
     });
 
+    it("preserves an estimate below completed overage in both PM and backend state", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: {
+                bt1: { id: "bt1", name: "Over estimate", target_pomodoros: 4, completed_pomodoros: 3, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false },
+            },
+        }));
+        await data.savePMState({
+            projects: {},
+            tasks: {
+                pt1: makePMTask({ id: "pt1", title: "Over estimate", appTaskId: "bt1", estimatePomos: 2 }),
+            },
+            meta: { initializedAt: "2026-01-01T00:00:00Z" },
+        });
+
+        render(wrap(data, <PMProbe />));
+
+        await waitFor(() => expect(data.store.state.tasks.bt1?.target_pomodoros).toBe(2));
+        await waitFor(async () => {
+            const pmTask = (await data.loadPMState())?.tasks.pt1;
+            expect(pmTask?.estimatePomos).toBe(2);
+            expect(pmTask?.workedPomos).toBe(3);
+        });
+    });
+
     it("keeps pending targets recoverable after a failed write and propagates a later edit", async () => {
         const data = new InMemoryDataAccess(makeAppState({
             tasks: { bt1: { id: "bt1", name: "A", target_pomodoros: 2, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } },

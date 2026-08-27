@@ -26,9 +26,6 @@ export function setActiveTask(state: AppStateData, taskId: string, now: Date, lo
             const oldTask = next.tasks[timer.task_id];
             if (oldTask && workSecs > 0) {
                 oldTask.completed_pomodoros += clampFraction(elapsed / workSecs);
-                if (oldTask.completed_pomodoros > oldTask.target_pomodoros) {
-                    oldTask.target_pomodoros = Math.ceil(oldTask.completed_pomodoros);
-                }
             }
             appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
         }
@@ -78,7 +75,6 @@ export function finalizeTask(state: AppStateData, taskId: string, now: Date): En
 
     const task = taskOrThrow(next, taskId);
     if (task.completed_at === null) {
-        task.target_pomodoros = Math.ceil(task.completed_pomodoros);
         task.completed_at = now.toISOString();
     }
     task.archived = true;
@@ -91,8 +87,5 @@ export function setTaskTarget(state: AppStateData, taskId: string, target: numbe
     const next = cloneAppState(state);
     const task = taskOrThrow(next, taskId);
     task.target_pomodoros = normalizePositiveInteger(target);
-    if (task.completed_pomodoros > task.target_pomodoros) {
-        task.target_pomodoros = Math.ceil(task.completed_pomodoros);
-    }
     return { state: next, value: { ...task } };
 }

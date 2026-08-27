@@ -33,7 +33,7 @@ function remainingPomodoros(task: PMTask): number {
     const worked = typeof task.workedPomos === "number" && Number.isFinite(task.workedPomos)
         ? Math.max(0, task.workedPomos)
         : 0;
-    return Math.max(0, Math.ceil(estimate - worked));
+    return Math.max(1, Math.ceil(estimate - worked));
 }
 
 function buildWeekDays(reference: Date): WeekOverviewDay[] {
