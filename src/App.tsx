@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { BrowserRouter } from "react-router-dom";
@@ -9,9 +9,7 @@ import { useSounds } from "./hooks/useSounds";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { ProjectManagerProvider, usePM } from "./state/ProjectManagerContext";
 import { HabitProvider } from "./state/HabitContext";
-import { ProjectManagerPage } from "./components/ProjectManager/ProjectManagerPage";
 import { AppStateProvider } from "./state/AppStateContext";
-import AnalyticsPage from "./components/AnalyticsPage";
 import StateSyncBridge from "./state/StateSyncBridge";
 import { SyncProvider } from "./state/SyncContext";
 import { SyncControls, UnsyncedBanner } from "./components/SyncControls";
@@ -21,23 +19,43 @@ import { createDefaultDataAccess } from "./lib/data/defaultDataAccess";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AuthLoading, RequireAuth } from "./auth/RequireAuth";
 import { RedirectIfAuthenticated } from "./auth/RedirectIfAuthenticated";
-import { LoginPage } from "./components/auth/LoginPage";
-import { SignupPage } from "./components/auth/SignupPage";
-import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
 import { TauriCloseProvider } from "./state/TauriCloseContext";
-import { HabitsPage } from "./components/HabitsPage";
 import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 import { TodoProvider } from "./state/TodoContext";
-import { TodosPage } from "./components/TodosPage";
-import { WeekOverviewPage } from "./components/WeekOverviewPage";
-import { IntegrationsPage } from "./components/IntegrationsPage";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { supabase } from "./lib/supabase";
+
+// Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
+// only downloaded when their route is visited, keeping the entry chunk small.
+const ProjectManagerPage = lazy(() =>
+    import("./components/ProjectManager/ProjectManagerPage").then((m) => ({ default: m.ProjectManagerPage })),
+);
+const AnalyticsPage = lazy(() => import("./components/AnalyticsPage"));
+const HabitsPage = lazy(() => import("./components/HabitsPage").then((m) => ({ default: m.HabitsPage })));
+const TodosPage = lazy(() => import("./components/TodosPage").then((m) => ({ default: m.TodosPage })));
+const WeekOverviewPage = lazy(() =>
+    import("./components/WeekOverviewPage").then((m) => ({ default: m.WeekOverviewPage })),
+);
+const IntegrationsPage = lazy(() =>
+    import("./components/IntegrationsPage").then((m) => ({ default: m.IntegrationsPage })),
+);
+const LoginPage = lazy(() => import("./components/auth/LoginPage").then((m) => ({ default: m.LoginPage })));
+const SignupPage = lazy(() => import("./components/auth/SignupPage").then((m) => ({ default: m.SignupPage })));
+const ResetPasswordPage = lazy(() =>
+    import("./components/auth/ResetPasswordPage").then((m) => ({ default: m.ResetPasswordPage })),
+);
+
+const RouteLoadingFallback: React.FC = () => (
+    <div className="flex h-full min-h-0 items-center justify-center text-xs text-neutral-500" role="status">
+        Loading…
+    </div>
+);
 
 const App: React.FC = () => (
     <BrowserRouter>
         <AuthProvider>
             <TauriCloseProvider>
+                <Suspense fallback={<RouteLoadingFallback />}>
                 <Routes>
                 <Route element={<RedirectIfAuthenticated />}>
                     <Route path="/login" element={<LoginPage />} />
@@ -57,6 +75,7 @@ const App: React.FC = () => (
                 </Route>
                 <Route path="*" element={<UnknownRoute />} />
                 </Routes>
+                </Suspense>
             </TauriCloseProvider>
         </AuthProvider>
     </BrowserRouter>

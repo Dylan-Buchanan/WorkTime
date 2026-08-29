@@ -11,6 +11,21 @@ export default defineConfig(({ mode, command }) => {
 
     return {
         base: "/",
+        build: {
+            rolldownOptions: {
+                output: {
+                    // Split the largest vendor dependencies out of the entry
+                    // chunk so no single chunk grows past the 500 kB warning
+                    // limit. Groups are matched in order; first match wins.
+                    codeSplitting: {
+                        groups: [
+                            { name: "supabase", test: /[\\/]node_modules[\\/]@supabase[\\/]/ },
+                            { name: "react-vendor", test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+                        ],
+                    },
+                },
+            },
+        },
         plugins: [
             react(),
             VitePWA({
