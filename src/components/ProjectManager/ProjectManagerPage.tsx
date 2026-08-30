@@ -165,7 +165,7 @@ export const ProjectManagerPage: React.FC = () => {
                     {state.ui.view === "list" ? (
                         <div className="flex flex-col h-full">
                             {activeProjectId && <InlineAddTask projectId={activeProjectId} />}
-                            <div className="flex-1 overflow-auto">
+                            <div className="flex-1 overflow-auto app-scrollbar">
                                 <TasksListView />
                             </div>
                         </div>

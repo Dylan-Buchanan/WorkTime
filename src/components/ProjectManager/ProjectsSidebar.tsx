@@ -396,7 +396,7 @@ export const ProjectsSidebar: React.FC<{ onSelectProject?: () => void }> = ({ on
                     />
                 </div>
             </div>
-            <div className="flex-1 overflow-y-auto pr-1 space-y-1 text-xs">
+            <div className="flex-1 overflow-y-auto app-scrollbar pr-1 space-y-1 text-xs">
                 {filtered.length === 0 && projects.length === 0 && (
                     <EmptyState
                         title="Create your first project"

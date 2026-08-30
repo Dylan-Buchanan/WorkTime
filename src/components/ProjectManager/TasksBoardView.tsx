@@ -57,7 +57,7 @@ export const TasksBoardView: React.FC = () => {
 
     return (
         <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="flex gap-3 h-full overflow-x-auto pb-2">
+            <div className="flex gap-3 h-full overflow-x-auto app-scrollbar pb-2">
                 {columns.map((col) => (
                     <Column key={col} status={col} tasks={tasksByStatus[col]} onSelect={(id) => setSelectedTask(id)} selectedId={state.ui.selectedTaskId} />
                 ))}
@@ -76,7 +76,7 @@ const Column: React.FC<{
         <div className="px-3 py-2 text-[10px] uppercase tracking-wide font-medium opacity-70">
             {status} <span className="opacity-40">{tasks.length}</span>
         </div>
-        <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2">
+        <div className="flex-1 overflow-y-auto app-scrollbar px-2 pb-2 space-y-2">
             <SortableContext items={tasks.map((t) => `${status}:${t.id}`)} strategy={verticalListSortingStrategy}>
                 {tasks.map((t) => (
                     <TaskCard key={t.id} task={t} status={status} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
