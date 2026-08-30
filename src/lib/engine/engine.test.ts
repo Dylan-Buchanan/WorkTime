@@ -99,22 +99,24 @@ describe("engine core and state commands", () => {
         const custom: Settings = { work_minutes: 0, short_break_minutes: 7, long_break_minutes: 0, segment_length: 0, end_of_day: "18:30" };
         const state = stateWithTask();
         expect(updateSettings(state, custom).value).toEqual(custom);
-        const reset = resetAppState(state);
+        const reset = resetAppState(state, { t1: 600 });
         expect(reset.state).toEqual(defaultAppState());
         expect(reset.value).toEqual(defaultAppState());
         expect(reset.value).not.toBe(reset.state);
+        expect(reset.inProgressPomodoros).toEqual({});
     });
 });
 
 describe("task lifecycle commands", () => {
-    it("switches tasks by prorating and reassigning a work timer", () => {
+    it("switches tasks by saving progress and giving a fresh target a full timer", () => {
         const state = stateWithTask();
         state.tasks.t2 = task("t2", 2);
         state.timer = timer();
         const result = setActiveTask(state, "t2", at(750), "log-1");
         expect(result.state.tasks.t1.completed_pomodoros).toBe(0.5);
         expect(result.state.logs).toEqual([{ id: "log-1", task_id: "t1", duration_minutes: 12.5, finished_at: at(750).toISOString(), was_break: false, break_skipped: false }]);
-        expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 750, accumulated_secs: 0, started_at: at(750).toISOString(), ends_at: at(1500).toISOString() });
+        expect(result.inProgressPomodoros).toEqual({ t1: 750 });
+        expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 1500, accumulated_secs: 0, started_at: at(750).toISOString(), ends_at: at(2250).toISOString() });
         expect(result.state.active_task).toBe("t2");
     });
 
@@ -144,7 +146,49 @@ describe("task lifecycle commands", () => {
         state.timer = timer({ paused: true, accumulated_secs: 600, paused_remaining_secs: 900 });
         const result = setActiveTask(state, "t2", at(1800), "log-3");
         expect(result.state.tasks.t1.completed_pomodoros).toBe(0.4);
-        expect(result.state.timer).toMatchObject({ paused: true, paused_remaining_secs: 900, planned_secs: 900 });
+        expect(result.inProgressPomodoros).toEqual({ t1: 600 });
+        expect(result.state.timer).toMatchObject({ paused: true, paused_remaining_secs: 1500, planned_secs: 1500 });
+    });
+
+    it("resumes and re-saves cumulative progress without double-crediting", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer({ planned_secs: 900, ends_at: at(900).toISOString() });
+        const progress = { t1: 600, t2: 300 };
+        const stateBefore = structuredClone(state);
+        const progressBefore = structuredClone(progress);
+
+        const result = setActiveTask(state, "t2", at(300), "log-repeat", progress);
+
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(0.2);
+        expect(result.state.logs[0].duration_minutes).toBe(5);
+        expect(result.inProgressPomodoros).toEqual({ t1: 900, t2: 300 });
+        expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 1200, ends_at: at(1500).toISOString() });
+        expect(state).toEqual(stateBefore);
+        expect(progress).toEqual(progressBefore);
+    });
+
+    it("retains the saved base when switching immediately after resume", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer({ planned_secs: 900, ends_at: at(900).toISOString() });
+
+        const result = setActiveTask(state, "t2", T0, "unused", { t1: 600, t2: 300 });
+
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(0);
+        expect(result.state.logs).toEqual([]);
+        expect(result.inProgressPomodoros).toEqual({ t1: 600, t2: 300 });
+    });
+
+    it("does not infer saved progress from a pre-upgrade shortened timer", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer({ planned_secs: 750, ends_at: at(750).toISOString() });
+
+        const result = setActiveTask(state, "t2", at(100), "log-upgrade", {});
+
+        expect(result.inProgressPomodoros).toEqual({ t1: 100 });
+        expect(result.state.tasks.t1.completed_pomodoros).toBeCloseTo(100 / 1500);
     });
 
     it("finalizes, archives, and clears a work timer and selection", () => {
@@ -166,11 +210,25 @@ describe("task lifecycle commands", () => {
 
     it("deletes and archives with Rust cleanup semantics", () => {
         const state = stateWithTask();
+        state.tasks.t2 = task("t2");
         state.timer = timer();
-        expect(deleteTask(state, "t1").state).toMatchObject({ tasks: {}, active_task: null, timer: state.timer });
-        const archived = archiveTask(state, "t1");
+        const deleted = deleteTask(state, "t1", { t1: 600, t2: 300 });
+        expect(deleted.state).toMatchObject({ active_task: null, timer: state.timer });
+        expect(deleted.state.tasks).toEqual({ t2: state.tasks.t2 });
+        expect(deleted.inProgressPomodoros).toEqual({ t2: 300 });
+        const switchedAfterDelete = setActiveTask(deleted.state, "t2", at(100), "log-deleted", deleted.inProgressPomodoros);
+        expect(switchedAfterDelete.inProgressPomodoros).toEqual({ t2: 300 });
+
+        const archived = archiveTask(state, "t1", { t1: 600, t2: 300 });
         expect(archived.value.archived).toBe(true);
         expect(archived.state.active_task).toBe("t1");
+        expect(archived.state.timer).toEqual(state.timer);
+        expect(archived.inProgressPomodoros).toEqual({ t2: 300 });
+        const switchedAfterArchive = setActiveTask(archived.state, "t2", at(100), "log-archived", archived.inProgressPomodoros);
+        expect(switchedAfterArchive.inProgressPomodoros).toEqual({ t2: 300 });
+
+        const finalized = finalizeTask(state, "t1", at(2000), { t1: 600, t2: 300 });
+        expect(finalized.inProgressPomodoros).toEqual({ t2: 300 });
     });
 
     it("allows estimates below completed progress while preserving the minimum target", () => {
@@ -189,6 +247,28 @@ describe("timer lifecycle commands", () => {
         const result = startWorkTimer(state, T0);
         expect(result.state.current_cycle_pomodoros).toBe(0);
         expect(result.value).toMatchObject({ kind: "Work", planned_secs: 1500, started_at: T0.toISOString(), ends_at: at(1500).toISOString() });
+    });
+
+    it("starts and completes the remaining part of a saved pomodoro", () => {
+        const state = stateWithTask();
+        state.tasks.t1.completed_pomodoros = 0.4;
+        const started = startWorkTimer(state, T0, { t1: 600, t2: 300 });
+        expect(started.value).toMatchObject({ planned_secs: 900, ends_at: at(900).toISOString() });
+        expect(started.inProgressPomodoros).toEqual({ t1: 600, t2: 300 });
+
+        const completed = completeTimer(started.state, at(900), "log-resumed", started.inProgressPomodoros);
+        expect(completed.state.tasks.t1.completed_pomodoros).toBe(1);
+        expect(completed.state.current_cycle_pomodoros).toBe(1);
+        expect(completed.state.logs[0].duration_minutes).toBe(15);
+        expect(completed.inProgressPomodoros).toEqual({ t2: 300 });
+    });
+
+    it("starts fresh and removes non-resumable saved positions", () => {
+        for (const saved of [0, -1, 1500, Number.POSITIVE_INFINITY, 600.5]) {
+            const result = startWorkTimer(stateWithTask(), T0, { t1: saved, t2: 300 });
+            expect(result.value.planned_secs).toBe(1500);
+            expect(result.inProgressPomodoros).toEqual({ t2: 300 });
+        }
     });
 
     it("selects short and long breaks", () => {
@@ -232,14 +312,23 @@ describe("timer lifecycle commands", () => {
         expect(result.state.tasks.t1.target_pomodoros).toBe(1);
     });
 
-    it("stops with fractional progress using the timer planned denominator", () => {
+    it("stops resumed work using the configured full-duration denominator", () => {
         const state = stateWithTask();
-        state.timer = timer({ planned_secs: 750, ends_at: at(750).toISOString() });
-        const result = stopWorkTimer(state, at(375), "log-6");
-        expect(result.state.tasks.t1.completed_pomodoros).toBe(0.5);
-        expect(result.state.logs[0].duration_minutes).toBe(6.25);
+        state.tasks.t1.completed_pomodoros = 0.4;
+        state.timer = timer({ planned_secs: 900, ends_at: at(900).toISOString() });
+        const result = stopWorkTimer(state, at(300), "log-6", { t1: 600, t2: 300 });
+        expect(result.state.tasks.t1.completed_pomodoros).toBeCloseTo(0.6);
+        expect(result.state.logs[0].duration_minutes).toBe(5);
         expect(result.state.logs[0].id).toBe("log-6");
         expect(result.state.tasks.t1.completed_at).toBeNull();
+        expect(result.inProgressPomodoros).toEqual({ t2: 300 });
+    });
+
+    it("preserves saved work progress when completing a break", () => {
+        const state = stateWithTask();
+        state.timer = timer({ kind: "ShortBreak", planned_secs: 300, ends_at: at(300).toISOString() });
+        const result = completeTimer(state, at(300), "log-break", { t1: 600, t2: 300 });
+        expect(result.inProgressPomodoros).toEqual({ t1: 600, t2: 300 });
     });
 
     it("preserves the original target when a stopped timer adds fractional overage", () => {

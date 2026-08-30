@@ -1,9 +1,12 @@
 import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
 import { DEFAULT_END_OF_DAY } from "../settings";
+import type { InProgressPomodoroMap } from "./pomodoroProgress";
 
 export interface EngineResult<T> {
     state: AppStateData;
     value: T;
+    /** Updated owner-local progress when this command owns its lifecycle. */
+    inProgressPomodoros?: InProgressPomodoroMap;
 }
 
 export class EngineError extends Error {

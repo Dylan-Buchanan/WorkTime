@@ -1,4 +1,4 @@
-import type { EngineResult } from "../engine";
+import type { EngineResult, InProgressPomodoroMap } from "../engine";
 import {
     DEFAULT_SETTINGS,
     archiveTask,
@@ -48,6 +48,7 @@ function randomId(): string {
 
 export interface InMemoryDataStore {
     state: AppStateData;
+    inProgressPomodoros: InProgressPomodoroMap;
     pmState: SyncedPMState | null;
     habits: Habit[];
     habitCompletions: HabitCompletion[];
@@ -97,9 +98,10 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
+        this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
         this.store.pmState = this.store.pmState ? clone(this.store.pmState) : null;
         this.store.habits = this.store.habits ? this.store.habits.map((habit) => clone(habit)) : [];
         this.store.habitCompletions = this.store.habitCompletions
@@ -128,6 +130,9 @@ export class InMemoryDataAccess implements DataAccess {
 
     private result<T>(result: EngineResult<T>): EngineResult<T> {
         this.store.state = cloneAppState(result.state);
+        if (result.inProgressPomodoros !== undefined) {
+            this.store.inProgressPomodoros = clone(result.inProgressPomodoros);
+        }
         this.pending += 1;
         this.notify();
         return { state: cloneAppState(this.store.state), value: clone(result.value) };
@@ -158,11 +163,17 @@ export class InMemoryDataAccess implements DataAccess {
     }
 
     async setActiveTask(taskId: string) {
-        return this.result(setActiveTask(this.store.state, taskId, this.now(), this.createLogId()));
+        return this.result(setActiveTask(
+            this.store.state,
+            taskId,
+            this.now(),
+            this.createLogId(),
+            this.store.inProgressPomodoros,
+        ));
     }
 
     async startWorkTimer() {
-        const result = startWorkTimer(this.store.state, this.now());
+        const result = startWorkTimer(this.store.state, this.now(), this.store.inProgressPomodoros);
         this.store.completed = false;
         return this.result(result);
     }
@@ -181,34 +192,40 @@ export class InMemoryDataAccess implements DataAccess {
         if (this.store.completed) {
             return { ...this.current(cloneAppState(this.store.state)), applied: false };
         }
-        const result = engineCompleteTimer(this.store.state, this.now(), this.createLogId());
+        const result = engineCompleteTimer(
+            this.store.state,
+            this.now(),
+            this.createLogId(),
+            this.store.inProgressPomodoros,
+        );
         await this.beforeCompletionCommit?.();
         if (this.store.completed || !equal(this.store.state.timer, captured)) {
             return { ...this.current(cloneAppState(this.store.state)), applied: false };
         }
         this.store.state = cloneAppState(result.state);
+        this.store.inProgressPomodoros = clone(result.inProgressPomodoros ?? this.store.inProgressPomodoros);
         this.store.completed = true;
         this.pending += 1;
         this.notify();
         return { state: cloneAppState(this.store.state), value: cloneAppState(this.store.state), applied: true };
     }
 
-    async stopWorkTimer() { return this.result(stopWorkTimer(this.store.state, this.now(), this.createLogId())); }
+    async stopWorkTimer() { return this.result(stopWorkTimer(this.store.state, this.now(), this.createLogId(), this.store.inProgressPomodoros)); }
     async pauseTimer() { return this.result(pauseTimer(this.store.state, this.now())); }
     async resumeTimer() { return this.result(resumeTimer(this.store.state, this.now())); }
     async skipBreak() { return this.result(skipBreak(this.store.state, this.now(), this.createLogId())); }
     async updateSettings(settings: Settings) { return this.result(updateSettings(this.store.state, settings)); }
-    async finalizeTask(taskId: string) { return this.result(finalizeTask(this.store.state, taskId, this.now())); }
-    async archiveTask(taskId: string) { return this.result(archiveTask(this.store.state, taskId)); }
+    async finalizeTask(taskId: string) { return this.result(finalizeTask(this.store.state, taskId, this.now(), this.store.inProgressPomodoros)); }
+    async archiveTask(taskId: string) { return this.result(archiveTask(this.store.state, taskId, this.store.inProgressPomodoros)); }
     async setTaskTarget(taskId: string, target: number) { return this.result(setTaskTarget(this.store.state, taskId, target)); }
 
     async resetAppState() {
         this.store.completed = false;
-        return this.result(resetAppState(this.store.state));
+        return this.result(resetAppState(this.store.state, this.store.inProgressPomodoros));
     }
 
     async deleteTask(taskId: string): Promise<EngineResult<void>> {
-        return this.result(deleteTask(this.store.state, taskId));
+        return this.result(deleteTask(this.store.state, taskId, this.store.inProgressPomodoros));
     }
 
     async deletePomodoroLog(logId: string): Promise<EngineResult<void>> {
@@ -272,6 +289,7 @@ export class InMemoryDataAccess implements DataAccess {
     }
 
     async discardPendingChanges(): Promise<void> {
+        const inProgressPomodoros = clone(this.store.inProgressPomodoros);
         this.store.state = cloneAppState(this.baseline.state);
         this.store.pmState = this.baseline.pmState ? clone(this.baseline.pmState) : null;
         this.store.habits = this.baseline.habits.map((habit) => clone(habit));
@@ -279,6 +297,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.todos = this.baseline.todos.map((todo) => clone(todo));
         this.store.todoCompletions = this.baseline.todoCompletions.map((completion) => clone(completion));
         this.store.completed = this.baseline.completed;
+        this.store.inProgressPomodoros = inProgressPomodoros;
         this.pending = 0;
         this.notify();
     }
@@ -309,6 +328,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
             tasks: {}, logs: [], settings: { ...DEFAULT_SETTINGS }, active_task: null,
             current_cycle_pomodoros: 0, timer: null, ...(initial ?? {}),
         },
+        inProgressPomodoros: {},
         pmState: null,
         habits: [],
         habitCompletions: [],

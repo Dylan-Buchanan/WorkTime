@@ -9,6 +9,13 @@ export {
     plannedTimerSecs,
 } from "./core";
 export type { EngineResult } from "./core";
+export {
+    cloneInProgressPomodoros,
+    pruneInProgressPomodoros,
+    resumablePomodoroElapsedSecs,
+    withoutInProgressPomodoro,
+} from "./pomodoroProgress";
+export type { InProgressPomodoroMap } from "./pomodoroProgress";
 
 export { buildPlannerContext, calculatePomodoroBudget } from "./plannerContext";
 export type {

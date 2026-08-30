@@ -8,6 +8,7 @@ import type {
     Task,
 } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
+import type { InProgressPomodoroMap } from "../../engine";
 import { isValidRule } from "../../todos";
 import type { Todo, TodoCompletion, TodoRule } from "../../todos";
 import { isCompleteSettings, parsePersistedSettings } from "../../settings";
@@ -92,12 +93,14 @@ export interface TodoCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 5;
+    schemaVersion: 6;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
     initialized: boolean;
     state: AppStateData;
+    /** Owner-local only; excluded from snapshots, sync payloads, and pending counts. */
+    inProgressPomodoros: InProgressPomodoroMap;
     pmState: SyncedPMState | null;
     /** `updated_at` stamps per locally-changed task, keyed by task id. */
     taskUpdatedAt: Record<string, string>;
@@ -137,7 +140,7 @@ export interface StagedOwnerRecord {
     todoCompletionTombstones: Record<string, TodoCompletionTombstone>;
 }
 
-export const STAGING_SCHEMA_VERSION = 5 as const;
+export const STAGING_SCHEMA_VERSION = 6 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -156,6 +159,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
+}
+
+function isInProgressPomodoroMap(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        Object.values(value).every(
+            (elapsed) => isFiniteNumber(elapsed) && Number.isInteger(elapsed) && elapsed >= 0,
+        )
+    );
 }
 
 function isTask(value: unknown): boolean {
@@ -356,6 +368,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["revision", (v): boolean => typeof v === "number"],
     ["initialized", (v): boolean => typeof v === "boolean"],
     ["state", isObject],
+    ["inProgressPomodoros", isInProgressPomodoroMap],
     ["pmState", (v): boolean => v === null || isObject(v)],
     ["taskUpdatedAt", isObject],
     ["settingsUpdatedAt", (v): boolean => v === null || typeof v === "string"],
@@ -381,7 +394,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `5` are accepted; records at the unchanged v1 key migrate in memory
+ * through `6` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -399,7 +412,14 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     if (!isObject(parsed)) {
         throw new StagingStorageError(`Staging record for owner "${ownerId}" is not an object`);
     }
-    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3 && parsed.schemaVersion !== 4 && parsed.schemaVersion !== 5) {
+    if (
+        parsed.schemaVersion !== 1 &&
+        parsed.schemaVersion !== 2 &&
+        parsed.schemaVersion !== 3 &&
+        parsed.schemaVersion !== 4 &&
+        parsed.schemaVersion !== 5 &&
+        parsed.schemaVersion !== 6
+    ) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
         );
@@ -469,6 +489,9 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
               }
             : record.lastSynced;
         record = { ...record, schemaVersion: 5, state, lastSynced };
+    }
+    if (record.schemaVersion === 5) {
+        record = { ...record, schemaVersion: 6, inProgressPomodoros: {} };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

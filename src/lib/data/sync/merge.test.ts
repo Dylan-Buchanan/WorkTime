@@ -103,7 +103,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 5,
+        schemaVersion: 6,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -115,6 +115,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
             current_cycle_pomodoros: slice.current_cycle_pomodoros,
             timer: slice.timer ? { ...slice.timer } : null,
         },
+        inProgressPomodoros: {},
         pmState: baseline.pmState.value ? { ...baseline.pmState.value } : null,
         taskUpdatedAt: {},
         settingsUpdatedAt: baseline.settings.updatedAt,
@@ -145,11 +146,12 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 5,
+        schemaVersion: 6,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
         state: defaultAppState(),
+        inProgressPomodoros: {},
         pmState: null,
         taskUpdatedAt: {},
         settingsUpdatedAt: null,
@@ -422,6 +424,33 @@ describe("mergePulledSnapshot task matrix", () => {
 
         const merged = mergePulledSnapshot(record, remote, NOW);
         expect(merged.record.state.tasks.t1.created_at).toBe("2026-01-03T00:00:00.000Z");
+    });
+});
+
+describe("local in-progress pomodoro merge boundary", () => {
+    it("preserves only live task progress and excludes it from pending work and push plans", () => {
+        const live = T("live");
+        const archived = T("archived", { archived: true });
+        const completed = T("completed", { completed_at: T2 });
+        const base = snapshot({
+            tasks: {
+                live: { value: live, updatedAt: T1 },
+                archived: { value: archived, updatedAt: T1 },
+                completed: { value: completed, updatedAt: T1 },
+            },
+        });
+        const record = recordFromBaseline(base, {
+            inProgressPomodoros: { live: 600, archived: 300, completed: 200, missing: 100 },
+        });
+
+        const merged = mergePulledSnapshot(record, base, NOW);
+        expect(merged.record.inProgressPomodoros).toEqual({ live: 600 });
+        expect(merged.pendingCount).toBe(0);
+        const plan = buildPushPlan(merged.record);
+        expect(plan).not.toHaveProperty("inProgressPomodoros");
+
+        const committed = commitAcknowledgedPush(merged.record, plan, base);
+        expect(committed.inProgressPomodoros).toEqual({ live: 600 });
     });
 });
 
@@ -949,6 +978,7 @@ describe("full wipe", () => {
             fullWipe: { createdAt: W },
             timerCompleted: false,
             state: defaultAppState(),
+            inProgressPomodoros: { t1: 600 },
             taskUpdatedAt: {},
             settingsUpdatedAt: null,
             timerUpdatedAt: null,
@@ -961,6 +991,7 @@ describe("full wipe", () => {
 
         const merged = mergePulledSnapshot(record, remote, NOW);
         expect(merged.record.state).toEqual(defaultAppState());
+        expect(merged.record.inProgressPomodoros).toEqual({});
         expect(merged.record.fullWipe).toEqual({ createdAt: W });
         expect(merged.record.lastSynced).toBe(remote);
         // PM merges normally and survives the wipe.

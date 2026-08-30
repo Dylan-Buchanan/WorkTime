@@ -42,6 +42,7 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         revision: 0,
         initialized: false,
         state: defaultAppState(),
+        inProgressPomodoros: {},
         pmState: null,
         taskUpdatedAt: {},
         settingsUpdatedAt: null,
@@ -351,6 +352,7 @@ export class LocalStagingStore {
         const persisted = await this.withOwnerLock(ownerId, () => {
             const current = this.read(ownerId);
             const baseline = current.lastSynced;
+            const inProgressPomodoros = { ...current.inProgressPomodoros };
             const defaults = defaultAppState();
             const timer = baseline?.timerState.value ?? {
                 active_task: defaults.active_task,
@@ -358,11 +360,12 @@ export class LocalStagingStore {
                 timer: defaults.timer,
             };
             const next: StagedOwnerRecord = baseline === null
-                ? freshRecord(ownerId)
+                ? { ...freshRecord(ownerId), inProgressPomodoros }
                 : {
                     ...freshRecord(ownerId),
                     ownerId,
                     initialized: true,
+                    inProgressPomodoros,
                     state: {
                         tasks: Object.fromEntries(
                             Object.entries(baseline.tasks).map(([id, row]) => [id, row.value]),

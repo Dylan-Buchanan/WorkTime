@@ -6,9 +6,16 @@ import {
     cloneAppState,
     EngineError,
     EngineResult,
+    elapsedTimerSecs,
     fullCycleDurationSecs,
     plannedTimerSecs,
 } from "./core";
+import {
+    cloneInProgressPomodoros,
+    resumablePomodoroElapsedSecs,
+    type InProgressPomodoroMap,
+    withoutInProgressPomodoro,
+} from "./pomodoroProgress";
 
 function requireActiveTask(state: AppStateData): string {
     if (state.active_task === null) throw new EngineError("No active task");
@@ -29,9 +36,14 @@ function makeTimer(taskId: string, kind: ActiveTimer["kind"], plannedSecs: numbe
 }
 
 /** Rust: start_work_timer */
-export function startWorkTimer(state: AppStateData, now: Date): EngineResult<ActiveTimer> {
+export function startWorkTimer(
+    state: AppStateData,
+    now: Date,
+    inProgressPomodoros: InProgressPomodoroMap = {},
+): EngineResult<ActiveTimer> {
     const next = cloneAppState(state);
     const taskId = requireActiveTask(next);
+    const progress = cloneInProgressPomodoros(inProgressPomodoros);
 
     if (next.current_cycle_pomodoros > 0) {
         const lastWork = [...next.logs].reverse().find((log) => !log.was_break);
@@ -43,9 +55,13 @@ export function startWorkTimer(state: AppStateData, now: Date): EngineResult<Act
         }
     }
 
-    const timer = makeTimer(taskId, "Work", next.settings.work_minutes * 60, now);
+    const workSecs = Math.max(0, Math.trunc(next.settings.work_minutes * 60));
+    const savedBase = resumablePomodoroElapsedSecs(progress, taskId, workSecs);
+    if (savedBase > 0) progress[taskId] = savedBase;
+    else delete progress[taskId];
+    const timer = makeTimer(taskId, "Work", workSecs - savedBase, now);
     next.timer = timer;
-    return { state: next, value: { ...timer } };
+    return { state: next, value: { ...timer }, inProgressPomodoros: progress };
 }
 
 /** Rust: start_break_timer */
@@ -62,7 +78,12 @@ export function startBreakTimer(state: AppStateData, now: Date): EngineResult<Ac
 }
 
 /** Rust: complete_timer */
-export function completeTimer(state: AppStateData, now: Date, logId: string): EngineResult<AppStateData> {
+export function completeTimer(
+    state: AppStateData,
+    now: Date,
+    logId: string,
+    inProgressPomodoros: InProgressPomodoroMap = {},
+): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
     if (!timer) throw new EngineError("No active timer");
@@ -82,25 +103,39 @@ export function completeTimer(state: AppStateData, now: Date, logId: string): En
         next.current_cycle_pomodoros += 1;
     }
     next.timer = null;
-    return { state: next, value: cloneAppState(next) };
+    return {
+        state: next,
+        value: cloneAppState(next),
+        inProgressPomodoros: wasBreak
+            ? cloneInProgressPomodoros(inProgressPomodoros)
+            : withoutInProgressPomodoro(inProgressPomodoros, timer.task_id),
+    };
 }
 
 /** Rust: stop_work_timer */
-export function stopWorkTimer(state: AppStateData, now: Date, logId: string): EngineResult<AppStateData> {
+export function stopWorkTimer(
+    state: AppStateData,
+    now: Date,
+    logId: string,
+    inProgressPomodoros: InProgressPomodoroMap = {},
+): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
     if (!timer) throw new EngineError("No active timer");
     if (timer.kind !== "Work") throw new EngineError("Not a work timer");
 
-    const planned = plannedTimerSecs(timer);
-    const currentSegment = Math.max(0, Math.trunc((now.getTime() - new Date(timer.started_at).getTime()) / 1000));
-    const elapsed = Math.min((timer.accumulated_secs ?? 0) + currentSegment, planned);
-    const fraction = planned > 0 ? elapsed / planned : 0;
+    const elapsed = elapsedTimerSecs(timer, now);
+    const workSecs = Math.max(0, Math.trunc(next.settings.work_minutes * 60));
+    const fraction = workSecs > 0 ? clampFraction(elapsed / workSecs) : 0;
     const task = next.tasks[timer.task_id];
     if (task) {
         task.completed_pomodoros += fraction;
     }
     appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
     next.timer = null;
-    return { state: next, value: cloneAppState(next) };
+    return {
+        state: next,
+        value: cloneAppState(next),
+        inProgressPomodoros: withoutInProgressPomodoro(inProgressPomodoros, timer.task_id),
+    };
 }

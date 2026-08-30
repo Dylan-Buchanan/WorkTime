@@ -144,6 +144,82 @@ describe("StagedDataAccess", () => {
         expect(await data.loadPMState()).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "2026-01-01T00:00:00.000Z" } });
     });
 
+    it("persists switched progress and resumes it through a new access instance", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const task2 = { ...TASK_T1, id: "t2", name: "Task 2" };
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            state: makeAppState({
+                tasks: { t1: { ...TASK_T1 }, t2: task2 },
+                active_task: "t1",
+                timer: makeActiveTimer({
+                    task_id: "t1",
+                    started_at: "2026-01-01T00:00:00.000Z",
+                    ends_at: "2026-01-01T00:25:00.000Z",
+                    planned_secs: 1500,
+                }),
+            }),
+        }));
+        const first = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T00:10:00.000Z"),
+            createLogId: () => "log-switch",
+        });
+
+        await first.setActiveTask("t2");
+        expect(store.read(OWNER_A).inProgressPomodoros).toEqual({ t1: 600 });
+        expect(store.read(OWNER_A).state.timer).toMatchObject({ task_id: "t2", planned_secs: 1500 });
+        await first.finalizeTask("t2");
+
+        const reloaded = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T00:10:00.000Z"),
+        });
+        await reloaded.setActiveTask("t1");
+        const resumed = await reloaded.startWorkTimer();
+        expect(resumed.value).toMatchObject({ task_id: "t1", planned_secs: 900 });
+        expect(store.read(OWNER_A).inProgressPomodoros).toEqual({ t1: 600 });
+    });
+
+    it("completes a resumed timer while keeping the completion journal shape unchanged", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        let now = new Date("2026-01-01T00:00:00.000Z");
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            state: makeAppState({
+                tasks: { t1: { ...TASK_T1, completed_pomodoros: 0.4 } },
+                active_task: "t1",
+            }),
+            inProgressPomodoros: { t1: 600, t2: 300 },
+        }));
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => now,
+            createLogId: () => "log-resumed",
+        });
+        const started = await data.startWorkTimer();
+        expect(started.value.planned_secs).toBe(900);
+        now = new Date("2026-01-01T00:15:00.000Z");
+
+        expect((await data.completeTimer(started.value)).applied).toBe(true);
+        const record = store.read(OWNER_A);
+        expect(record.state.tasks.t1.completed_pomodoros).toBe(1);
+        expect(record.inProgressPomodoros).toEqual({ t2: 300 });
+        expect(record.pendingCompletions).toHaveLength(1);
+        expect(record.pendingCompletions[0].expectedTimerState).toEqual({
+            active_task: "t1",
+            current_cycle_pomodoros: 0,
+            timer: started.value,
+        });
+        expect(record.pendingCompletions[0].resultTimerState).toEqual({
+            active_task: "t1",
+            current_cycle_pomodoros: 1,
+            timer: null,
+        });
+        expect(Object.keys(record.pendingCompletions[0].expectedTimerState).sort()).toEqual([
+            "active_task", "current_cycle_pomodoros", "timer",
+        ]);
+    });
+
     it("reconciles an expired timer locally once and returns the reconciledTimer shape", async () => {
         const { executor, sync } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);
@@ -322,6 +398,7 @@ describe("StagedDataAccess", () => {
                 tasks: { t1: { ...TASK_T1 } },
                 logs: [{ id: "log-1", task_id: "t1", duration_minutes: 25, finished_at: "2026-01-01T00:25:00.000Z", was_break: false, break_skipped: false }],
             }),
+            inProgressPomodoros: { t1: 600, t2: 300 },
         }));
         const data = new StagedDataAccess(OWNER_A, store, executor, {
             now: () => new Date("2026-01-02T00:00:00.000Z"),
@@ -332,6 +409,7 @@ describe("StagedDataAccess", () => {
         expect(record.state.tasks.t1).toBeUndefined();
         expect(record.taskTombstones.t1).toEqual({ id: "t1", deletedAt: "2026-01-02T00:00:00.000Z" });
         expect(record.taskUpdatedAt.t1).toBeUndefined();
+        expect(record.inProgressPomodoros).toEqual({ t2: 300 });
 
         await data.deletePomodoroLog("log-1");
         record = store.read(OWNER_A);
@@ -349,6 +427,10 @@ describe("StagedDataAccess", () => {
         await data.savePMState({ projects: {}, tasks: {}, meta: { initializedAt: "pm-time" } });
         await data.saveHabits([H("h1", { name: "Survivor habit" })], [HC("c1", "h1", { bucket: "2026-01-02" })]);
         await data.createTask("Doomed", 1);
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            inProgressPomodoros: { "task-1": 600, other: 300 },
+        }));
 
         const result = await data.resetAppState();
         const record = store.read(OWNER_A);
@@ -363,6 +445,7 @@ describe("StagedDataAccess", () => {
         expect(record.taskTombstones).toEqual({});
         expect(record.logTombstones).toEqual({});
         expect(record.pendingCompletions).toEqual([]);
+        expect(record.inProgressPomodoros).toEqual({});
 
         // PM state and its timestamp survive the wipe untouched.
         expect(await data.loadPMState()).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "pm-time" } });
