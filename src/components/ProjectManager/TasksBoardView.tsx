@@ -1,7 +1,7 @@
 // Clean board view implementation (reset after corruption)
-import React from "react";
+import React, { useState } from "react";
 import { usePM } from "../../state/ProjectManagerContext";
-import { DndContext, useSensor, useSensors, PointerSensor, DragEndEvent } from "@dnd-kit/core";
+import { DndContext, useSensor, useSensors, PointerSensor, DragEndEvent, DragStartEvent, useDroppable, DragOverlay, closestCenter, pointerWithin, CollisionDetection } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { PMTask, TaskStatus } from "../../state/types";
@@ -10,7 +10,12 @@ const columns: TaskStatus[] = ["Backlog", "Next", "In Progress", "Blocked", "Don
 
 export const TasksBoardView: React.FC = () => {
     const { state, moveTaskToStatus, reorderTasks, setSelectedTask } = usePM();
+    const [activeTask, setActiveTask] = useState<PMTask | null>(null);
     const sensors = useSensors(useSensor(PointerSensor));
+    const collisionDetection: CollisionDetection = (args) => {
+        const pointerCollisions = pointerWithin(args);
+        return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(args);
+    };
     const activeProjectId = state.ui.selectedProjectIds[0] ?? null;
     const shouldFilterByProject = !state.ui.boardShowAllTasks && Boolean(activeProjectId);
     const tasksByStatus: Record<TaskStatus, PMTask[]> = {
@@ -30,8 +35,21 @@ export const TasksBoardView: React.FC = () => {
             tasksByStatus[t.status].push(t);
         });
     columns.forEach((c) => tasksByStatus[c].sort((a, b) => a.sortOrder - b.sortOrder));
+    const tasksInStatus = (status: TaskStatus): PMTask[] =>
+        Object.values(state.tasks)
+            .filter((t) => t.status === status)
+            .sort((a, b) => a.sortOrder - b.sortOrder);
+
+    const onDragStart = (e: DragStartEvent) => {
+        const taskId = e.active.id.toString().split(":")[1];
+        const task = taskId ? state.tasks[taskId] : null;
+        if (task) setActiveTask(task);
+    };
+
+    const onDragCancel = () => setActiveTask(null);
 
     const onDragEnd = (e: DragEndEvent) => {
+        setActiveTask(null);
         const { active, over } = e;
         if (!over) return;
         const [fromStatus, taskId] = active.id.toString().split(":");
@@ -39,7 +57,19 @@ export const TasksBoardView: React.FC = () => {
         const task = state.tasks[taskId];
         if (!task) return;
         if (fromStatus !== toStatus) {
-            moveTaskToStatus(task.id, toStatus as TaskStatus);
+            const targetIds = tasksInStatus(toStatus as TaskStatus).map((t) => t.id);
+            const overTaskId = over.id.toString().split(":")[1];
+            let index = targetIds.length;
+            if (overTaskId) {
+                const overIndex = targetIds.indexOf(overTaskId);
+                if (overIndex !== -1) {
+                    const overRect = over.rect;
+                    const translated = active.rect.current.translated;
+                    const below = Boolean(translated && overRect && translated.top > overRect.top + overRect.height / 2);
+                    index = below ? overIndex + 1 : overIndex;
+                }
+            }
+            moveTaskToStatus(task.id, toStatus as TaskStatus, index);
         } else {
             const arr = tasksByStatus[fromStatus as TaskStatus];
             const oldIndex = arr.findIndex((t) => t.id === task.id);
@@ -56,12 +86,24 @@ export const TasksBoardView: React.FC = () => {
     };
 
     return (
-        <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="flex gap-3 h-full overflow-x-auto app-scrollbar pb-2">
+        <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={onDragStart} onDragCancel={onDragCancel} onDragEnd={onDragEnd}>
+            <div className="flex gap-3 h-full overflow-x-auto app-scrollbar pt-2 pb-2">
                 {columns.map((col) => (
                     <Column key={col} status={col} tasks={tasksByStatus[col]} onSelect={(id) => setSelectedTask(id)} selectedId={state.ui.selectedTaskId} />
                 ))}
             </div>
+            <DragOverlay dropAnimation={{ duration: 200 }}>
+                {activeTask && (
+                    <div className="rounded bg-neutral-800 pt-2 pb-2 pl-2 pr-2 shadow-lg border border-neutral-600 text-xs space-y-1 select-none w-[13rem]">
+                        <div className="flex items-start gap-2">
+                            <div className="w-3 flex flex-col items-center text-neutral-500 mt-0.5">⋮</div>
+                            <div className="flex-1 min-w-0">
+                                <TaskCardContent task={activeTask} />
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </DragOverlay>
         </DndContext>
     );
 };
@@ -71,20 +113,27 @@ const Column: React.FC<{
     tasks: PMTask[];
     onSelect: (id: string) => void;
     selectedId: string | null;
-}> = ({ status, tasks, onSelect, selectedId }) => (
-    <div className="flex flex-col bg-neutral-900/40 rounded w-56 flex-shrink-0">
-        <div className="px-3 py-2 text-[10px] uppercase tracking-wide font-medium opacity-70">
-            {status} <span className="opacity-40">{tasks.length}</span>
+}> = ({ status, tasks, onSelect, selectedId }) => {
+    const { setNodeRef, isOver } = useDroppable({ id: status });
+    return (
+        <div
+            ref={setNodeRef}
+            data-status={status}
+            className={`flex flex-col bg-neutral-900/40 rounded w-56 flex-shrink-0 ${isOver ? "ring-1 ring-inset ring-neutral-500" : ""}`}
+        >
+            <div className="px-3 py-2 text-[10px] uppercase tracking-wide font-medium opacity-70">
+                {status} <span className="opacity-40">{tasks.length}</span>
+            </div>
+            <div className="flex-1 overflow-y-auto app-scrollbar px-2 pt-2 pb-2 space-y-2">
+                <SortableContext items={tasks.map((t) => `${status}:${t.id}`)} strategy={verticalListSortingStrategy}>
+                    {tasks.map((t) => (
+                        <TaskCard key={t.id} task={t} status={status} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
+                    ))}
+                </SortableContext>
+            </div>
         </div>
-        <div className="flex-1 overflow-y-auto app-scrollbar px-2 pb-2 space-y-2">
-            <SortableContext items={tasks.map((t) => `${status}:${t.id}`)} strategy={verticalListSortingStrategy}>
-                {tasks.map((t) => (
-                    <TaskCard key={t.id} task={t} status={status} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
-                ))}
-            </SortableContext>
-        </div>
-    </div>
-);
+    );
+};
 
 const TaskCard: React.FC<{
     task: PMTask;
@@ -92,19 +141,17 @@ const TaskCard: React.FC<{
     selected: boolean;
     onClick: () => void;
 }> = ({ task, status, selected, onClick }) => {
-    const { state } = usePM();
-    const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: `${status}:${task.id}` });
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `${status}:${task.id}` });
     const style: React.CSSProperties = {
         transform: CSS.Translate.toString(transform),
         transition,
+        opacity: isDragging ? 0 : 1,
     };
-    const overdue = task.dueDate && new Date(task.dueDate) < new Date();
-    const progressPct = task.estimatePomos ? Math.min(100, Math.round(((task.workedPomos || 0) / (task.estimatePomos || 1)) * 100)) : 0;
-    const project = task.projectId ? state.projects[task.projectId] : null;
     return (
         <div
             ref={setNodeRef}
             style={style}
+            data-taskid={task.id}
             onPointerDown={() => onClick()}
             className={`rounded bg-neutral-800 pt-2 pb-2 pl-2 pr-2 shadow-sm border border-transparent hover:border-neutral-600 text-xs space-y-1 select-none ${
                 selected ? "ring-1 ring-neutral-400" : ""
@@ -127,38 +174,50 @@ const TaskCard: React.FC<{
                         onClick();
                     }}
                 >
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                        <div className="flex items-center gap-2 min-w-0">
-                            {project?.color && (
-                                <span
-                                    className="w-2.5 h-2.5 rounded-full border border-black/30 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] flex-shrink-0"
-                                    style={{ background: project.color }}
-                                    aria-hidden
-                                />
-                            )}
-                            <div className="font-medium truncate">{task.title || "Untitled"}</div>
-                        </div>
-                        <PriorityBadge priority={task.priority} />
-                    </div>
-                    {task.dueDate && (
-                        <div className="flex items-center flex-wrap gap-2 text-[10px] opacity-70">
-                            <span className={`px-1 rounded ${overdue ? "bg-red-600/30 text-red-300" : "bg-neutral-600/30"}`}>{task.dueDate.slice(5)}</span>
-                        </div>
-                    )}
-                    {task.estimatePomos && (
-                        <div className="h-1 bg-neutral-700 rounded overflow-hidden mt-1">
-                            <div className="h-full bg-neutral-400" style={{ width: progressPct + "%" }} />
-                        </div>
-                    )}
-                    <div className="mt-1 text-[10px] opacity-60 flex items-center gap-2">
-                        <span>{Number(task.timeSpentMinutes || 0).toFixed(1)}m</span>
-                        <span>
-                            {Number(task.workedPomos || 0).toFixed(1)}p{Number.isFinite(Number(task.estimatePomos)) && " / " + Number(task.estimatePomos) + "p"}
-                        </span>
-                    </div>
+                    <TaskCardContent task={task} />
                 </div>
             </div>
         </div>
+    );
+};
+
+const TaskCardContent: React.FC<{ task: PMTask }> = ({ task }) => {
+    const { state } = usePM();
+    const overdue = task.dueDate && new Date(task.dueDate) < new Date();
+    const progressPct = task.estimatePomos ? Math.min(100, Math.round(((task.workedPomos || 0) / (task.estimatePomos || 1)) * 100)) : 0;
+    const project = task.projectId ? state.projects[task.projectId] : null;
+    return (
+        <>
+            <div className="flex items-start justify-between gap-2 mb-1">
+                <div className="flex items-center gap-2 min-w-0">
+                    {project?.color && (
+                        <span
+                            className="w-2.5 h-2.5 rounded-full border border-black/30 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] flex-shrink-0"
+                            style={{ background: project.color }}
+                            aria-hidden
+                        />
+                    )}
+                    <div className="font-medium truncate">{task.title || "Untitled"}</div>
+                </div>
+                <PriorityBadge priority={task.priority} />
+            </div>
+            {task.dueDate && (
+                <div className="flex items-center flex-wrap gap-2 text-[10px] opacity-70">
+                    <span className={`px-1 rounded ${overdue ? "bg-red-600/30 text-red-300" : "bg-neutral-600/30"}`}>{task.dueDate.slice(5)}</span>
+                </div>
+            )}
+            {task.estimatePomos && (
+                <div className="h-1 bg-neutral-700 rounded overflow-hidden mt-1">
+                    <div className="h-full bg-neutral-400" style={{ width: progressPct + "%" }} />
+                </div>
+            )}
+            <div className="mt-1 text-[10px] opacity-60 flex items-center gap-2">
+                <span>{Number(task.timeSpentMinutes || 0).toFixed(1)}m</span>
+                <span>
+                    {Number(task.workedPomos || 0).toFixed(1)}p{Number.isFinite(Number(task.estimatePomos)) && " / " + Number(task.estimatePomos) + "p"}
+                </span>
+            </div>
+        </>
     );
 };
 

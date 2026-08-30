@@ -362,6 +362,118 @@ describe("ProjectManagerContext reload and lifecycle", () => {
     });
 });
 
+function MoveProbe() {
+    const { state, moveTaskToStatus, reorderTasks } = usePM();
+    const order = (status: TaskStatus) =>
+        Object.values(state.tasks)
+            .filter((t) => t.status === status)
+            .sort((a, b) => a.sortOrder - b.sortOrder)
+            .map((t) => t.id)
+            .join(",");
+    return <div>
+        <div data-testid="backlog-order">{order("Backlog")}</div>
+        <div data-testid="next-order">{order("Next")}</div>
+        <div data-testid="done-order">{order("Done")}</div>
+        <button onClick={() => moveTaskToStatus("t2", "Done", 1)}>move-t2-done</button>
+        <button onClick={() => moveTaskToStatus("t1", "Next", 1)}>move-t1-next</button>
+        <button onClick={() => moveTaskToStatus("t4", "Backlog")}>move-t4-backlog</button>
+        <button onClick={() => reorderTasks(["t3", "t1", "t2"], "Backlog")}>reorder-backlog</button>
+    </div>;
+}
+
+function boardSeed() {
+    return {
+        projects: serverState(["p1"]).projects,
+        tasks: {
+            t1: makePMTask({ id: "t1", title: "A", projectId: "p1", status: "Backlog", sortOrder: 0 }),
+            t2: makePMTask({ id: "t2", title: "B", projectId: "p1", status: "Backlog", sortOrder: 1 }),
+            t3: makePMTask({ id: "t3", title: "C", projectId: "p1", status: "Backlog", sortOrder: 2 }),
+            t4: makePMTask({ id: "t4", title: "D", projectId: "p1", status: "Next", sortOrder: 0 }),
+            t5: makePMTask({ id: "t5", title: "E", projectId: "p1", status: "Next", sortOrder: 1 }),
+            t6: makePMTask({ id: "t6", title: "F", projectId: "p1", status: "Done", sortOrder: 0 }),
+            t7: makePMTask({ id: "t7", title: "G", projectId: "p1", status: "Done", sortOrder: 1 }),
+        },
+        meta: { initializedAt: "2026-01-01T00:00:00Z" },
+    };
+}
+
+describe("ProjectManagerContext board ordering persistence", () => {
+    it("moveTaskToStatus inserts at a target index and persists sibling ordering", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(boardSeed());
+        render(wrapWithoutBridge(data, <MoveProbe />));
+        await waitFor(() => expect(screen.getByTestId("backlog-order")).toHaveTextContent("t1,t2,t3"));
+
+        await act(async () => screen.getByText("move-t2-done").click());
+
+        // In-memory order reflects the cross-column move at index 1, and the
+        // source column keeps its relative ordering.
+        expect(screen.getByTestId("done-order").textContent).toBe("t6,t2,t7");
+        expect(screen.getByTestId("backlog-order").textContent).toBe("t1,t3");
+        // The recomputed sibling ordering is persisted, not just the status.
+        await waitFor(async () => {
+            const persisted = (await data.loadPMState())?.tasks;
+            expect(persisted?.t2?.status).toBe("Done");
+            expect(persisted?.t2?.sortOrder).toBe(1);
+            expect(persisted?.t6?.sortOrder).toBe(0);
+            expect(persisted?.t7?.sortOrder).toBe(2);
+            expect(persisted?.t1?.sortOrder).toBe(0);
+            expect(persisted?.t3?.sortOrder).toBe(2);
+        });
+    });
+
+    it("moveTaskToStatus honors a middle index in the target column", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(boardSeed());
+        render(wrapWithoutBridge(data, <MoveProbe />));
+        await waitFor(() => expect(screen.getByTestId("backlog-order")).toHaveTextContent("t1,t2,t3"));
+
+        await act(async () => screen.getByText("move-t1-next").click());
+
+        expect(screen.getByTestId("next-order").textContent).toBe("t4,t1,t5");
+        await waitFor(async () => {
+            const persisted = (await data.loadPMState())?.tasks;
+            expect(persisted?.t1?.status).toBe("Next");
+            expect(persisted?.t1?.sortOrder).toBe(1);
+            expect(persisted?.t4?.sortOrder).toBe(0);
+            expect(persisted?.t5?.sortOrder).toBe(2);
+        });
+    });
+
+    it("moveTaskToStatus without an index appends to the target column", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(boardSeed());
+        render(wrapWithoutBridge(data, <MoveProbe />));
+        await waitFor(() => expect(screen.getByTestId("backlog-order")).toHaveTextContent("t1,t2,t3"));
+
+        await act(async () => screen.getByText("move-t4-backlog").click());
+
+        expect(screen.getByTestId("backlog-order").textContent).toBe("t1,t2,t3,t4");
+        await waitFor(async () => {
+            const persisted = (await data.loadPMState())?.tasks;
+            expect(persisted?.t4?.status).toBe("Backlog");
+            expect(persisted?.t4?.sortOrder).toBe(3);
+        });
+    });
+
+    it("reorderTasks persists within-column ordering", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(boardSeed());
+        render(wrapWithoutBridge(data, <MoveProbe />));
+        await waitFor(() => expect(screen.getByTestId("backlog-order")).toHaveTextContent("t1,t2,t3"));
+
+        await act(async () => screen.getByText("reorder-backlog").click());
+
+        expect(screen.getByTestId("backlog-order").textContent).toBe("t3,t1,t2");
+        await waitFor(async () => {
+            const persisted = (await data.loadPMState())?.tasks;
+            expect(persisted?.t1?.sortOrder).toBe(1);
+            expect(persisted?.t2?.sortOrder).toBe(2);
+            expect(persisted?.t3?.sortOrder).toBe(0);
+        });
+    });
+});
+
 describe("StateSyncBridge", () => {
     it("creates PM metadata for backend tasks", async () => {
         const data = new InMemoryDataAccess(makeAppState({ tasks: { bt1: { id: "bt1", name: "Synced task", target_pomodoros: 4, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } } }));

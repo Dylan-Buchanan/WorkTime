@@ -692,19 +692,27 @@ export const ProjectManagerProvider: React.FC<{
     const moveTaskToStatus = (id: string, status: TaskStatus, index?: number) => {
         const t = state.tasks[id];
         if (!t) return;
-        const siblings = Object.values(state.tasks)
-            .filter((s) => s.status === status && s.id !== id)
-            .sort((a, b) => a.sortOrder - b.sortOrder);
-        if (index === undefined || index < 0 || index > siblings.length) index = siblings.length;
-        siblings.splice(index, 0, t);
-        siblings.forEach((s, i) => (s.sortOrder = i));
-        persist((prev) => ({
-            ...prev,
-            tasks: {
-                ...prev.tasks,
-                [id]: { ...prev.tasks[id], status, updatedAt: now() },
-            },
-        }));
+        persist((prev) => {
+            const tasks = { ...prev.tasks };
+            const moving = tasks[id];
+            if (!moving) return prev;
+            const siblings = Object.values(tasks)
+                .filter((s) => s.status === status && s.id !== id)
+                .sort((a, b) => a.sortOrder - b.sortOrder);
+            const targetIndex = index === undefined || index < 0 || index > siblings.length ? siblings.length : index;
+            const orderedIds: string[] = [];
+            for (let i = 0; i < siblings.length; i++) {
+                if (i === targetIndex) orderedIds.push(id);
+                orderedIds.push(siblings[i].id);
+            }
+            if (orderedIds.length === siblings.length) orderedIds.push(id);
+            const updatedAt = now();
+            orderedIds.forEach((tid, i) => {
+                const task = tasks[tid];
+                tasks[tid] = { ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt };
+            });
+            return { ...prev, tasks };
+        });
     };
 
     const listProjectByName = (name: string) => Object.values(state.projects).find((p) => p.name.toLowerCase() === name.toLowerCase());
