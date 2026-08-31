@@ -36,6 +36,56 @@ describe("SupabaseGitHubDataAccess", () => {
         });
     });
 
+    it("enumerates a typed repository and label payload", async () => {
+        const mocks = clientMock();
+        mocks.invoke.mockResolvedValue({ data: { repos: [{
+            owner_id: "owner-1",
+            full_name: "octocat/hello-world",
+            selected: true,
+            project_id: "project-1",
+            label_filter: "bug",
+            include_closed: false,
+            is_stale: false,
+            updated_at: "2026-08-31T12:00:00.000Z",
+            labels: [{ name: "bug", color: "D73A4A", description: "Something is broken" }],
+        }] }, error: null });
+
+        await expect(new SupabaseGitHubDataAccess(mocks.client).enumerateRepositories()).resolves.toEqual([{
+            ownerId: "owner-1",
+            fullName: "octocat/hello-world",
+            selected: true,
+            projectId: "project-1",
+            labelFilter: "bug",
+            includeClosed: false,
+            isStale: false,
+            updatedAt: "2026-08-31T12:00:00.000Z",
+            labels: [{ name: "bug", color: "d73a4a", description: "Something is broken" }],
+        }]);
+        expect(mocks.invoke).toHaveBeenCalledWith("github-enumerate-repos", {
+            method: "POST",
+            body: {},
+        });
+    });
+
+    it("accepts the empty repository enumeration payload", async () => {
+        const mocks = clientMock();
+        mocks.invoke.mockResolvedValue({ data: { repos: [] }, error: null });
+        await expect(new SupabaseGitHubDataAccess(mocks.client).enumerateRepositories()).resolves.toEqual([]);
+    });
+
+    it.each([
+        null,
+        {},
+        { repos: null },
+        { repos: [], token: "must-not-reach-client" },
+        { repos: [{ full_name: "octocat/repo" }] },
+    ])("rejects invalid enumeration payload %#", async (data) => {
+        const mocks = clientMock();
+        mocks.invoke.mockResolvedValue({ data, error: null });
+        await expect(new SupabaseGitHubDataAccess(mocks.client).enumerateRepositories())
+            .rejects.toMatchObject({ code: "GITHUB_INVALID_RESPONSE" });
+    });
+
     it("rejects blank inputs before invoking the function", async () => {
         const mocks = clientMock();
         const access = new SupabaseGitHubDataAccess(mocks.client);
@@ -81,7 +131,14 @@ describe("SupabaseGitHubDataAccess", () => {
         "GITHUB_UPSTREAM_ERROR",
         "GITHUB_INVALID_RESPONSE",
         "GITHUB_TOKEN_INVALID",
+        "GITHUB_RATE_LIMITED",
+        "GITHUB_REPO_NOT_FOUND",
         "SETTINGS_SAVE_FAILED",
+        "SETTINGS_READ_FAILED",
+        "REPOSITORY_READ_FAILED",
+        "REPOSITORY_WRITE_FAILED",
+        "ENUMERATION_UNAVAILABLE",
+        "ENUMERATION_FAILED",
         "EXCHANGE_FAILED",
     ];
 
@@ -93,6 +150,19 @@ describe("SupabaseGitHubDataAccess", () => {
         });
         await expect(new SupabaseGitHubDataAccess(mocks.client).completeAuthorization("code-123"))
             .rejects.toEqual(new GitHubIntegrationError(code, `safe ${code}`));
+    });
+
+    it("maps GitHub rate-limit retry metadata", async () => {
+        const mocks = clientMock();
+        mocks.invoke.mockResolvedValue({ data: null, error: {
+            context: { json: vi.fn().mockResolvedValue({
+                error: "GitHub rate limit reached",
+                code: "GITHUB_RATE_LIMITED",
+                retry_after_seconds: 30,
+            }) },
+        } });
+        await expect(new SupabaseGitHubDataAccess(mocks.client).enumerateRepositories())
+            .rejects.toMatchObject({ code: "GITHUB_RATE_LIMITED", retryAfterSeconds: 30 });
     });
 
     it("maps thrown and non-JSON function failures to network errors", async () => {

@@ -4,6 +4,24 @@ export interface GitHubSettings {
     githubUsername: string;
 }
 
+export interface GitHubRepositoryLabel {
+    name: string;
+    color: string;
+    description: string | null;
+}
+
+export interface GitHubRepository {
+    ownerId: string;
+    fullName: string;
+    selected: boolean;
+    projectId: string | null;
+    labelFilter: string | null;
+    includeClosed: boolean;
+    isStale: boolean;
+    updatedAt: string;
+    labels: GitHubRepositoryLabel[];
+}
+
 export type GitHubIntegrationErrorCode =
     | "AUTH_REQUIRED"
     | "INVALID_REQUEST"
@@ -14,12 +32,23 @@ export type GitHubIntegrationErrorCode =
     | "GITHUB_UPSTREAM_ERROR"
     | "GITHUB_INVALID_RESPONSE"
     | "GITHUB_TOKEN_INVALID"
+    | "GITHUB_RATE_LIMITED"
+    | "GITHUB_REPO_NOT_FOUND"
     | "SETTINGS_SAVE_FAILED"
+    | "SETTINGS_READ_FAILED"
+    | "REPOSITORY_READ_FAILED"
+    | "REPOSITORY_WRITE_FAILED"
+    | "ENUMERATION_UNAVAILABLE"
+    | "ENUMERATION_FAILED"
     | "EXCHANGE_FAILED"
     | "NETWORK_ERROR";
 
 export class GitHubIntegrationError extends Error {
-    constructor(readonly code: GitHubIntegrationErrorCode, message: string) {
+    constructor(
+        readonly code: GitHubIntegrationErrorCode,
+        message: string,
+        readonly retryAfterSeconds?: number,
+    ) {
         super(message);
         this.name = "GitHubIntegrationError";
         Object.setPrototypeOf(this, new.target.prototype);
@@ -29,11 +58,13 @@ export class GitHubIntegrationError extends Error {
 export interface GitHubDataAccess {
     beginAuthorization(state: string): Promise<string>;
     completeAuthorization(code: string): Promise<GitHubSettings>;
+    enumerateRepositories(): Promise<GitHubRepository[]>;
 }
 
 interface FunctionErrorBody {
     error?: unknown;
     code?: unknown;
+    retry_after_seconds?: unknown;
 }
 
 const KNOWN_CODES = new Set<GitHubIntegrationErrorCode>([
@@ -46,7 +77,14 @@ const KNOWN_CODES = new Set<GitHubIntegrationErrorCode>([
     "GITHUB_UPSTREAM_ERROR",
     "GITHUB_INVALID_RESPONSE",
     "GITHUB_TOKEN_INVALID",
+    "GITHUB_RATE_LIMITED",
+    "GITHUB_REPO_NOT_FOUND",
     "SETTINGS_SAVE_FAILED",
+    "SETTINGS_READ_FAILED",
+    "REPOSITORY_READ_FAILED",
+    "REPOSITORY_WRITE_FAILED",
+    "ENUMERATION_UNAVAILABLE",
+    "ENUMERATION_FAILED",
     "EXCHANGE_FAILED",
 ]);
 
@@ -67,7 +105,12 @@ async function mapFunctionError(error: unknown): Promise<GitHubIntegrationError>
         : typeof candidate?.message === "string" && candidate.message
             ? candidate.message
             : "Unable to reach GitHub.";
-    return new GitHubIntegrationError(code, message);
+    const retryAfterSeconds = typeof body.retry_after_seconds === "number"
+        && Number.isFinite(body.retry_after_seconds)
+        && body.retry_after_seconds >= 0
+        ? body.retry_after_seconds
+        : undefined;
+    return new GitHubIntegrationError(code, message, retryAfterSeconds);
 }
 
 function invalidRequest(message: string): GitHubIntegrationError {
@@ -76,6 +119,66 @@ function invalidRequest(message: string): GitHubIntegrationError {
 
 function invalidResponse(message: string): GitHubIntegrationError {
     return new GitHubIntegrationError("GITHUB_INVALID_RESPONSE", message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nullableString(value: unknown): value is string | null {
+    return value === null || typeof value === "string";
+}
+
+function repositoryLabel(value: unknown): GitHubRepositoryLabel {
+    if (!isRecord(value) || Object.keys(value).some((key) => !["name", "color", "description"].includes(key))) {
+        throw invalidResponse("GitHub enumeration returned invalid labels.");
+    }
+    if (
+        typeof value.name !== "string"
+        || !value.name.trim()
+        || typeof value.color !== "string"
+        || !/^[0-9a-f]{6}$/i.test(value.color)
+        || !nullableString(value.description)
+    ) {
+        throw invalidResponse("GitHub enumeration returned invalid labels.");
+    }
+    return { name: value.name, color: value.color.toLowerCase(), description: value.description };
+}
+
+function repository(value: unknown): GitHubRepository {
+    const fields = [
+        "owner_id", "full_name", "selected", "project_id", "label_filter",
+        "include_closed", "is_stale", "updated_at", "labels",
+    ];
+    if (!isRecord(value) || Object.keys(value).some((key) => !fields.includes(key)) || !Array.isArray(value.labels)) {
+        throw invalidResponse("GitHub enumeration returned an invalid response.");
+    }
+    if (
+        typeof value.owner_id !== "string"
+        || !value.owner_id
+        || typeof value.full_name !== "string"
+        || !/^[^/\s]+\/[^/\s]+$/.test(value.full_name)
+        || typeof value.selected !== "boolean"
+        || !nullableString(value.project_id)
+        || !nullableString(value.label_filter)
+        || typeof value.include_closed !== "boolean"
+        || typeof value.is_stale !== "boolean"
+        || typeof value.updated_at !== "string"
+        || !value.updated_at
+    ) {
+        throw invalidResponse("GitHub enumeration returned an invalid response.");
+    }
+    return {
+        ownerId: value.owner_id,
+        fullName: value.full_name,
+        selected: value.selected,
+        projectId: value.project_id,
+        labelFilter: value.label_filter,
+        includeClosed: value.include_closed,
+        isStale: value.is_stale,
+        updatedAt: value.updated_at,
+        labels: value.labels.map(repositoryLabel),
+    };
 }
 
 export class SupabaseGitHubDataAccess implements GitHubDataAccess {
@@ -155,5 +258,22 @@ export class SupabaseGitHubDataAccess implements GitHubDataAccess {
             throw invalidResponse("GitHub authorization returned an invalid response.");
         }
         return { githubUsername };
+    }
+
+    async enumerateRepositories(): Promise<GitHubRepository[]> {
+        let response;
+        try {
+            response = await this.client.functions.invoke("github-enumerate-repos", {
+                method: "POST",
+                body: {},
+            });
+        } catch {
+            throw new GitHubIntegrationError("NETWORK_ERROR", "Unable to enumerate GitHub repositories.");
+        }
+        if (response.error) throw await mapFunctionError(response.error);
+        if (!isRecord(response.data) || Object.keys(response.data).some((key) => key !== "repos") || !Array.isArray(response.data.repos)) {
+            throw invalidResponse("GitHub enumeration returned an invalid response.");
+        }
+        return response.data.repos.map(repository);
     }
 }

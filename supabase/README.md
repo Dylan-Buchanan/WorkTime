@@ -113,7 +113,10 @@ Deploy the authenticated function with gateway JWT verification enabled:
 ```sh
 npx supabase secrets set GITHUB_OAUTH_CLIENT_ID=... GITHUB_OAUTH_CLIENT_SECRET=... GITHUB_OAUTH_REDIRECT_URI=...
 npx supabase functions deploy github-oauth-exchange
+npx supabase functions deploy github-enumerate-repos
 ```
+
+`github-enumerate-repos` uses the stored server-only token to list accessible repositories and labels. It seeds new repositories as selected, preserves existing per-repository preferences, and marks repositories missing from later listings as stale rather than deleting them.
 
 ## Google Calendar integration
 
