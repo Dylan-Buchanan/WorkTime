@@ -14,12 +14,12 @@ Add a pure TypeScript engine module `githubClassification.ts` (with tests) that 
 ## Steps to Reproduce Context
 
 1. The Shortcut path has `src/lib/engine/shortcutClassification.ts` with `ShortcutStoryPayload`, `ShortcutTaskProposal`, `classifyShortcutStories` (overload + input-object form), URL normalization for dedup, and skip counts (`new`, `skippedAlreadyAdded`, ...).
-2. The GitHub engine does not exist; issue 92's preview modal and issue 91's data access need the payload/proposal contract to build against.
+2. The GitHub engine does not exist; issue 94's preview modal and issue 93's data access need the payload/proposal contract to build against.
 3. `src/lib/engine/` is the pure source of truth: no I/O, network, wall-clock, or random-ID dependencies in command inputs.
 
 ## Expected Behavior
 
-- A slim `GithubIssuePayload` type matching what `github-sync` (issue 89) returns (issue number, title, html_url, state, labels, closed flag).
+- A slim `GithubIssuePayload` type matching what `github-sync` (issue 91) returns (issue number, title, html_url, state, labels, closed flag).
 - `buildGithubTaskProposal(issue, projectId)` produces a proposal with:
   - `tags: [repoName]` — the repo name (e.g. `owner/repo` or just the repo segment, per the agreed tag format) from the sync context;
   - `description: ""` — description-free imports by design;
@@ -27,7 +27,7 @@ Add a pure TypeScript engine module `githubClassification.ts` (with tests) that 
   - stable status/priority defaults (Backlog/Medium) consistent with the Shortcut path;
   - no `estimatePomos`/`dueDate` unless a GitHub analog is defined (issues have no points/deadline by default).
 - `classifyGithubIssues(input)` deduplicates by normalized issue URL against `currentTasks` links (reusing the URL-normalization approach from `normalizeShortcutUrl` — trim, strip query/fragment-suffix handling, trailing-slash removal), and returns counts including new/skippedAlreadyAdded plus state/label-aware skips: closed issues excluded when the repo's `include_closed` is false, and issues not matching the applied label filter when relevant to classification-time accounting.
-- Repo-specific default project: the sync context carries the repo's `project_id` as the proposal default, still overridable per task in the preview modal (issue 92).
+- Repo-specific default project: the sync context carries the repo's `project_id` as the proposal default, still overridable per task in the preview modal (issue 94).
 
 ## Actual Behavior
 
@@ -69,4 +69,4 @@ export function buildShortcutTaskProposal(story, projectId = null): ShortcutTask
 ## Notes
 
 - Decide and document the exact tag value: `owner/repo` full name vs bare repo name; the issue description says "the repo name as a tag" — pick one and encode it in tests since tags persist forever on imported tasks (staleness must never affect them).
-- This issue is independent of issues 86–89 at code level (pure module + tests) but its payload type is the contract for issue 89's response and issue 91/92 consumers.
+- This issue is independent of issues 88–91 at code level (pure module + tests) but its payload type is the contract for issue 91's response and issue 93/94 consumers.

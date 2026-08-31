@@ -9,7 +9,7 @@ Needs research before implementation: Yes — determine the feasible Tauri callb
 
 ## Summary
 
-Ensure the GitHub OAuth connect flow (issue 87) survives the redirect round-trip on both origins: the browser PWA uses the canonical hosted origin (`VITE_PUBLIC_APP_URL`), and the Tauri desktop app must return the user to an authenticated state where the connect flow can complete. The app's existing recovery-origin convention (`VITE_PUBLIC_APP_URL`, no path, no trailing slash) is the model to follow.
+Ensure the GitHub OAuth connect flow (issue 89) survives the redirect round-trip on both origins: the browser PWA uses the canonical hosted origin (`VITE_PUBLIC_APP_URL`), and the Tauri desktop app must return the user to an authenticated state where the connect flow can complete. The app's existing recovery-origin convention (`VITE_PUBLIC_APP_URL`, no path, no trailing slash) is the model to follow.
 
 ## Steps to Reproduce Context
 
@@ -19,7 +19,7 @@ Ensure the GitHub OAuth connect flow (issue 87) survives the redirect round-trip
 
 ## Expected Behavior
 
-- Browser PWA: the GitHub authorize redirect targets the callback URL on the canonical `VITE_PUBLIC_APP_URL` origin; the callback route/page hands the `code` to the exchange function (issue 87) and returns the user to `/integrations` with the connect flow completing.
+- Browser PWA: the GitHub authorize redirect targets the callback URL on the canonical `VITE_PUBLIC_APP_URL` origin; the callback route/page hands the `code` to the exchange function (issue 89) and returns the user to `/integrations` with the connect flow completing.
 - Tauri: the round-trip returns the user to the desktop app with the `code` available to the exchange flow — via whichever mechanism research validates (system-browser + deep-link capture, loopback redirect, or redirect through the canonical origin that then bridges into the webview). The session used for the exchange call must be the Tauri app's Supabase session.
 - The callback path handles failure states (denied auth, missing/expired `code`, wrong state) with user-facing copy and a route back to Integrations.
 - No new Tauri `invoke` data paths, no service-role or secret material in the client; only `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_PUBLIC_APP_URL` are used in browser/Tauri configuration.
@@ -31,7 +31,7 @@ No OAuth callback route or Tauri round-trip handling exists; connecting GitHub f
 ## Requirements for completed issue
 
 1. A documented decision on the Tauri callback mechanism with the trade-offs evaluated (deep-link vs loopback vs canonical-origin bridge), consistent with the slim-shell constraint (no new `invoke` data paths).
-2. A callback route/page in the React app that completes the exchange via issue 87's function on the PWA origin and works for the Tauri flow, including error/denied states.
+2. A callback route/page in the React app that completes the exchange via issue 89's function on the PWA origin and works for the Tauri flow, including error/denied states.
 3. The OAuth App's registered callback URL(s) cover both surfaces (documented in setup notes, e.g. `supabase/README.md` or equivalent docs) using `VITE_PUBLIC_APP_URL` as the canonical production value.
 4. E2E or unit coverage that the callback route parses the `code`/error params and triggers the exchange path; a manual verification path for the Tauri round-trip is documented (automating the native redirect in Playwright is out of scope if infeasible).
 5. `pnpm test:platform` still passes (slim-shell/capability checks unaffected) and `pnpm tauri build` produces the MSI with the flow intact.
@@ -62,4 +62,4 @@ const { error } = await client.auth.resetPasswordForEmail(normalizedEmail, {
 
 - GitHub's OAuth App allows exactly one callback URL per app; if a single URL cannot serve both origins, the canonical-origin bridge (browser-hosted callback page that forwards into Tauri) is the likely resolution — this is the core research question.
 - Connect requires an authenticated Supabase session; in Tauri the callback completion must reuse the webview's stored GoTrue session (`sb-...-auth-token`), not start a new login.
-- Depends on issue 87 (exchange function + authorize URL construction); consumed by issue 92's connect button.
+- Depends on issue 89 (exchange function + authorize URL construction); consumed by issue 94's connect button.

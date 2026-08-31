@@ -13,16 +13,16 @@ Add an enumeration endpoint that lists the connected user's accessible repositor
 
 ## Steps to Reproduce Context
 
-1. After issue 87, a user can connect GitHub, but there is no way to populate `github_repos` or choose per-repo label filters.
-2. The UI (issue 92) needs per-repo label lists to power the single-label picker and needs the stale flag to render stale-repo affordances.
-3. `github_repos` (issue 86) exists with `selected`, `project_id`, `label_filter`, `include_closed`, and `is_stale` columns but is never written by any code path.
+1. After issue 89, a user can connect GitHub, but there is no way to populate `github_repos` or choose per-repo label filters.
+2. The UI (issue 94) needs per-repo label lists to power the single-label picker and needs the stale flag to render stale-repo affordances.
+3. `github_repos` (issue 88) exists with `selected`, `project_id`, `label_filter`, `include_closed`, and `is_stale` columns but is never written by any code path.
 
 ## Expected Behavior
 
 - A new Edge Function (e.g. `github-enumerate-repos`) authenticates the caller (mirroring `shortcut-sync/index.ts`), loads the token from `github_settings` via the service role, and calls `GET /user/repos` with pagination (affiliation/sort choices documented).
 - For each returned repo it upserts a `github_repos` row keyed by `(owner_id, full_name)` with `selected = true` when newly seeded, preserving existing per-repo settings (project_id, label_filter, include_closed) and flipping `is_stale` back to `false` for reappearing repos.
 - Rows in `github_repos` that are absent from the `GET /user/repos` result are updated to `is_stale = true` — never deleted (enumeration marks, doesn't delete).
-- The response includes the repo rows (non-secret fields) plus each repo's available labels (from `GET /repos/{owner}/{repo}/labels`) for the filter picker; per-repo label fetching respects the pagination cap and rate-limit handling from the shared client work in issue 89.
+- The response includes the repo rows (non-secret fields) plus each repo's available labels (from `GET /repos/{owner}/{repo}/labels`) for the filter picker; per-repo label fetching respects the pagination cap and rate-limit handling from the shared client work in issue 91.
 - Error mapping mirrors the `shortcutApi.ts` taxonomy, including `GITHUB_TOKEN_INVALID`, rate-limit with `retry_after_seconds`, and upstream/invalid-response codes.
 
 ## Actual Behavior
@@ -35,15 +35,15 @@ No endpoint exists; repos can't be listed, seeded, filtered by label, or marked 
 2. Staleness semantics: missing repos are flagged `is_stale = true`, reappearing repos are unflagged; no row is ever deleted by enumeration.
 3. Error responses follow the established `{ error, code }` shape with a token-invalid code distinct from repo-specific codes.
 4. Unit tests for the request/response mapping and staleness flip logic (seeded vs reappearing vs missing rows), mirroring how `shortcutApi.ts` logic is testable.
-5. The data access layer (issue 91) can call this endpoint and receive a typed repo+labels payload.
+5. The data access layer (issue 93) can call this endpoint and receive a typed repo+labels payload.
 
 ## Context
 
 - Files:
   - `supabase/functions/shortcut-sync/index.ts` — auth, CORS, service-role settings read, and error-body conventions to mirror.
   - `supabase/functions/shortcut-sync/shortcutApi.ts` — fetch/error taxonomy (`SHORTCUT_TOKEN_INVALID`, `SHORTCUT_RATE_LIMITED` with `Retry-After`, `SHORTCUT_UPSTREAM_ERROR`, `SHORTCUT_INVALID_RESPONSE`) and pagination-cap pattern (`MAX_PAGES`).
-  - `docs/issues/issue-86.md` — `github_repos` schema with `is_stale`.
-  - `docs/issues/issue-89.md` — the shared `githubApi` client this endpoint should reuse for GitHub fetches and error mapping.
+  - `docs/issues/issue-88.md` — `github_repos` schema with `is_stale`.
+  - `docs/issues/issue-91.md` — the shared `githubApi` client this endpoint should reuse for GitHub fetches and error mapping.
 - Code Snippets:
 
 ```ts
@@ -55,6 +55,6 @@ if (response.status === 429) throw new ShortcutApiError("Shortcut rate limit rea
 
 ## Notes
 
-- Zero-repo result (fresh GitHub account or no accessible repos) must return a well-defined empty payload the UI can render as an empty state (issue 92).
-- Label listing per repo can be N+1 across repos; respect the pagination cap and rate limits — the cap chosen in issue 89 applies here too.
-- This issue depends on issues 86 (tables) and 87 (token in `github_settings`); issue 92 consumes its payload.
+- Zero-repo result (fresh GitHub account or no accessible repos) must return a well-defined empty payload the UI can render as an empty state (issue 94).
+- Label listing per repo can be N+1 across repos; respect the pagination cap and rate limits — the cap chosen in issue 91 applies here too.
+- This issue depends on issues 88 (tables) and 89 (token in `github_settings`); issue 94 consumes its payload.

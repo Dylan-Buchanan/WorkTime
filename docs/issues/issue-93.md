@@ -14,15 +14,15 @@ Add `GitHubDataAccess.ts` (interface + `SupabaseGitHubDataAccess` implementation
 ## Steps to Reproduce Context
 
 1. `src/lib/data/ShortcutDataAccess.ts` defines the established pattern: typed settings/result interfaces, `ShortcutIntegrationError` with code taxonomy, function error-body mapping, row validation.
-2. The GitHub UI (issue 92) needs a typed data access to load settings/repos, mutate per-repo options, and invoke sync; none exists.
-3. Issues 86–89 define the tables, RPCs, and Edge Functions this module calls.
+2. The GitHub UI (issue 94) needs a typed data access to load settings/repos, mutate per-repo options, and invoke sync; none exists.
+3. Issues 88–91 define the tables, RPCs, and Edge Functions this module calls.
 
 ## Expected Behavior
 
 - Typed surface (names indicative):
   - `loadSettings(): Promise<GithubSettings | null>` — connected username, `lastSyncedAt`, `updatedAt`; never the token.
-  - `listRepos(): Promise<{ repos: GithubRepoRow[]; labels: Record<repoFullName, string[]> }>` — via the enumeration endpoint (issue 88), returning staleness flags and per-repo label options.
-  - `toggleSelection(repoFullName, selected)` and `updateRepoOptions(repoFullName, { projectId, labelFilter, includeClosed })` — through owner-derived RPCs/table writes from issue 86; stale rows remain editable.
+  - `listRepos(): Promise<{ repos: GithubRepoRow[]; labels: Record<repoFullName, string[]> }>` — via the enumeration endpoint (issue 90), returning staleness flags and per-repo label options.
+  - `toggleSelection(repoFullName, selected)` and `updateRepoOptions(repoFullName, { projectId, labelFilter, includeClosed })` — through owner-derived RPCs/table writes from issue 88; stale rows remain editable.
   - `sync(repoFullName, options): Promise<GithubSyncResult>` — invokes `github-sync` with the repo's options, maps function error bodies to typed codes including `GITHUB_REPO_NOT_FOUND` (kept distinct from `GITHUB_TOKEN_INVALID`), `GITHUB_RATE_LIMITED` (with `retryAfterSeconds`), upstream/invalid-response codes.
   - `disconnect(): Promise<void>` — deletes `github_settings` (and by cascade/policy the repo rows), mirroring Shortcut's disconnect.
 - Strict response validation (like `isStory`) for sync payloads and repo rows, throwing a typed invalid-response error.
@@ -44,7 +44,7 @@ No GitHub data access exists; the UI has no way to talk to the GitHub backend.
 - Files:
   - `src/lib/data/ShortcutDataAccess.ts` — the template: `ShortcutIntegrationError`, `FUNCTION_ERROR_CODES` set, `mapFunctionError`, `isStory` validation, `sync()` via `client.functions.invoke`.
   - `src/lib/data/ShortcutDataAccess.test.ts` — mock-client test harness to mirror.
-  - `docs/issues/issue-86.md` / `issue-88.md` / `issue-89.md` — RPCs, enumeration payload, and sync function this module consumes.
+  - `docs/issues/issue-88.md` / `issue-90.md` / `issue-91.md` — RPCs, enumeration payload, and sync function this module consumes.
 - Code Snippets:
 
 ```ts
@@ -63,6 +63,6 @@ async sync(): Promise<ShortcutSyncResult> {
 
 ## Notes
 
-- Per-repo sync seeds the preview's default project from the repo's `project_id`; the data access should return the repo's `project_id` in the sync result context so the UI (issue 92) can seed the modal.
+- Per-repo sync seeds the preview's default project from the repo's `project_id`; the data access should return the repo's `project_id` in the sync result context so the UI (issue 94) can seed the modal.
 - The token must never appear in any returned type — `loadSettings` returns only non-secret fields, exactly as Shortcut does.
-- Depends on issues 86 (tables/RPCs), 88 (enumeration), 89 (sync function + payload); consumed by issue 92.
+- Depends on issues 88 (tables/RPCs), 90 (enumeration), 91 (sync function + payload); consumed by issue 94.

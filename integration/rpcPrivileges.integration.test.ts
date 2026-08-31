@@ -98,4 +98,23 @@ describe("security-definer RPC privileges", () => {
             p_scope_level: "readonly",
         }));
     });
+
+    it("denies anonymous GitHub credential writes", async () => {
+        const client = anonymousClient();
+        await expectPermissionDenied(client.rpc("save_github_settings", {
+            p_token: "not-authorized",
+            p_github_username: "not-authorized",
+        }));
+    });
+
+    it("denies anonymous GitHub repository preference writes", async () => {
+        const client = anonymousClient();
+        await expectPermissionDenied(client.rpc("update_github_repo_preferences", {
+            p_full_name: "acme/worktime",
+            p_selected: true,
+            p_project_id: null,
+            p_label_filter: null,
+            p_include_closed: false,
+        }));
+    });
 });

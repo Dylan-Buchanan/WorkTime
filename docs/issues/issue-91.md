@@ -13,8 +13,8 @@ Add a per-repo `github-sync` Edge Function and a `githubApi` client that fetches
 
 ## Steps to Reproduce Context
 
-1. After issues 86–88, tokens and repo rows (with `label_filter`, `include_closed`) exist, but there is no way to fetch issues for a repo.
-2. The classification engine (issue 90) and UI (issue 92) need a slim issue payload per repo to build task proposals.
+1. After issues 88–90, tokens and repo rows (with `label_filter`, `include_closed`) exist, but there is no way to fetch issues for a repo.
+2. The classification engine (issue 92) and UI (issue 94) need a slim issue payload per repo to build task proposals.
 3. `shortcut-sync` demonstrates the intended function structure: authenticated caller, service-role settings read, upstream client with typed errors, `last_synced_at` written only on success.
 
 ## Expected Behavior
@@ -42,8 +42,8 @@ No GitHub sync path exists; issues cannot be imported.
 - Files:
   - `supabase/functions/shortcut-sync/shortcutApi.ts` — the direct template: `Fetcher` injectable for tests, `MAX_PAGES` cap, `ShortcutApiError` with `status`/`code`/`retryAfterSeconds`, strict `isRecord`/`required*` validation.
   - `supabase/functions/shortcut-sync/index.ts` — function skeleton: bearer JWT check, service-role client, settings read, success-only `last_synced_at` update, `{ error, code }` responses.
-  - `docs/issues/issue-86.md` — `github_repos` options and `github_settings.last_synced_at`.
-  - `docs/issues/issue-88.md` — shared enumeration endpoint that should reuse this client.
+  - `docs/issues/issue-88.md` — `github_repos` options and `github_settings.last_synced_at`.
+  - `docs/issues/issue-90.md` — shared enumeration endpoint that should reuse this client.
 - Code Snippets:
 
 ```ts
@@ -66,6 +66,6 @@ const { error: updateError } = await supabase
 
 ## Notes
 
-- A `GITHUB_REPO_NOT_FOUND` response must not flip `is_stale` by itself — staleness is owned by enumeration (issue 88); sync only reports the not-accessible state so the UI (issue 92) can render "repo no longer accessible" while keeping the row editable.
+- A `GITHUB_REPO_NOT_FOUND` response must not flip `is_stale` by itself — staleness is owned by enumeration (issue 90); sync only reports the not-accessible state so the UI (issue 94) can render "repo no longer accessible" while keeping the row editable.
 - Pagination cap: reuse the `MAX_PAGES`-style constant approach; document the chosen cap (e.g. 4 pages × 100).
-- Depends on issues 86–87; consumed by issue 90's engine (payload shape contract) and issue 91's data access.
+- Depends on issues 88–89; consumed by issue 92's engine (payload shape contract) and issue 93's data access.
