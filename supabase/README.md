@@ -92,6 +92,29 @@ npx supabase functions deploy shortcut-sync
 
 No Shortcut token belongs in an environment file, log, `VITE_` variable, or committed source.
 
+## GitHub OAuth App integration
+
+GitHub connection uses a classic GitHub OAuth App. Configure these values only in the ignored `supabase/.env.local` file for local development and as hosted Supabase secrets:
+
+```dotenv
+GITHUB_OAUTH_CLIENT_ID=...
+GITHUB_OAUTH_CLIENT_SECRET=...
+GITHUB_OAUTH_REDIRECT_URI=http://localhost:3000/auth/github/callback
+```
+
+Register `GITHUB_OAUTH_REDIRECT_URI` as the OAuth App's exact authorization callback URL. In production it must be `${VITE_PUBLIC_APP_URL}/auth/github/callback`, using the canonical origin without a trailing slash. The same server-configured URI is sent during authorization and code exchange; no GitHub value belongs in a `VITE_` variable or client bundle. Issue 95 adds the callback route and cross-surface PWA/Tauri return handling.
+
+The authorization request asks only for the classic OAuth App `repo` scope, which is needed to enumerate and read issues from both public and private repositories. The function independently verifies the WorkTime bearer JWT, exchanges the one-time code with the server-only client secret, fetches `GET /user`, and service-role upserts the token and connected login into `github_settings`. It returns only the login; the token remains non-selectable by authenticated browser clients.
+
+Classic GitHub OAuth App user access tokens do not expire by default, unlike expiring GitHub App user tokens. WorkTime therefore stores no refresh token and performs no refresh rotation; revocation requires reconnecting the integration.
+
+Deploy the authenticated function with gateway JWT verification enabled:
+
+```sh
+npx supabase secrets set GITHUB_OAUTH_CLIENT_ID=... GITHUB_OAUTH_CLIENT_SECRET=... GITHUB_OAUTH_REDIRECT_URI=...
+npx supabase functions deploy github-oauth-exchange
+```
+
 ## Google Calendar integration
 
 Google Calendar uses a Google OAuth web client and the Calendar API. Configure these server-only function values in ignored `supabase/.env.local` for local development and as hosted Supabase secrets:
