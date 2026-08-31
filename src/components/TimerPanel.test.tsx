@@ -230,4 +230,24 @@ describe("TimerPanel projected finish", () => {
         fireEvent.blur(estimateInput);
         await waitFor(async () => expect((await data.loadPMState())?.tasks.overage?.estimatePomos).toBe(1));
     });
+
+    it("shows pomodoro progress for the active task when no timer is running", async () => {
+        const appTask = {
+            ...makeAppTask("app-no-timer", "No timer task"),
+            completed_pomodoros: 1,
+        };
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { [appTask.id]: appTask },
+            active_task: appTask.id,
+        }));
+
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText(/goal 2p/)).toBeInTheDocument());
+        const card = screen.getByText((_, node) =>
+            node?.textContent?.replace(/\s+/g, " ").trim() === "Focus progress: 1p done · 1p left (goal 2p)"
+        );
+        expect(card).toBeInTheDocument();
+        expect(screen.getByText("READY")).toBeInTheDocument();
+    });
 });

@@ -8,3 +8,5 @@
 4. Run `pnpm app` to ensure the changes worked
 5. Run `pnpm tauri build`.
 6. Run the new MSI file in `target/release/bundle/msi`.
+
+Push supabase edge functions `npx supabase functions deploy <name> --no-verify-jwt` using no verify jwt as needed.

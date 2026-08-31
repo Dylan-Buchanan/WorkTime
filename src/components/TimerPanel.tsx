@@ -627,7 +627,7 @@ export const TimerPanel: React.FC = () => {
                             </button>
                         )}
                     </div>
-                    {timer && activePomodoroSummary && (
+                    {activePomodoroSummary && (
                         <div className="w-full text-[11px] text-neutral-400 bg-neutral-900/50 border border-neutral-800 rounded-md px-3 py-2">
                             Focus progress: <span className="text-neutral-200 font-medium">{formatPomodoroCount(activePomodoroSummary.completed)}</span> done ·
                             <span className="text-neutral-200 font-medium"> {formatPomodoroCount(activePomodoroSummary.remaining)}</span> left
