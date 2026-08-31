@@ -114,9 +114,14 @@ Deploy the authenticated function with gateway JWT verification enabled:
 npx supabase secrets set GITHUB_OAUTH_CLIENT_ID=... GITHUB_OAUTH_CLIENT_SECRET=... GITHUB_OAUTH_REDIRECT_URI=...
 npx supabase functions deploy github-oauth-exchange
 npx supabase functions deploy github-enumerate-repos
+npx supabase functions deploy github-sync
 ```
 
 `github-enumerate-repos` uses the stored server-only token to list accessible repositories and labels. It seeds new repositories as selected, preserves existing per-repository preferences, and marks repositories missing from later listings as stale rather than deleting them.
+
+Invoke `github-sync` with `POST` through the authenticated Supabase client and a body of `{ "full_name": "owner/repository" }`. The function verifies that the repository row belongs to the caller, reads `include_closed` and `label_filter` from that row (request bodies cannot override them), and fetches at most four 100-entry GitHub issue pages. Pull requests returned by GitHub's issues endpoint are excluded. A successful response is `{ issues, repo, synced_at }` and only then updates `github_settings.last_synced_at`.
+
+GitHub sync errors use `{ error, code }`; rate-limit responses can also include `retry_after_seconds`. `GITHUB_REPO_NOT_FOUND` remains distinct from `GITHUB_TOKEN_INVALID`, and sync failures do not modify the token, repository staleness, project assignment, label filter, or include-closed preference.
 
 ## Google Calendar integration
 

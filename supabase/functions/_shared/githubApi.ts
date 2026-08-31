@@ -12,6 +12,23 @@ export interface GitHubLabel {
     description: string | null;
 }
 
+export interface GitHubIssueFetchOptions {
+    includeClosed: boolean;
+    labelFilter: string | null;
+}
+
+export interface GitHubIssuePayload {
+    number: number;
+    title: string;
+    html_url: string;
+    state: "open" | "closed";
+    labels: string[];
+    closed: boolean;
+    created_at: string;
+    updated_at: string;
+    closed_at: string | null;
+}
+
 export type GitHubErrorCode =
     | "GITHUB_TOKEN_INVALID"
     | "GITHUB_RATE_LIMITED"
@@ -44,6 +61,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredString(record: Record<string, unknown>, key: string): string {
     const value = record[key];
     if (typeof value !== "string") throw invalidResponse();
+    return value;
+}
+
+function requiredNumber(record: Record<string, unknown>, key: string): number {
+    const value = record[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) throw invalidResponse();
     return value;
 }
 
@@ -134,6 +157,54 @@ function label(value: unknown): GitHubLabel {
     return { name, color: color.toLowerCase(), description: optionalString(value, "description") };
 }
 
+function issueLabel(value: unknown): string {
+    if (!isRecord(value)) throw invalidResponse();
+    const name = requiredString(value, "name");
+    if (!name.trim()) throw invalidResponse();
+    return name;
+}
+
+function issue(value: unknown): GitHubIssuePayload {
+    if (!isRecord(value) || !Array.isArray(value.labels)) throw invalidResponse();
+    const number = requiredNumber(value, "number");
+    const title = requiredString(value, "title");
+    const htmlUrl = requiredString(value, "html_url");
+    const state = requiredString(value, "state");
+    const createdAt = requiredString(value, "created_at");
+    const updatedAt = requiredString(value, "updated_at");
+    const closedAt = optionalString(value, "closed_at");
+    if (
+        !Number.isInteger(number)
+        || number <= 0
+        || !title.trim()
+        || !htmlUrl.trim()
+        || (state !== "open" && state !== "closed")
+        || Number.isNaN(Date.parse(createdAt))
+        || Number.isNaN(Date.parse(updatedAt))
+        || (closedAt !== null && Number.isNaN(Date.parse(closedAt)))
+        || (state === "open" && closedAt !== null)
+    ) {
+        throw invalidResponse();
+    }
+    return {
+        number,
+        title,
+        html_url: htmlUrl,
+        state,
+        labels: value.labels.map(issueLabel),
+        closed: state === "closed",
+        created_at: createdAt,
+        updated_at: updatedAt,
+        closed_at: closedAt,
+    };
+}
+
+function repositoryPath(fullName: string, resource: "labels" | "issues"): string {
+    const parts = fullName.split("/");
+    if (parts.length !== 2 || parts.some((part) => !part || /\s/.test(part))) throw invalidResponse();
+    return `/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/${resource}`;
+}
+
 function pagedUrl(path: string, page: number): URL {
     const url = new URL(path, GITHUB_API_ORIGIN);
     url.searchParams.set("per_page", String(PAGE_SIZE));
@@ -176,8 +247,32 @@ export async function fetchGitHubLabels(
     fullName: string,
     fetcher: Fetcher = fetch,
 ): Promise<GitHubLabel[]> {
-    const parts = fullName.split("/");
-    if (parts.length !== 2 || parts.some((part) => !part || /\s/.test(part))) throw invalidResponse();
-    const path = `/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/labels`;
-    return fetchPages(path, token, label, fetcher);
+    return fetchPages(repositoryPath(fullName, "labels"), token, label, fetcher);
+}
+
+/** Fetches at most four 100-item pages (400 upstream entries) for one repository. */
+export async function fetchGitHubIssues(
+    token: string,
+    fullName: string,
+    options: GitHubIssueFetchOptions,
+    fetcher: Fetcher = fetch,
+): Promise<GitHubIssuePayload[]> {
+    const result: GitHubIssuePayload[] = [];
+    const path = repositoryPath(fullName, "issues");
+    const normalizedLabel = options.labelFilter?.trim() || null;
+
+    for (let page = 1; page <= GITHUB_MAX_PAGES; page += 1) {
+        const url = pagedUrl(path, page);
+        url.searchParams.set("state", options.includeClosed ? "all" : "open");
+        if (normalizedLabel) url.searchParams.set("labels", normalizedLabel);
+        const value = await githubJson(url, token, fetcher);
+        if (!Array.isArray(value)) throw invalidResponse();
+        for (const entry of value) {
+            if (!isRecord(entry)) throw invalidResponse();
+            if (!("pull_request" in entry)) result.push(issue(entry));
+        }
+        // Pagination is based on upstream entries, including filtered pull requests.
+        if (value.length < PAGE_SIZE) break;
+    }
+    return result;
 }
