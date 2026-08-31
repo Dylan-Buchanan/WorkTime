@@ -17,6 +17,7 @@ import { setAgentApiKey } from "../lib/agent/apiKey";
 import type { StartOfDayWorkflowInput, StartOfDayWorkflowResult } from "../lib/agent/startOfDayWorkflow";
 import type { EndOfDayWorkflowInput, EndOfDayWorkflowResult } from "../lib/agent/endOfDayWorkflow";
 import type { ChatWorkflowInput } from "../lib/agent/chatWorkflow";
+import type { GoogleCalendarDataAccess } from "../lib/data/GoogleCalendarDataAccess";
 
 const OWNER = "agent-owner";
 const guardrails = {
@@ -199,20 +200,37 @@ describe("AgentApprovalProvider", () => {
                 changes: [updateChange("Rewritten")],
             };
         });
+        const fetchBusyIntervals = vi.fn().mockResolvedValue({
+            intervals: [{ start: "2026-08-07T14:00:00.000Z", end: "2026-08-07T14:30:00.000Z" }],
+            refreshedAt: "2026-08-07T13:00:00.000Z",
+        });
+        const googleCalendarDataAccess = {
+            loadSettings: vi.fn().mockResolvedValue({
+                scopeLevel: "readonly", selectedCalendarIds: ["primary"], worktimeCalendarId: null,
+                connectedAt: "2026-08-07T12:00:00.000Z", updatedAt: "2026-08-07T12:00:00.000Z",
+            }),
+            fetchBusyIntervals,
+        } as unknown as GoogleCalendarDataAccess;
         const PanelProbe = () => {
             const pm = usePM();
-            return <><span>{pm.state.tasks.t1?.title ?? "loading"}</span><AgentPanel runStartOfDay={runStartOfDay} /></>;
+            return <><span>{pm.state.tasks.t1?.title ?? "loading"}</span><AgentPanel runStartOfDay={runStartOfDay} googleCalendarDataAccess={googleCalendarDataAccess} /></>;
         };
         render(wrap(data, <MemoryRouter><PanelProbe /></MemoryRouter>));
         await screen.findByText("Original");
         fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
         fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
-        fireEvent.change(screen.getByLabelText("Work until"), { target: { value: "17:30" } });
+        fireEvent.change(screen.getByLabelText("Work until"), { target: { value: "23:59" } });
+        fireEvent.click(screen.getByRole("button", { name: "Refresh calendar" }));
+        expect(await screen.findByText("Calendar refreshed: 30 busy minutes.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
         await screen.findByLabelText("Update task proposal");
         expect(screen.getByLabelText("Today's recommended order")).toHaveTextContent("1");
         expect(screen.getByLabelText("Today's recommended order")).toHaveTextContent("Rewritten");
-        expect(runStartOfDay).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p1", workUntil: "17:30" }));
+        expect(runStartOfDay).toHaveBeenCalledWith(expect.objectContaining({
+            projectId: "p1", workUntil: "23:59",
+            busyIntervals: [{ start: "2026-08-07T14:00:00.000Z", end: "2026-08-07T14:30:00.000Z" }],
+        }));
+        expect(fetchBusyIntervals).toHaveBeenCalledTimes(2);
         expect(screen.getByText("Plan ready", { selector: "p" })).toHaveAttribute("aria-live", "polite");
         fireEvent.click(screen.getByText("Details (20)"));
         expect(screen.getByRole("list", { name: "Agent activity log" })).toHaveTextContent("Planner · gpt-5.6-luna · attempt 1/2 · 6.4s · non json");

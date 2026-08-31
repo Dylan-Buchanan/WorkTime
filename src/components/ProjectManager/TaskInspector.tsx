@@ -3,9 +3,22 @@ import { usePM } from "../../state/ProjectManagerContext";
 import { PMTask, TaskPriority, TaskStatus } from "../../state/types";
 import { useAppState } from "../../state/AppStateContext";
 import { useNavigate } from "react-router-dom";
+import type { GoogleCalendarDataAccess } from "../../lib/data/GoogleCalendarDataAccess";
+import type { GoogleCalendarOAuthReturn } from "../../lib/integrations";
+import { GoogleCalendarTaskSection } from "./GoogleCalendarTaskSection";
 // import { InspectorSkeleton } from './Skeletons';
 
-export const TaskInspector: React.FC = () => {
+export interface TaskInspectorProps {
+    googleCalendarDataAccess?: GoogleCalendarDataAccess;
+    googleCalendarResume?: GoogleCalendarOAuthReturn | null;
+    onGoogleCalendarResumeConsumed?: () => void;
+}
+
+export const TaskInspector: React.FC<TaskInspectorProps> = ({
+    googleCalendarDataAccess,
+    googleCalendarResume,
+    onGoogleCalendarResumeConsumed,
+}) => {
     const { state, updateTask } = usePM();
     const app = useAppState();
     const navigate = useNavigate();
@@ -230,6 +243,17 @@ export const TaskInspector: React.FC = () => {
                         </div>
                     )}
                 </Section>
+                {googleCalendarDataAccess && app.state && (
+                    <Section title="Calendar">
+                        <GoogleCalendarTaskSection
+                            task={task}
+                            workMinutes={app.state.settings.work_minutes}
+                            dataAccess={googleCalendarDataAccess}
+                            resume={googleCalendarResume}
+                            onResumeConsumed={onGoogleCalendarResumeConsumed}
+                        />
+                    </Section>
+                )}
                 <Section title="Details">
                     <textarea
                         value={task.description || ""}

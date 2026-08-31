@@ -97,6 +97,35 @@ describe("buildPlannerContext", () => {
         expect(result.workBudgetPomos).toBe(4);
     });
 
+    it("clips and merges caller-supplied busy intervals before pomodoro conversion", () => {
+        const result = buildPlannerContext({
+            pmState: pmState([]),
+            logs: [],
+            settings: { work_minutes: 25 },
+            now: NOW,
+            workUntil: new Date("2026-07-15T14:01:00.000Z"),
+            busyIntervals: [
+                { start: "2026-07-15T11:30:00.000Z", end: "2026-07-15T12:20:00.000Z" },
+                { start: "2026-07-15T12:15:00.000Z", end: "2026-07-15T13:00:00.000Z" },
+                { start: "2026-07-15T12:45:00.000Z", end: "2026-07-15T13:30:00.000Z" },
+                { start: "invalid", end: "2026-07-15T13:45:00.000Z" },
+                { start: "2026-07-15T15:00:00.000Z", end: "2026-07-15T16:00:00.000Z" },
+            ],
+        });
+
+        expect(result.workBudgetPomos).toBe(1);
+        expect(result).not.toHaveProperty("busyIntervals");
+    });
+
+    it("returns zero when merged busy time covers the complete window and preserves omitted behavior", () => {
+        const base = { pmState: pmState([]), logs: [], settings: { work_minutes: 25 }, now: NOW, workUntil: new Date("2026-07-15T14:00:00.000Z") };
+        expect(buildPlannerContext(base).workBudgetPomos).toBe(4);
+        expect(buildPlannerContext({
+            ...base,
+            busyIntervals: [{ start: "2026-07-15T11:00:00.000Z", end: "2026-07-15T15:00:00.000Z" }],
+        }).workBudgetPomos).toBe(0);
+    });
+
     it("returns no budget for an already-passed or invalid work-until time", () => {
         const base = {
             pmState: pmState([]),

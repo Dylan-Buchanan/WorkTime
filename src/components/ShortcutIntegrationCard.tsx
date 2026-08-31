@@ -232,7 +232,7 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
     const showConnectionForm = !settings || reconnecting;
 
     return (
-        <article aria-labelledby="integration-shortcut-title" className="flex min-h-52 flex-col rounded-lg border border-neutral-800 bg-neutral-900/60 p-4 sm:col-span-2 lg:col-span-1">
+        <article aria-labelledby="integration-shortcut-title" className="flex min-h-52 flex-col rounded-lg border border-neutral-800 bg-neutral-900/60 p-4">
             <div className="flex items-start gap-3">
                 <span className="rounded-lg border border-neutral-700 bg-neutral-950 p-2 text-neutral-300">
                     <Milestone aria-hidden="true" size={20} strokeWidth={1.75} />

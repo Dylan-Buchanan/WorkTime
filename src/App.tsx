@@ -23,6 +23,7 @@ import { TauriCloseProvider } from "./state/TauriCloseContext";
 import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 import { TodoProvider } from "./state/TodoContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
+import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
 import { supabase } from "./lib/supabase";
 
 // Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
@@ -65,12 +66,12 @@ const App: React.FC = () => (
                 <Route element={<RequireAuth />}>
                     <Route element={<AuthenticatedShell />}>
                         <Route path="/" element={<MainLayout />} />
-                        <Route path="/projects" element={<ErrorBoundary><ProjectManagerPage /></ErrorBoundary>} />
+                        <Route path="/projects" element={<ErrorBoundary><ProjectManagerRoute /></ErrorBoundary>} />
                         <Route path="/analytics" element={<AnalyticsPage />} />
                         <Route path="/habits" element={<HabitsPage />} />
                         <Route path="/todos" element={<TodosPage />} />
                         <Route path="/week" element={<WeekOverviewPage />} />
-                        <Route path="/integrations" element={<ErrorBoundary><ShortcutIntegrationsRoute /></ErrorBoundary>} />
+                        <Route path="/integrations" element={<ErrorBoundary><AuthenticatedIntegrationsRoute /></ErrorBoundary>} />
                     </Route>
                 </Route>
                 <Route path="*" element={<UnknownRoute />} />
@@ -81,16 +82,32 @@ const App: React.FC = () => (
     </BrowserRouter>
 );
 
-const ShortcutIntegrationsRoute: React.FC = () => {
+const ProjectManagerRoute: React.FC = () => {
+    const { session } = useAuth();
+    const googleCalendarDataAccess = useMemo(
+        () => new SupabaseGoogleCalendarDataAccess(supabase, session!.user.id),
+        [session?.user.id],
+    );
+    return <ProjectManagerPage googleCalendarDataAccess={googleCalendarDataAccess} />;
+};
+
+const AuthenticatedIntegrationsRoute: React.FC = () => {
     const { session } = useAuth();
     const { state, createTask } = usePM();
     const dataAccess = useMemo(
         () => new SupabaseShortcutDataAccess(supabase, session!.user.id),
         [session?.user.id],
     );
+    const googleCalendarDataAccess = useMemo(
+        () => new SupabaseGoogleCalendarDataAccess(supabase, session!.user.id),
+        [session?.user.id],
+    );
     const currentTasks = useMemo(() => Object.values(state.tasks), [state.tasks]);
     const projects = useMemo(() => Object.values(state.projects), [state.projects]);
-    return <IntegrationsPage shortcut={{ dataAccess, currentTasks, projects, createTask }} />;
+    return <IntegrationsPage
+        shortcut={{ dataAccess, currentTasks, projects, createTask }}
+        googleCalendar={{ dataAccess: googleCalendarDataAccess }}
+    />;
 };
 
 const AuthenticatedShell: React.FC = () => {

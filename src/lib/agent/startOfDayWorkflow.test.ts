@@ -119,6 +119,32 @@ describe("Start-of-Day workflow", () => {
         ]);
     });
 
+    it("passes caller-supplied busy intervals into the frozen planner budget", async () => {
+        const complete = vi.fn()
+            .mockResolvedValueOnce(plannerJson())
+            .mockResolvedValueOnce(JSON.stringify({
+                summary: "Ready",
+                proposedTasks: [{ id: "t1", title: "Draft", description: "", checklist: [{ id: "c1", title: "Old wording", done: false }] }],
+            }));
+        const result = await runStartOfDayWorkflow({
+            projectId: "p1", pmState: pmState(), logs: [], settings: { work_minutes: 25 },
+            now: new Date("2026-08-07T09:00:00.000Z"), workUntil: new Date("2026-08-07T11:00:00.000Z"),
+            busyIntervals: [{ start: "2026-08-07T09:30:00.000Z", end: "2026-08-07T10:30:00.000Z" }],
+            client: { complete } as ChatCompletionsClient, provider: "openai",
+        });
+        expect(result.workBudgetPomos).toBe(2);
+        expect(complete.mock.calls[0][0].messages[1].content).toContain('"workBudgetPomos":2');
+
+        const unusedClient = { complete: vi.fn() } as unknown as ChatCompletionsClient;
+        await expect(runStartOfDayWorkflow({
+            projectId: "p1", pmState: pmState(), logs: [], settings: { work_minutes: 25 },
+            now: new Date("2026-08-07T09:00:00.000Z"), workUntil: new Date("2026-08-07T10:00:00.000Z"),
+            busyIntervals: [{ start: "2026-08-07T09:00:00.000Z", end: "2026-08-07T10:00:00.000Z" }],
+            client: unusedClient, provider: "openai",
+        })).rejects.toThrow(/calendar busy time/i);
+        expect(unusedClient.complete).not.toHaveBeenCalled();
+    });
+
     it("disables DeepSeek thinking and leaves Start-of-Day output uncapped", async () => {
         const complete = vi.fn()
             .mockResolvedValueOnce(plannerJson())

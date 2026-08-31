@@ -4,16 +4,17 @@ import type { IntegrationDefinition } from "../lib/integrations";
 import { IntegrationsPage } from "./IntegrationsPage";
 
 describe("IntegrationsPage", () => {
-    it("renders placeholders while identifying Shortcut as implemented", () => {
+    it("renders only GitHub as a placeholder while identifying Google and Shortcut as implemented", () => {
         render(<IntegrationsPage />);
 
         expect(screen.getByRole("heading", { name: "Integrations" })).toBeInTheDocument();
         const list = screen.getByRole("region", { name: "Available integrations" });
-        for (const name of ["Google Calendar", "GitHub"]) {
-            const card = within(list).getByRole("article", { name });
-            expect(within(card).getByText("Coming soon")).toBeInTheDocument();
-            expect(within(card).getByRole("button", { name: "Connect" })).toBeDisabled();
-        }
+        const github = within(list).getByRole("article", { name: "GitHub" });
+        expect(within(github).getByText("Coming soon")).toBeInTheDocument();
+        expect(within(github).getByRole("button", { name: "Connect" })).toBeDisabled();
+        const google = within(list).getByRole("article", { name: "Google Calendar" });
+        expect(within(google).queryByText("Coming soon")).not.toBeInTheDocument();
+        expect(within(google).getByText("Not connected")).toBeInTheDocument();
         const shortcut = within(list).getByRole("article", { name: "Shortcut" });
         expect(within(shortcut).queryByText("Coming soon")).not.toBeInTheDocument();
         expect(within(shortcut).getByText("Not connected")).toBeInTheDocument();
@@ -28,7 +29,7 @@ describe("IntegrationsPage", () => {
         render(<IntegrationsPage shortcut={{ dataAccess, currentTasks: [], projects: [], createTask: vi.fn() }} />);
 
         expect(await screen.findByLabelText("Shortcut API token")).toBeInTheDocument();
-        expect(screen.getAllByText("Coming soon")).toHaveLength(2);
+        expect(screen.getAllByText("Coming soon")).toHaveLength(1);
     });
 
     it("exposes an action slot for an implemented integration", () => {

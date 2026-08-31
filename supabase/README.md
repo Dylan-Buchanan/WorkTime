@@ -1,6 +1,6 @@
 # Supabase foundation
 
-This directory contains the local Supabase CLI project, schema/RLS migrations, and the invite-signup and Shortcut sync Edge Functions. Docker and the Supabase CLI are required.
+This directory contains the local Supabase CLI project, schema/RLS migrations, and the invite-signup, Shortcut, and Google Calendar Edge Functions. Docker and the Supabase CLI are required.
 
 ## Local setup
 
@@ -91,6 +91,34 @@ npx supabase functions deploy shortcut-sync
 ```
 
 No Shortcut token belongs in an environment file, log, `VITE_` variable, or committed source.
+
+## Google Calendar integration
+
+Google Calendar uses a Google OAuth web client and the Calendar API. Configure these server-only function values in ignored `supabase/.env.local` for local development and as hosted Supabase secrets:
+
+```dotenv
+GOOGLE_CALENDAR_CLIENT_ID=...
+GOOGLE_CALENDAR_CLIENT_SECRET=...
+GOOGLE_CALENDAR_REDIRECT_URI=http://127.0.0.1:54321/functions/v1/google-calendar-auth
+GOOGLE_CALENDAR_ALLOWED_RETURN_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://tauri.localhost
+```
+
+The redirect URI must exactly match an authorized redirect URI on the Google OAuth web client. Enable the Google Calendar API and configure the consent screen before testing. Consent screens left in Google Testing mode follow Google's testing-token expiration policy; promotion to Production is a Google Cloud setting, not a WorkTime client setting.
+
+The initial connection requests `calendar.readonly`. The first explicit task push incrementally adds `calendar.app.created`, which is limited to secondary calendars created by WorkTime and their events. OAuth start uses a WorkTime JWT verified inside `google-calendar-auth`; Google's GET callback is why that function alone has gateway JWT verification disabled. PKCE verifier/state rows are one-time, short-lived, and service-role-only.
+
+`public.google_calendar_settings.refresh_token` is not selectable by authenticated clients. The callback writes it through the service-role-only `save_google_calendar_connection` RPC boundary. Clients can read only public connection fields and update selected calendars through `update_google_calendar_preferences`. Task linkages contain only IDs, schedule bounds, and estimate/work-minute snapshots—never event titles—and are authored only by the service-role function.
+
+Busy time is fetched on Start-of-Day generation or manual refresh only. The function calls Google free/busy and a metadata-minimized recurring-instance event query so it can exclude all-day, transparent, cancelled, and `worktime:taskId` events. No background sync is registered.
+
+Deploy the callback without gateway JWT verification and the operation function with verification enabled:
+
+```sh
+npx supabase functions deploy google-calendar-auth --no-verify-jwt
+npx supabase functions deploy google-calendar
+```
+
+Disconnect revokes the token best-effort and removes WorkTime's settings/link metadata. Existing external Google calendars/events remain until the user explicitly removes them in Google or unpushes them before disconnecting.
 
 ## Owner-isolation verification matrix
 

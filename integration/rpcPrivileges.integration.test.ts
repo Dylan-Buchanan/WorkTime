@@ -82,4 +82,20 @@ describe("security-definer RPC privileges", () => {
             p_default_project_id: null,
         }));
     });
+
+    it("denies anonymous Google Calendar preference writes", async () => {
+        const client = anonymousClient();
+        await expectPermissionDenied(client.rpc("update_google_calendar_preferences", {
+            p_selected_calendar_ids: ["primary"],
+        }));
+    });
+
+    it("denies anonymous Google Calendar credential writes", async () => {
+        const client = anonymousClient();
+        await expectPermissionDenied(client.rpc("save_google_calendar_connection", {
+            p_owner_id: "00000000-0000-0000-0000-000000000000",
+            p_refresh_token: "not-authorized",
+            p_scope_level: "readonly",
+        }));
+    });
 });

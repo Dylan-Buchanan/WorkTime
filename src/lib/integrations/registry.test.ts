@@ -5,8 +5,8 @@ describe("integrationRegistry", () => {
     it("defines the initial integrations with unique stable identifiers", () => {
         expect(integrationRegistry.map((integration) => integration.id)).toEqual([
             "google-calendar",
-            "shortcut",
             "github",
+            "shortcut",
         ]);
         expect(new Set(integrationRegistry.map((integration) => integration.id)).size).toBe(integrationRegistry.length);
     });
@@ -19,7 +19,6 @@ describe("integrationRegistry", () => {
             expect(["oauth2", "api-token"]).toContain(integration.authFlow);
         }
         expect(integrationRegistry.filter((integration) => integration.isPlaceholder).map((integration) => integration.id)).toEqual([
-            "google-calendar",
             "github",
         ]);
     });

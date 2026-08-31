@@ -6,8 +6,14 @@ import { TaskInspector } from "./TaskInspector";
 import { usePM } from "../../state/ProjectManagerContext";
 import { AgentPanel } from "./AgentPanel";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import type { GoogleCalendarDataAccess } from "../../lib/data/GoogleCalendarDataAccess";
+import { consumeGoogleCalendarOAuthReturn, type GoogleCalendarOAuthReturn } from "../../lib/integrations";
 
-export const ProjectManagerPage: React.FC = () => {
+export interface ProjectManagerPageProps {
+    googleCalendarDataAccess?: GoogleCalendarDataAccess;
+}
+
+export const ProjectManagerPage: React.FC<ProjectManagerPageProps> = ({ googleCalendarDataAccess }) => {
     const { state, createTask, quickAddParse, setFilters, setView } = usePM();
     const [quick, setQuick] = useState("");
     const [quickError, setQuickError] = useState<string | null>(null);
@@ -18,6 +24,15 @@ export const ProjectManagerPage: React.FC = () => {
     const activeProjectId = state.ui.selectedProjectIds[0] || null;
     const selectedTaskId = state.ui.selectedTaskId;
     const lastSelectedTaskRef = useRef<string | null>(selectedTaskId);
+    const [googleCalendarResume, setGoogleCalendarResume] = useState<GoogleCalendarOAuthReturn | null>(() =>
+        googleCalendarDataAccess ? consumeGoogleCalendarOAuthReturn() : null,
+    );
+
+    useEffect(() => {
+        if (googleCalendarResume?.pendingTaskId && state.tasks[googleCalendarResume.pendingTaskId] && selectedTaskId !== googleCalendarResume.pendingTaskId) {
+            setFilters({ selectedTaskId: googleCalendarResume.pendingTaskId });
+        }
+    }, [googleCalendarResume?.pendingTaskId, selectedTaskId, setFilters, state.tasks]);
 
     useEffect(() => {
         if (isLg) setSidebarOpen(false);
@@ -77,6 +92,12 @@ export const ProjectManagerPage: React.FC = () => {
 
     return (
         <div className="flex flex-col h-full min-w-0">
+            {googleCalendarResume?.errorCode && (
+                <div role="alert" className="flex items-center gap-2 border-b border-amber-900/70 bg-amber-950/30 px-3 py-2 text-[10px] text-amber-200">
+                    <span>Google Calendar authorization did not complete ({googleCalendarResume.errorCode}). No task was pushed.</span>
+                    <button type="button" onClick={() => setGoogleCalendarResume(null)} className="ml-auto rounded px-2 py-1 text-amber-300 hover:bg-amber-900/40">Dismiss</button>
+                </div>
+            )}
             <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-neutral-800 text-xs">
                 {!isLg && (
                     <button
@@ -175,7 +196,7 @@ export const ProjectManagerPage: React.FC = () => {
                 </div>
                 {isXl && (
                     <div className="w-80 border-l border-neutral-800 p-2 min-h-0">
-                        <TaskInspector />
+                        <TaskInspector googleCalendarDataAccess={googleCalendarDataAccess} googleCalendarResume={googleCalendarResume} onGoogleCalendarResumeConsumed={() => setGoogleCalendarResume(null)} />
                     </div>
                 )}
             </div>
@@ -206,13 +227,13 @@ export const ProjectManagerPage: React.FC = () => {
                             </button>
                         </div>
                         <div className="flex-1 min-h-0 overflow-hidden p-2">
-                            <TaskInspector />
+                            <TaskInspector googleCalendarDataAccess={googleCalendarDataAccess} googleCalendarResume={googleCalendarResume} onGoogleCalendarResumeConsumed={() => setGoogleCalendarResume(null)} />
                         </div>
                     </div>
                 </div>
             )}
             <DebugInfo />
-            {activeProjectId && <AgentPanel />}
+            {activeProjectId && <AgentPanel googleCalendarDataAccess={googleCalendarDataAccess} />}
         </div>
     );
 };

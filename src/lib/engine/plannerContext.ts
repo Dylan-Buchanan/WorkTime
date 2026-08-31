@@ -16,6 +16,13 @@ export interface PlannerContextInput {
     now: Date;
     /** A local HH:mm/HH:mm:ss value or an absolute date-time. */
     workUntil: string | Date;
+    /** Caller-supplied busy ranges. The engine performs no calendar I/O. */
+    busyIntervals?: readonly PlannerBusyInterval[];
+}
+
+export interface PlannerBusyInterval {
+    start: string | Date;
+    end: string | Date;
 }
 
 export interface PlannerTaskContext {
@@ -70,7 +77,9 @@ function validDate(value: Date): Date | null {
     return Number.isNaN(value.getTime()) ? null : value;
 }
 
-function parseWorkUntil(now: Date, workUntil: string | Date): Date | null {
+export function resolvePlannerWorkUntil(now: Date, workUntil: string | Date): Date | null {
+    const validNow = validDate(new Date(now.getTime()));
+    if (!validNow) return null;
     if (workUntil instanceof Date) return validDate(new Date(workUntil.getTime()));
 
     const clockMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(workUntil.trim());
@@ -79,7 +88,7 @@ function parseWorkUntil(now: Date, workUntil: string | Date): Date | null {
         const minutes = Number(clockMatch[2]);
         const seconds = Number(clockMatch[3] ?? 0);
         if (hours > 23 || minutes > 59 || seconds > 59) return null;
-        const result = new Date(now.getTime());
+        const result = new Date(validNow.getTime());
         result.setHours(hours, minutes, seconds, 0);
         return result;
     }
@@ -87,9 +96,45 @@ function parseWorkUntil(now: Date, workUntil: string | Date): Date | null {
     return validDate(new Date(workUntil));
 }
 
-function calculateWorkBudget(now: Date, workUntil: Date | null, workMinutes: number): number {
+function intervalDate(value: string | Date): Date | null {
+    return value instanceof Date ? validDate(new Date(value.getTime())) : validDate(new Date(value));
+}
+
+export function mergePlannerBusyIntervals(
+    intervals: readonly PlannerBusyInterval[],
+    now: Date,
+    workUntil: Date,
+): Array<{ start: Date; end: Date }> {
+    const windowStart = now.getTime();
+    const windowEnd = workUntil.getTime();
+    const normalized = intervals.flatMap((interval) => {
+        const rawStart = intervalDate(interval.start)?.getTime();
+        const rawEnd = intervalDate(interval.end)?.getTime();
+        if (rawStart === undefined || rawEnd === undefined) return [];
+        const start = Math.max(windowStart, rawStart);
+        const end = Math.min(windowEnd, rawEnd);
+        return end > start ? [[start, end] as const] : [];
+    }).sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    const merged: Array<[number, number]> = [];
+    for (const [start, end] of normalized) {
+        const previous = merged[merged.length - 1];
+        if (previous && start <= previous[1]) previous[1] = Math.max(previous[1], end);
+        else merged.push([start, end]);
+    }
+    return merged.map(([start, end]) => ({ start: new Date(start), end: new Date(end) }));
+}
+
+function calculateWorkBudget(
+    now: Date,
+    workUntil: Date | null,
+    workMinutes: number,
+    busyIntervals: readonly PlannerBusyInterval[] = [],
+): number {
     if (!workUntil || !Number.isFinite(workMinutes) || workMinutes <= 0) return 0;
-    const minutesAvailable = (workUntil.getTime() - now.getTime()) / 60000;
+    const windowMilliseconds = Math.max(0, workUntil.getTime() - now.getTime());
+    const busyMilliseconds = mergePlannerBusyIntervals(busyIntervals, now, workUntil)
+        .reduce((total, interval) => total + interval.end.getTime() - interval.start.getTime(), 0);
+    const minutesAvailable = Math.max(0, windowMilliseconds - busyMilliseconds) / 60000;
     return Math.max(0, Math.floor(minutesAvailable / workMinutes));
 }
 
@@ -97,10 +142,11 @@ export function calculatePomodoroBudget(
     now: Date,
     workUntil: string | Date,
     workMinutes: number,
+    busyIntervals: readonly PlannerBusyInterval[] = [],
 ): number {
     const validNow = validDate(new Date(now.getTime()));
     if (!validNow) return 0;
-    return calculateWorkBudget(validNow, parseWorkUntil(validNow, workUntil), workMinutes);
+    return calculateWorkBudget(validNow, resolvePlannerWorkUntil(validNow, workUntil), workMinutes, busyIntervals);
 }
 
 function aggregate(samples: readonly AccuracySample[]): AccuracyAggregate {
@@ -208,12 +254,12 @@ export function buildPlannerContext(input: PlannerContextInput): PlannerContext 
     const tasks = Object.values(input.pmState.tasks)
         .filter((task) => task.projectId !== null && selectedProjectIds.includes(task.projectId))
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
-    const workUntil = parseWorkUntil(now, input.workUntil);
+    const workUntil = resolvePlannerWorkUntil(now, input.workUntil);
 
     return {
         now: now.toISOString(),
         workUntil: workUntil?.toISOString() ?? null,
-        workBudgetPomos: calculateWorkBudget(now, workUntil, input.settings.work_minutes),
+        workBudgetPomos: calculateWorkBudget(now, workUntil, input.settings.work_minutes, input.busyIntervals),
         selectedProjectIds,
         tasks: tasks.map(toPlannerTask),
         accuracy: buildAccuracy(Object.values(input.pmState.tasks), input.logs, now),

@@ -18,14 +18,6 @@ export const integrationRegistry = [
         description: "Bring calendar events into WorkTime and keep focused work visible on your schedule.",
         icon: "calendar",
         authFlow: "oauth2",
-        isPlaceholder: true,
-    },
-    {
-        id: "shortcut",
-        name: "Shortcut",
-        description: "Link stories and iterations to projects so planned work stays aligned with your team.",
-        icon: "shortcut",
-        authFlow: "api-token",
         isPlaceholder: false,
     },
     {
@@ -35,5 +27,13 @@ export const integrationRegistry = [
         icon: "github",
         authFlow: "oauth2",
         isPlaceholder: true,
+    },
+    {
+        id: "shortcut",
+        name: "Shortcut",
+        description: "Link stories and iterations to projects so planned work stays aligned with your team.",
+        icon: "shortcut",
+        authFlow: "api-token",
+        isPlaceholder: false,
     },
 ] as const satisfies readonly IntegrationDefinition[];

@@ -24,6 +24,8 @@ import { usePM } from "../../state/ProjectManagerContext";
 import { useHabits } from "../../state/HabitContext";
 import type { TaskChange } from "../../lib/engine/diffEngine";
 import { AgentApprovalCard } from "./AgentApprovalCard";
+import type { GoogleCalendarDataAccess, GoogleCalendarInterval } from "../../lib/data/GoogleCalendarDataAccess";
+import { resolvePlannerWorkUntil } from "../../lib/engine/plannerContext";
 
 const MODES: { id: AgentMode; label: string; description: string }[] = [
     { id: "start-of-day", label: "Start of Day", description: "Prioritize and shape today's plan" },
@@ -176,7 +178,8 @@ export const AgentPanel: React.FC<{
     runStartOfDay?: typeof runStartOfDayWorkflow;
     runEndOfDay?: typeof runEndOfDayWorkflow;
     runChat?: typeof runChatWorkflow;
-}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow, runChat = runChatWorkflow }) => {
+    googleCalendarDataAccess?: GoogleCalendarDataAccess;
+}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow, runChat = runChatWorkflow, googleCalendarDataAccess }) => {
     const agent = useAgentApproval();
     const pm = usePM();
     const app = useAppState();
@@ -189,6 +192,8 @@ export const AgentPanel: React.FC<{
     const [workUntil, setWorkUntil] = useState(initialWorkUntil);
     const [generating, setGenerating] = useState(false);
     const [generationError, setGenerationError] = useState<string | null>(null);
+    const [calendarRefreshing, setCalendarRefreshing] = useState(false);
+    const [calendarFeedback, setCalendarFeedback] = useState<string | null>(null);
     const [progressEvents, setProgressEvents] = useState<StartOfDayProgressEvent[]>([]);
     const [planPreview, setPlanPreview] = useState<StartOfDayWorkflowResult | null>(null);
     const [endOfDayPreview, setEndOfDayPreview] = useState<EndOfDayWorkflowResult | null>(null);
@@ -230,6 +235,41 @@ export const AgentPanel: React.FC<{
         setRevertMessage(result.status === "reverted" ? "Agent changes reverted." : result.status === "no-snapshot" ? "No agent snapshot is available." : "The snapshot project no longer exists.");
     };
 
+    const fetchCalendarBusy = async (now: Date, selectedWorkUntil: string, report: boolean): Promise<GoogleCalendarInterval[]> => {
+        if (!googleCalendarDataAccess) return [];
+        const absoluteWorkUntil = resolvePlannerWorkUntil(now, selectedWorkUntil);
+        if (!absoluteWorkUntil || absoluteWorkUntil <= now) return [];
+        const settings = await googleCalendarDataAccess.loadSettings();
+        if (!settings) {
+            if (report) setCalendarFeedback("Connect Google Calendar in Integrations to include busy time.");
+            return [];
+        }
+        if (settings.selectedCalendarIds.length === 0) {
+            if (report) setCalendarFeedback("Select at least one busy-time calendar in Integrations.");
+            return [];
+        }
+        const result = await googleCalendarDataAccess.fetchBusyIntervals({
+            timeMin: now.toISOString(),
+            timeMax: absoluteWorkUntil.toISOString(),
+        });
+        if (report) {
+            const minutes = Math.round(result.intervals.reduce((sum, interval) =>
+                sum + new Date(interval.end).getTime() - new Date(interval.start).getTime(), 0) / 60_000);
+            setCalendarFeedback(`Calendar refreshed: ${minutes} busy minute${minutes === 1 ? "" : "s"}.`);
+        }
+        return result.intervals;
+    };
+
+    const handleCalendarRefresh = async () => {
+        if (calendarRefreshing || !workUntil) return;
+        setCalendarRefreshing(true);
+        setCalendarFeedback(null);
+        setGenerationError(null);
+        try { await fetchCalendarBusy(new Date(), workUntil, true); }
+        catch (error) { setGenerationError(error instanceof Error ? error.message : "Calendar refresh failed."); }
+        finally { setCalendarRefreshing(false); }
+    };
+
     const handleStartOfDay = async () => {
         if (generationInFlightRef.current) return;
         const projectId = pm.state.ui.selectedProjectIds[0];
@@ -249,13 +289,16 @@ export const AgentPanel: React.FC<{
         const logs = app.state.logs;
         const settings = app.state.settings;
         try {
+            const now = new Date();
+            const busyIntervals = await fetchCalendarBusy(now, workUntil, false);
             const result = await runStartOfDay({
                 projectId,
                 pmState: pm.state,
                 logs,
                 settings,
-                now: new Date(),
+                now,
                 workUntil,
+                busyIntervals,
                 onProgress: appendProgress,
             });
             const previousWorkflow = latestWorkflow.current;
@@ -270,6 +313,8 @@ export const AgentPanel: React.FC<{
                     const currentPmState = pmStateRef.current;
                     const currentAppState = appStateRef.current;
                     if (!currentAppState) throw new Error("Timer data is still loading. Try again in a moment.");
+                    const replanNow = new Date();
+                    const replanBusyIntervals = await fetchCalendarBusy(replanNow, workUntilRef.current, false);
                     const replanned = await runStartOfDay({
                         projectId,
                         pmState: {
@@ -281,8 +326,9 @@ export const AgentPanel: React.FC<{
                         },
                         logs: currentAppState.logs,
                         settings: currentAppState.settings,
-                        now: new Date(),
+                        now: replanNow,
                         workUntil: workUntilRef.current,
+                        busyIntervals: replanBusyIntervals,
                         rejectionFeedback: rejectionFeedback(rejectedChange),
                         onProgress: appendProgress,
                     });
@@ -490,8 +536,10 @@ export const AgentPanel: React.FC<{
                                 <p className="mt-0.5 text-[10px] text-neutral-500">The plan will fit whole pomodoros into this window.</p>
                                 <div className="mt-2 flex gap-2">
                                     <input id="agent-work-until" aria-label="Work until" type="time" value={workUntil} onChange={(event) => { setWorkUntil(event.target.value); setGenerationError(null); }} className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100" />
+                                    {googleCalendarDataAccess && <button type="button" disabled={generating || calendarRefreshing || !workUntil} onClick={() => void handleCalendarRefresh()} className="rounded-lg border border-neutral-700 px-2 py-1.5 text-[10px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-50">{calendarRefreshing ? "Refreshing…" : "Refresh calendar"}</button>}
                                     <button type="button" disabled={generating || !workUntil} onClick={() => void handleStartOfDay()} className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-500 disabled:opacity-50">{generating ? "Planning…" : "Generate plan"}</button>
                                 </div>
+                                {calendarFeedback && <p role="status" className="mt-2 text-[10px] text-sky-300">{calendarFeedback}</p>}
                                 {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Building and validating your day plan…</p>}
                                 {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
                             </div>

@@ -1,5 +1,5 @@
 import type { PMTask, PomodoroLogEntry, ProjectManagerState, ProposedTask, Settings } from "../../state/types";
-import { buildPlannerContext } from "../engine/plannerContext";
+import { buildPlannerContext, type PlannerBusyInterval } from "../engine/plannerContext";
 import { diffPlannerTasks, type TaskChange } from "../engine/diffEngine";
 import { selectStartOfDayPlanItems, validateStartOfDayPlan, type StartOfDayPlanItem } from "../engine/startOfDay";
 import { requestPlannerOutput, requestWriterOutput } from "./agentClient";
@@ -56,6 +56,7 @@ export interface StartOfDayWorkflowInput {
     settings: Pick<Settings, "work_minutes">;
     now: Date;
     workUntil: string | Date;
+    busyIntervals?: readonly PlannerBusyInterval[];
     client?: ChatCompletionsClient;
     provider?: AgentProvider;
     plannerModel?: string;
@@ -291,9 +292,10 @@ export async function runStartOfDayWorkflow(input: StartOfDayWorkflowInput): Pro
         settings: input.settings,
         now: input.now,
         workUntil: input.workUntil,
+        busyIntervals: input.busyIntervals,
     });
     if (!context.workUntil || context.workBudgetPomos < 1) {
-        throw new Error("Choose a work-until time that leaves room for at least one whole pomodoro.");
+        throw new Error("Choose a work-until time that leaves room for at least one whole pomodoro after calendar busy time.");
     }
 
     phase("planning");
