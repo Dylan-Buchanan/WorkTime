@@ -18,8 +18,6 @@ describe("integrationRegistry", () => {
             expect(["calendar", "github", "shortcut"]).toContain(integration.icon);
             expect(["oauth2", "api-token"]).toContain(integration.authFlow);
         }
-        expect(integrationRegistry.filter((integration) => integration.isPlaceholder).map((integration) => integration.id)).toEqual([
-            "github",
-        ]);
+        expect(integrationRegistry.filter((integration) => integration.isPlaceholder).map((integration) => integration.id)).toEqual([]);
     });
 });

@@ -24,6 +24,7 @@ import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 import { TodoProvider } from "./state/TodoContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
+import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
 import { supabase } from "./lib/supabase";
 
 // Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
@@ -102,11 +103,16 @@ const AuthenticatedIntegrationsRoute: React.FC = () => {
         () => new SupabaseGoogleCalendarDataAccess(supabase, session!.user.id),
         [session?.user.id],
     );
+    const githubDataAccess = useMemo(
+        () => new SupabaseGitHubDataAccess(supabase, session!.user.id),
+        [session?.user.id],
+    );
     const currentTasks = useMemo(() => Object.values(state.tasks), [state.tasks]);
     const projects = useMemo(() => Object.values(state.projects), [state.projects]);
     return <IntegrationsPage
         shortcut={{ dataAccess, currentTasks, projects, createTask }}
         googleCalendar={{ dataAccess: googleCalendarDataAccess }}
+        github={{ dataAccess: githubDataAccess, currentTasks, projects, createTask }}
     />;
 };
 

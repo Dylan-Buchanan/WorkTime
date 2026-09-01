@@ -26,7 +26,7 @@ export const integrationRegistry = [
         description: "Connect issues and pull requests to the tasks and projects you manage in WorkTime.",
         icon: "github",
         authFlow: "oauth2",
-        isPlaceholder: true,
+        isPlaceholder: false,
     },
     {
         id: "shortcut",

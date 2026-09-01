@@ -16,7 +16,8 @@ function clientMock(options: {
     const maybeSingle = vi.fn().mockResolvedValue({ data: options.settings ?? null, error: options.settingsError ?? null });
     const settingsEq = vi.fn(() => ({ maybeSingle }));
     const select = vi.fn((_columns: string) => ({ eq: settingsEq }));
-    const deleteEq = vi.fn().mockResolvedValue({ error: options.deleteError ?? null });
+    const deleteFullNameEq = vi.fn().mockResolvedValue({ error: options.deleteError ?? null });
+    const deleteEq = vi.fn(() => ({ eq: deleteFullNameEq, error: options.deleteError ?? null }));
     const remove = vi.fn(() => ({ eq: deleteEq }));
     const updateSelect = vi.fn().mockResolvedValue({
         data: options.updateRows ?? [{ full_name: "octocat/hello-world" }],
@@ -29,7 +30,7 @@ function clientMock(options: {
     const invoke = vi.fn();
     const client = { from, functions: { invoke } } as unknown as SupabaseClient;
     return {
-        client, from, select, settingsEq, maybeSingle, remove, deleteEq,
+        client, from, select, settingsEq, maybeSingle, remove, deleteEq, deleteFullNameEq,
         update, updateOwnerEq, updateFullNameEq, updateSelect, invoke,
     };
 }
@@ -224,6 +225,28 @@ describe("SupabaseGitHubDataAccess", () => {
             .resolves.toBeUndefined();
     });
 
+    it("removes a repository row through an owner-scoped delete", async () => {
+        const mocks = clientMock();
+        const access = new SupabaseGitHubDataAccess(mocks.client, "owner-1");
+
+        await access.removeRepo(" octocat/gone ");
+
+        expect(mocks.remove).toHaveBeenCalledOnce();
+        expect(mocks.deleteEq).toHaveBeenCalledWith("owner_id", "owner-1");
+        expect(mocks.deleteFullNameEq).toHaveBeenCalledWith("full_name", "octocat/gone");
+    });
+
+    it("maps repository removal failures to typed codes", async () => {
+        const failed = clientMock({ deleteError: { message: "rls" } });
+        await expect(new SupabaseGitHubDataAccess(failed.client, "owner-1").removeRepo("octocat/gone"))
+            .rejects.toMatchObject({ code: "REPOSITORY_WRITE_FAILED" });
+
+        const thrown = clientMock();
+        thrown.deleteFullNameEq.mockRejectedValue(new TypeError("Failed to fetch"));
+        await expect(new SupabaseGitHubDataAccess(thrown.client, "owner-1").removeRepo("octocat/gone"))
+            .rejects.toMatchObject({ code: "NETWORK_ERROR" });
+    });
+
     it("surfaces repo-not-found when no row is updated", async () => {
         const mocks = clientMock({ updateRows: [] });
         const access = new SupabaseGitHubDataAccess(mocks.client, "owner-1");
@@ -254,6 +277,7 @@ describe("SupabaseGitHubDataAccess", () => {
         await expect(access.toggleSelection("octocat", true)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
         await expect(access.updateRepoOptions("octocat/a/b", { projectId: null, labelFilter: null, includeClosed: false }))
             .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+        await expect(access.removeRepo("octocat/a/b")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
         await expect(access.sync(" ")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
         expect(mocks.update).not.toHaveBeenCalled();
         expect(mocks.invoke).not.toHaveBeenCalled();

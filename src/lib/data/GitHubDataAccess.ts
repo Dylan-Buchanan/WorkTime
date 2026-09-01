@@ -100,6 +100,7 @@ export interface GitHubDataAccess {
     listRepos(): Promise<GitHubRepoListResult>;
     toggleSelection(repoFullName: string, selected: boolean): Promise<void>;
     updateRepoOptions(repoFullName: string, options: GitHubRepoOptionsInput): Promise<void>;
+    removeRepo(repoFullName: string): Promise<void>;
     sync(repoFullName: string, options?: GitHubSyncOptions): Promise<GitHubSyncResult>;
     disconnect(): Promise<void>;
 }
@@ -465,6 +466,23 @@ export class SupabaseGitHubDataAccess implements GitHubDataAccess {
             label_filter: normalizeOptionalText(options.labelFilter),
             include_closed: options.includeClosed,
         });
+    }
+
+    async removeRepo(repoFullName: string): Promise<void> {
+        const fullName = normalizeRepoFullName(repoFullName);
+        let response;
+        try {
+            response = await this.client
+                .from("github_repos")
+                .delete()
+                .eq("owner_id", this.ownerId)
+                .eq("full_name", fullName);
+        } catch (error) {
+            throw transportError("Unable to remove GitHub repository.", error);
+        }
+        if (response.error) {
+            throw new GitHubIntegrationError("REPOSITORY_WRITE_FAILED", "Unable to remove GitHub repository.");
+        }
     }
 
     async sync(repoFullName: string, options: GitHubSyncOptions = {}): Promise<GitHubSyncResult> {

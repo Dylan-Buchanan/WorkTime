@@ -4,20 +4,16 @@ import type { IntegrationDefinition } from "../lib/integrations";
 import { IntegrationsPage } from "./IntegrationsPage";
 
 describe("IntegrationsPage", () => {
-    it("renders only GitHub as a placeholder while identifying Google and Shortcut as implemented", () => {
+    it("renders every registered integration as implemented", () => {
         render(<IntegrationsPage />);
 
         expect(screen.getByRole("heading", { name: "Integrations" })).toBeInTheDocument();
         const list = screen.getByRole("region", { name: "Available integrations" });
-        const github = within(list).getByRole("article", { name: "GitHub" });
-        expect(within(github).getByText("Coming soon")).toBeInTheDocument();
-        expect(within(github).getByRole("button", { name: "Connect" })).toBeDisabled();
-        const google = within(list).getByRole("article", { name: "Google Calendar" });
-        expect(within(google).queryByText("Coming soon")).not.toBeInTheDocument();
-        expect(within(google).getByText("Not connected")).toBeInTheDocument();
-        const shortcut = within(list).getByRole("article", { name: "Shortcut" });
-        expect(within(shortcut).queryByText("Coming soon")).not.toBeInTheDocument();
-        expect(within(shortcut).getByText("Not connected")).toBeInTheDocument();
+        for (const name of ["GitHub", "Google Calendar", "Shortcut"]) {
+            const card = within(list).getByRole("article", { name });
+            expect(within(card).queryByText("Coming soon")).not.toBeInTheDocument();
+            expect(within(card).getByText("Not connected")).toBeInTheDocument();
+        }
         expect(within(list).getAllByText("OAuth 2.0")).toHaveLength(2);
         expect(within(list).getByText("API token")).toBeInTheDocument();
     });
@@ -29,7 +25,19 @@ describe("IntegrationsPage", () => {
         render(<IntegrationsPage shortcut={{ dataAccess, currentTasks: [], projects: [], createTask: vi.fn() }} />);
 
         expect(await screen.findByLabelText("Shortcut API token")).toBeInTheDocument();
-        expect(screen.getAllByText("Coming soon")).toHaveLength(1);
+        expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
+    });
+
+    it("renders the bound GitHub workflow in place of the generic card", async () => {
+        const dataAccess = {
+            beginAuthorization: vi.fn(), completeAuthorization: vi.fn(), loadSettings: vi.fn().mockResolvedValue(null),
+            listRepos: vi.fn(), toggleSelection: vi.fn(), updateRepoOptions: vi.fn(), removeRepo: vi.fn(),
+            sync: vi.fn(), disconnect: vi.fn(),
+        };
+        render(<IntegrationsPage github={{ dataAccess, currentTasks: [], projects: [], createTask: vi.fn() }} />);
+
+        expect(await screen.findByRole("button", { name: "Connect GitHub" })).toBeEnabled();
+        expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
     });
 
     it("exposes an action slot for an implemented integration", () => {

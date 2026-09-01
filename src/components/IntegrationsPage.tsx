@@ -8,6 +8,7 @@ import {
 } from "../lib/integrations";
 import { ShortcutIntegrationCard, type ShortcutIntegrationCardProps } from "./ShortcutIntegrationCard";
 import { GoogleCalendarIntegrationCard, type GoogleCalendarIntegrationCardProps } from "./GoogleCalendarIntegrationCard";
+import { GithubIntegrationCard, type GithubIntegrationCardProps } from "./GithubIntegrationCard";
 
 const ICONS: Record<IntegrationIcon, LucideIcon> = {
     calendar: CalendarDays,
@@ -25,6 +26,7 @@ export interface IntegrationsPageProps {
     renderActions?: (integration: IntegrationDefinition) => ReactNode;
     shortcut?: ShortcutIntegrationCardProps;
     googleCalendar?: GoogleCalendarIntegrationCardProps;
+    github?: GithubIntegrationCardProps;
 }
 
 export const IntegrationsPage = ({
@@ -32,6 +34,7 @@ export const IntegrationsPage = ({
     renderActions,
     shortcut,
     googleCalendar,
+    github,
 }: IntegrationsPageProps) => (
     <div className="flex h-full min-h-0 flex-col">
         <header className="border-b border-neutral-800 bg-neutral-950/80 px-4 py-3 backdrop-blur">
@@ -46,6 +49,8 @@ export const IntegrationsPage = ({
                         <ShortcutIntegrationCard key={integration.id} {...shortcut} />
                     ) : integration.id === "google-calendar" && googleCalendar ? (
                         <GoogleCalendarIntegrationCard key={integration.id} {...googleCalendar} />
+                    ) : integration.id === "github" && github ? (
+                        <GithubIntegrationCard key={integration.id} {...github} />
                     ) : (
                         <IntegrationCard key={integration.id} integration={integration} actions={renderActions?.(integration)} />
                     ))}
