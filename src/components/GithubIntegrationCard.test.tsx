@@ -7,6 +7,7 @@ import type {
     GitHubSyncResult,
 } from "../lib/data/GitHubDataAccess";
 import { GitHubIntegrationError } from "../lib/data/GitHubDataAccess";
+import { GITHUB_OAUTH_STATE_STORAGE_KEY } from "../lib/integrations/githubOAuthReturn";
 import type { PMTask, Project } from "../state/types";
 import { GithubIntegrationCard } from "./GithubIntegrationCard";
 
@@ -91,10 +92,24 @@ describe("GithubIntegrationCard", () => {
 
         await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(authorizationUrl));
         expect(access.beginAuthorization).toHaveBeenCalledWith(expect.any(String));
-        expect(access.beginAuthorization.mock.calls[0][0]).toMatch(/^[0-9a-f]{32}$/);
+        expect(access.beginAuthorization.mock.calls[0][0]).toMatch(/^web\.[0-9a-f]{32}$/);
+        expect(sessionStorage.getItem(GITHUB_OAUTH_STATE_STORAGE_KEY)).toBe(access.beginAuthorization.mock.calls[0][0]);
     });
 
-    it("loads the connected username and repo rows with per-repo controls", async () => {
+    it("clears pending OAuth state when authorization cannot start", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess(null);
+        access.beginAuthorization.mockRejectedValue(new GitHubIntegrationError("GITHUB_NOT_CONFIGURED", "Not configured"));
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} navigateTo={vi.fn()} />);
+
+        await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
+
+        expect(await screen.findByRole("alert")).toBeInTheDocument();
+        expect(sessionStorage.getItem(GITHUB_OAUTH_STATE_STORAGE_KEY)).toBeNull();
+    });
+
+    it("loads the connected username and repo rows with collapsed per-repo controls", async () => {
+        const user = userEvent.setup();
         const access = fakeAccess();
         render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
 
@@ -102,13 +117,17 @@ describe("GithubIntegrationCard", () => {
         expect(screen.getByText(/Signed in as/)).toHaveTextContent("octocat");
         expect(screen.getByText(/Last synced:/)).toHaveTextContent("Never");
         expect(screen.getByLabelText("Select octocat/hello-world")).toBeChecked();
+        expect(screen.getByRole("button", { name: "Sync octocat/hello-world" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Sync selected (1)" })).toBeEnabled();
+        expect(screen.queryByLabelText("Project for octocat/hello-world")).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Toggle options for octocat/hello-world" }));
         expect(screen.getByLabelText("Project for octocat/hello-world")).toHaveValue("project-1");
         const labelFilter = screen.getByLabelText("Label filter for octocat/hello-world");
         expect(labelFilter).toHaveValue("bug");
         expect(within(labelFilter).getByRole("option", { name: "No filter" })).toBeInTheDocument();
         expect(within(labelFilter).getByRole("option", { name: "enhancement" })).toBeInTheDocument();
         expect(screen.getByLabelText("Include closed issues from octocat/hello-world")).not.toBeChecked();
-        expect(screen.getByRole("button", { name: "Sync octocat/hello-world" })).toBeEnabled();
     });
 
     it("saves per-repo option and selection edits", async () => {
@@ -116,7 +135,8 @@ describe("GithubIntegrationCard", () => {
         const access = fakeAccess();
         render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
 
-        await user.selectOptions(await screen.findByLabelText("Project for octocat/hello-world"), "project-2");
+        await user.click(await screen.findByRole("button", { name: "Toggle options for octocat/hello-world" }));
+        await user.selectOptions(screen.getByLabelText("Project for octocat/hello-world"), "project-2");
         await waitFor(() => expect(access.updateRepoOptions).toHaveBeenCalledWith("octocat/hello-world", {
             projectId: "project-2",
             labelFilter: "bug",
@@ -265,10 +285,12 @@ describe("GithubIntegrationCard", () => {
         render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
 
         expect(await screen.findByText("No longer accessible")).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Sync octocat/gone" })).toBeDisabled();
+        expect(screen.queryByRole("button", { name: "Sync octocat/gone" })).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Sync octocat/hello-world" })).toBeEnabled();
-        expect(screen.getByText(/no longer accessible on GitHub/)).toBeInTheDocument();
+        expect(screen.queryByText(/no longer accessible on GitHub/)).not.toBeInTheDocument();
 
+        await user.click(screen.getByRole("button", { name: "Toggle options for octocat/gone" }));
+        expect(screen.getByText(/no longer accessible on GitHub/)).toBeInTheDocument();
         await user.selectOptions(screen.getByLabelText("Project for octocat/gone"), "project-2");
         await waitFor(() => expect(access.updateRepoOptions).toHaveBeenCalledWith("octocat/gone", {
             projectId: "project-2",
@@ -280,6 +302,113 @@ describe("GithubIntegrationCard", () => {
         await waitFor(() => expect(access.removeRepo).toHaveBeenCalledWith("octocat/gone"));
         expect(screen.queryByLabelText("Project for octocat/gone")).not.toBeInTheDocument();
         expect(screen.queryByText("No longer accessible")).not.toBeInTheDocument();
+    });
+
+    it("selects and deselects all repositories at once", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+
+        await screen.findByText("Connected");
+        expect(screen.getByLabelText("Select all repositories")).toBeChecked();
+
+        await user.click(screen.getByLabelText("Select all repositories"));
+        await waitFor(() => expect(access.toggleSelection).toHaveBeenCalledWith("octocat/hello-world", false));
+        expect(access.toggleSelection).toHaveBeenCalledWith("octocat/gone", false);
+        expect(screen.getByLabelText("Select octocat/hello-world")).not.toBeChecked();
+        expect(screen.getByText("0 of 2 selected")).toBeInTheDocument();
+
+        await user.click(screen.getByLabelText("Select all repositories"));
+        await waitFor(() => expect(access.toggleSelection).toHaveBeenCalledWith("octocat/hello-world", true));
+        expect(access.toggleSelection).toHaveBeenCalledWith("octocat/gone", true);
+        expect(screen.getByLabelText("Select octocat/hello-world")).toBeChecked();
+        expect(screen.getByText("2 of 2 selected")).toBeInTheDocument();
+    });
+
+    it("syncs every selected repository in one action and merges the preview", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        access.listRepos.mockResolvedValue({
+            repos: [
+                ...repoList.repos,
+                {
+                    ownerId: "owner-1", fullName: "octocat/second", selected: true, projectId: null,
+                    labelFilter: null, includeClosed: false, isStale: false, updatedAt: "2026-08-31T10:00:00.000Z",
+                },
+            ],
+            labels: { ...repoList.labels, "octocat/second": [] },
+        });
+        access.sync.mockImplementation(async (fullName: string) => fullName === "octocat/hello-world"
+            ? syncResult
+            : {
+                ...syncResult,
+                issues: [{
+                    ...syncResult.issues[0],
+                    number: 9,
+                    title: "Second repo issue",
+                    html_url: "https://github.com/octocat/second/issues/9",
+                }],
+                repo: { fullName: "octocat/second", projectId: null, labelFilter: null, includeClosed: false },
+            });
+        const createTask = vi.fn().mockResolvedValue(createdTask());
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync selected (2)" }));
+
+        const dialog = await screen.findByRole("dialog", { name: "GitHub sync preview" });
+        expect(within(dialog).getByText(/From 2 repositories/)).toBeInTheDocument();
+        expect(within(dialog).getByText("Fix sync")).toBeInTheDocument();
+        expect(within(dialog).getByText("Second repo issue")).toBeInTheDocument();
+        expect(access.sync).toHaveBeenCalledWith("octocat/hello-world", { isStale: false });
+        expect(access.sync).toHaveBeenCalledWith("octocat/second", { isStale: false });
+        expect(access.sync).not.toHaveBeenCalledWith("octocat/gone", expect.anything());
+
+        await user.click(within(dialog).getByRole("button", { name: "Create 2 tasks" }));
+        await waitFor(() => expect(createTask).toHaveBeenCalledTimes(2));
+        expect(await screen.findByLabelText("GitHub sync result for octocat/hello-world")).toHaveTextContent("Created 1");
+        expect(screen.getByLabelText("GitHub sync result for octocat/second")).toHaveTextContent("Created 1");
+    });
+
+    it("continues a bulk sync when one repository fails and reports it", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        access.listRepos.mockResolvedValue({
+            repos: [
+                ...repoList.repos,
+                {
+                    ownerId: "owner-1", fullName: "octocat/second", selected: true, projectId: null,
+                    labelFilter: null, includeClosed: false, isStale: false, updatedAt: "2026-08-31T10:00:00.000Z",
+                },
+            ],
+            labels: { ...repoList.labels, "octocat/second": [] },
+        });
+        access.sync.mockImplementation(async (fullName: string) => {
+            if (fullName === "octocat/second") throw new GitHubIntegrationError("GITHUB_REPO_NOT_FOUND", "gone");
+            return syncResult;
+        });
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync selected (2)" }));
+
+        const dialog = await screen.findByRole("dialog", { name: "GitHub sync preview" });
+        expect(within(dialog).getByText("Fix sync")).toBeInTheDocument();
+        expect(within(dialog).getByRole("alert")).toHaveTextContent("Synced 1 of 2 repositories");
+    });
+
+    it("filters the repository list by search", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+
+        await screen.findByText("Connected");
+        await user.type(screen.getByLabelText("Search repositories"), "hello");
+        expect(screen.getByLabelText("Select octocat/hello-world")).toBeInTheDocument();
+        expect(screen.queryByLabelText("Select octocat/gone")).not.toBeInTheDocument();
+
+        await user.clear(screen.getByLabelText("Search repositories"));
+        await user.type(screen.getByLabelText("Search repositories"), "nomatch");
+        expect(screen.getByText(/No repositories match/)).toBeInTheDocument();
+        expect(screen.getByLabelText("Select all repositories")).toBeDisabled();
     });
 
     it("disconnects the GitHub connection", async () => {

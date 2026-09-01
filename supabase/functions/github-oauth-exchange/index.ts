@@ -22,9 +22,9 @@ function bearerToken(request: Request): string | null {
 }
 
 function githubEnvironment(): { clientId: string; clientSecret: string; redirectUri: string } | null {
-    const clientId = Deno.env.get("GITHUB_OAUTH_CLIENT_ID")?.trim();
-    const clientSecret = Deno.env.get("GITHUB_OAUTH_CLIENT_SECRET")?.trim();
-    const redirectUri = Deno.env.get("GITHUB_OAUTH_REDIRECT_URI")?.trim();
+    const clientId = Deno.env.get("INTEGRATION_GITHUB_OAUTH_CLIENT_ID")?.trim();
+    const clientSecret = Deno.env.get("INTEGRATION_GITHUB_OAUTH_CLIENT_SECRET")?.trim();
+    const redirectUri = Deno.env.get("INTEGRATION_GITHUB_OAUTH_REDIRECT_URI")?.trim();
     return clientId && clientSecret && redirectUri ? { clientId, clientSecret, redirectUri } : null;
 }
 

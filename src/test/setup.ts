@@ -35,4 +35,5 @@ class MockAudio {
 // Clean up any leftover state between tests.
 afterEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
 });

@@ -26,6 +26,7 @@ import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
 import { supabase } from "./lib/supabase";
+import { TAURI_WINDOWS_ENTRY_PATH } from "./lib/integrations/githubOAuthReturn";
 
 // Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
 // only downloaded when their route is visited, keeping the entry chunk small.
@@ -46,6 +47,9 @@ const SignupPage = lazy(() => import("./components/auth/SignupPage").then((m) =>
 const ResetPasswordPage = lazy(() =>
     import("./components/auth/ResetPasswordPage").then((m) => ({ default: m.ResetPasswordPage })),
 );
+const GithubOAuthCallbackPage = lazy(() =>
+    import("./components/auth/GithubOAuthCallbackPage").then((m) => ({ default: m.GithubOAuthCallbackPage })),
+);
 
 const RouteLoadingFallback: React.FC = () => (
     <div className="flex h-full min-h-0 items-center justify-center text-xs text-neutral-500" role="status">
@@ -64,6 +68,8 @@ const App: React.FC = () => (
                     <Route path="/signup" element={<SignupPage />} />
                 </Route>
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
+                <Route path="/auth/github/callback" element={<GithubOAuthCallbackPage />} />
+                <Route path={TAURI_WINDOWS_ENTRY_PATH} element={<GithubOAuthCallbackPage />} />
                 <Route element={<RequireAuth />}>
                     <Route element={<AuthenticatedShell />}>
                         <Route path="/" element={<MainLayout />} />

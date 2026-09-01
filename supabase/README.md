@@ -97,12 +97,22 @@ No Shortcut token belongs in an environment file, log, `VITE_` variable, or comm
 GitHub connection uses a classic GitHub OAuth App. Configure these values only in the ignored `supabase/.env.local` file for local development and as hosted Supabase secrets:
 
 ```dotenv
-GITHUB_OAUTH_CLIENT_ID=...
-GITHUB_OAUTH_CLIENT_SECRET=...
-GITHUB_OAUTH_REDIRECT_URI=http://localhost:3000/auth/github/callback
+INTEGRATION_GITHUB_OAUTH_CLIENT_ID=...
+INTEGRATION_GITHUB_OAUTH_CLIENT_SECRET=...
+INTEGRATION_GITHUB_OAUTH_REDIRECT_URI=http://localhost:3000/auth/github/callback
 ```
 
-Register `GITHUB_OAUTH_REDIRECT_URI` as the OAuth App's exact authorization callback URL. In production it must be `${VITE_PUBLIC_APP_URL}/auth/github/callback`, using the canonical origin without a trailing slash. The same server-configured URI is sent during authorization and code exchange; no GitHub value belongs in a `VITE_` variable or client bundle. Issue 95 adds the callback route and cross-surface PWA/Tauri return handling.
+Register `INTEGRATION_GITHUB_OAUTH_REDIRECT_URI` as the OAuth App's exact authorization callback URL, with wildcard matching disabled. In production it must be `${VITE_PUBLIC_APP_URL}/auth/github/callback`, using the canonical origin without a trailing slash. The same server-configured URI is sent during authorization and code exchange; no GitHub value belongs in a `VITE_` variable or client bundle. Development and production normally use separate OAuth Apps because their callback origins differ.
+
+The callback uses a canonical-origin bridge for the packaged Windows app. Connect stores a one-time OAuth state in the initiating surface's `sessionStorage`; Tauri-marked responses arriving at a different hosted origin are forwarded, with only GitHub response parameters, to the fixed internal `http://tauri.localhost/index.html` entry asset. React routes that entry path to the callback page after the packaged SPA loads, avoiding a native asset lookup for the client-side `/auth/github/callback` route. The packaged origin then validates and consumes the state before its own Supabase session exchanges the code. During `tauri dev`, the callback and initiating webview share Vite's origin; the matching pending state is detected and the unavailable production asset bridge is skipped. The destination never comes from query input.
+
+This bridge was chosen over the alternatives so the native shell remains slim:
+
+- A custom deep link would work with the system browser, but would add native registration, a deep-link plugin/capability, and lifecycle handling.
+- A loopback callback would require a native HTTP listener, dynamic-port coordination, and a different registered callback strategy.
+- The canonical bridge reuses the existing same-webview navigation and one public callback without adding a Tauri command, `invoke` data path, plugin, secret, or public environment variable.
+
+Do not change GitHub navigation to the opener/system browser without first implementing a deep-link return path: an ordinary browser cannot resolve Tauri's internal origin. Do not enable Tauri `useHttpsScheme` just for OAuth; the repository's Windows production origin is currently `http://tauri.localhost`, and changing it would also change the app's local storage origin.
 
 The authorization request asks only for the classic OAuth App `repo` scope, which is needed to enumerate and read issues from both public and private repositories. The function independently verifies the WorkTime bearer JWT, exchanges the one-time code with the server-only client secret, fetches `GET /user`, and service-role upserts the token and connected login into `github_settings`. It returns only the login; the token remains non-selectable by authenticated browser clients.
 
@@ -111,13 +121,21 @@ Classic GitHub OAuth App user access tokens do not expire by default, unlike exp
 Deploy the authenticated function with gateway JWT verification enabled:
 
 ```sh
-npx supabase secrets set GITHUB_OAUTH_CLIENT_ID=... GITHUB_OAUTH_CLIENT_SECRET=... GITHUB_OAUTH_REDIRECT_URI=...
+npx supabase secrets set INTEGRATION_GITHUB_OAUTH_CLIENT_ID=... INTEGRATION_GITHUB_OAUTH_CLIENT_SECRET=... INTEGRATION_GITHUB_OAUTH_REDIRECT_URI=...
 npx supabase functions deploy github-oauth-exchange
 npx supabase functions deploy github-enumerate-repos
 npx supabase functions deploy github-sync
 ```
 
 `github-enumerate-repos` uses the stored server-only token to list accessible repositories and labels. It seeds new repositories as selected, preserves existing per-repository preferences, and marks repositories missing from later listings as stale rather than deleting them.
+
+Manual desktop round-trip verification:
+
+1. Set the hosted Edge Function secret and OAuth App callback to `${VITE_PUBLIC_APP_URL}/auth/github/callback` exactly, with wildcard matching disabled.
+2. Build and install the MSI with all three public Vite variables, then sign in inside WorkTime.
+3. Select **Connect GitHub**, approve access, and confirm the webview briefly reaches the hosted callback before returning through `http://tauri.localhost/index.html` and then `/integrations`.
+4. Confirm the connected username and repositories load, then repeat while denying access and confirm the callback shows cancellation copy with a route back to Integrations.
+5. Start a new attempt and alter/remove the callback state or code (using development tools); confirm the exchange is rejected with safe expired/unverified copy.
 
 Invoke `github-sync` with `POST` through the authenticated Supabase client and a body of `{ "full_name": "owner/repository" }`. The function verifies that the repository row belongs to the caller, reads `include_closed` and `label_filter` from that row (request bodies cannot override them), and fetches at most four 100-entry GitHub issue pages. Pull requests returned by GitHub's issues endpoint are excluded. A successful response is `{ issues, repo, synced_at }` and only then updates `github_settings.last_synced_at`.
 
