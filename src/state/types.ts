@@ -160,3 +160,83 @@ export interface AppStateData {
     current_cycle_pomodoros: number;
     timer: ActiveTimer | null;
 }
+
+/** Extensible enum-style set of care activities the pet domain understands. */
+export type PetActivityType = "potty" | "training" | "playtime" | "feeding";
+
+/** Items classified fixed never move; flexible items may reflow by suggestion. */
+export type PetFlexibility = "fixed" | "flexible";
+
+export interface PetProfile {
+    id: string;
+    name: string;
+    /** Timezone-free local calendar date in YYYY-MM-DD form. */
+    birthDate: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+/** Clock-anchored recurrence; `flexibility` decides whether reflow may be proposed. */
+export interface PetFixedTimeRecurrence {
+    mode: "fixed-time";
+    /** Local wall-clock start in 24-hour HH:mm form. */
+    time: string;
+    /** Minutes from local midnight; machine-readable mirror of `time`. */
+    startMinutes: number;
+    /** Minutes from local midnight for the window close. */
+    endMinutes: number;
+}
+
+/** Interval recurrence anchored to the latest matching activity record. */
+export interface PetIntervalRecurrence {
+    mode: "interval";
+    minMinutes: number;
+    maxMinutes: number;
+}
+
+export type PetScheduleRecurrence = PetFixedTimeRecurrence | PetIntervalRecurrence;
+
+export interface PetScheduleItem {
+    id: string;
+    activityType: PetActivityType;
+    label: string;
+    flexibility: PetFlexibility;
+    /** Ordering among items sharing a resolved start; lower runs first. */
+    priority: number;
+    recurrence: PetScheduleRecurrence;
+    isActive: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
+/** Append-only care log row. Durations are only meaningful for training/playtime. */
+export interface PetActivityRecord {
+    id: string;
+    activityType: PetActivityType;
+    /** ISO timestamp when the activity happened. */
+    timestamp: string;
+    /** Optional; only meaningful for training and playtime. */
+    durationMinutes?: number;
+    createdAt: string;
+}
+
+/** Stored nap row. `end` stays null while the nap is ongoing. */
+export interface PetNapRecord {
+    id: string;
+    /** ISO timestamp the nap started. */
+    start: string;
+    /** ISO timestamp the nap ended; null while still napping. */
+    end: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+/** Append-only weight log row; the profile's current weight is the latest entry. */
+export interface PetWeightEntry {
+    id: string;
+    /** ISO timestamp of the measurement. */
+    timestamp: string;
+    weight: number;
+    createdAt: string;
+    updatedAt: string;
+}
