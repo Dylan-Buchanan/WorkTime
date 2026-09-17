@@ -34,6 +34,15 @@ export type {
 } from "./types";
 
 export { derivePetAge, formatPetAge, formatPetAgeAt, petBirthDateKey } from "./age";
+export type { LogActivityResult, PetActivityCounts } from "./activityLog";
+export {
+    canCorrectActivityRecord,
+    correctActivityTimestamp,
+    countActivitiesToday,
+    isSameLocalDay,
+    logActivity,
+    removeActivityRecord,
+} from "./activityLog";
 export { formatClock, formatDeltaMinutes, formatMinuteOfDay } from "./format";
 export {
     createPetActivityRecord,

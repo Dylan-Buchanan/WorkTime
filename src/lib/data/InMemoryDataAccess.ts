@@ -20,7 +20,7 @@ import {
     resumeTimer,
     skipBreak,
 } from "../engine";
-import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
+import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PetActivityRecord, Settings, Task } from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncOptions, SyncResult, SyncedPMState } from "./DataAccess";
 
@@ -54,6 +54,7 @@ export interface InMemoryDataStore {
     habitCompletions: HabitCompletion[];
     todos: Todo[];
     todoCompletions: TodoCompletion[];
+    petActivityRecords: PetActivityRecord[];
     completed: boolean;
 }
 
@@ -98,7 +99,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
@@ -109,6 +110,9 @@ export class InMemoryDataAccess implements DataAccess {
             : [];
         this.store.todos = this.store.todos ? this.store.todos.map((todo) => clone(todo)) : [];
         this.store.todoCompletions = this.store.todoCompletions ? this.store.todoCompletions.map((completion) => clone(completion)) : [];
+        this.store.petActivityRecords = this.store.petActivityRecords
+            ? this.store.petActivityRecords.map((record) => clone(record))
+            : [];
         this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
         this.createTaskId = options.createTaskId ?? randomId;
@@ -288,6 +292,16 @@ export class InMemoryDataAccess implements DataAccess {
         return { todos: this.store.todos.map((todo) => clone(todo)), completions: this.store.todoCompletions.map((completion) => clone(completion)) };
     }
 
+    async savePetActivityRecords(records: PetActivityRecord[]): Promise<void> {
+        this.store.petActivityRecords = records.map((record) => clone(record));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetActivityRecords(): Promise<PetActivityRecord[]> {
+        return this.store.petActivityRecords.map((record) => clone(record));
+    }
+
     async discardPendingChanges(): Promise<void> {
         const inProgressPomodoros = clone(this.store.inProgressPomodoros);
         this.store.state = cloneAppState(this.baseline.state);
@@ -296,6 +310,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.habitCompletions = this.baseline.habitCompletions.map((completion) => clone(completion));
         this.store.todos = this.baseline.todos.map((todo) => clone(todo));
         this.store.todoCompletions = this.baseline.todoCompletions.map((completion) => clone(completion));
+        this.store.petActivityRecords = this.baseline.petActivityRecords.map((record) => clone(record));
         this.store.completed = this.baseline.completed;
         this.store.inProgressPomodoros = inProgressPomodoros;
         this.pending = 0;
@@ -334,6 +349,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         habitCompletions: [],
         todos: [],
         todoCompletions: [],
+        petActivityRecords: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };

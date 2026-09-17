@@ -22,6 +22,8 @@ import { RedirectIfAuthenticated } from "./auth/RedirectIfAuthenticated";
 import { TauriCloseProvider } from "./state/TauriCloseContext";
 import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 import { TodoProvider } from "./state/TodoContext";
+import { ToastProvider } from "./state/ToastContext";
+import { PetActivityProvider } from "./state/PetActivityContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
@@ -139,12 +141,16 @@ const AuthenticatedShell: React.FC = () => {
                         <AgentApprovalProvider>
                             <HabitProvider>
                                 <TodoProvider>
-                                    <StateSyncBridge />
-                                    <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
-                                        <TopNav />
-                                        <UnsyncedBanner />
-                                        <div className="flex-1 min-h-0"><Outlet /></div>
-                                    </div>
+                                    <ToastProvider>
+                                        <PetActivityProvider>
+                                            <StateSyncBridge />
+                                            <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
+                                                <TopNav />
+                                                <UnsyncedBanner />
+                                                <div className="flex-1 min-h-0"><Outlet /></div>
+                                            </div>
+                                        </PetActivityProvider>
+                                    </ToastProvider>
                                 </TodoProvider>
                             </HabitProvider>
                         </AgentApprovalProvider>

@@ -19,7 +19,7 @@ import {
     updateSettings,
 } from "../engine";
 import { EngineError } from "../engine";
-import type { ActiveTimer, AppStateData, Habit, HabitCompletion, Settings, Task } from "../../state/types";
+import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PetActivityRecord, Settings, Task } from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 import type { LocalStagingStore } from "./staging/LocalStagingStore";
 import { deepValuesEqual } from "./staging/serialization";
@@ -514,6 +514,50 @@ export class StagedDataAccess implements DataAccess {
             todos: Object.values(record.todos).map((todo) => clone(todo)),
             completions: Object.values(record.todoCompletions).map((completion) => clone(completion)),
         };
+    }
+
+    /**
+     * Replaces the locally staged pet activity log in one store write using a
+     * single injected timestamp. The input array is the full desired set: new or
+     * deep-changed records receive a fresh LWW stamp, unchanged records keep
+     * their existing stamp, and omitted rows are removed and staged as
+     * tombstones. Pure local persistence; never touches the network.
+     */
+    async savePetActivityRecords(records: PetActivityRecord[]): Promise<void> {
+        const stamp = this.now().toISOString();
+        const nextRecords: Record<string, PetActivityRecord> = {};
+        for (const record of records) {
+            nextRecords[record.id] = clone(record);
+        }
+        await this.store.update(this.ownerId, (current) => {
+            const petActivityUpdatedAt = { ...current.petActivityUpdatedAt };
+            const petActivityTombstones = { ...current.petActivityTombstones };
+
+            for (const id of Object.keys(nextRecords)) {
+                const previous = current.petActivityRecords[id];
+                if (previous === undefined || !equal(previous, nextRecords[id])) {
+                    petActivityUpdatedAt[id] = stamp;
+                }
+                delete petActivityTombstones[id];
+            }
+            for (const id of Object.keys(current.petActivityRecords)) {
+                if (nextRecords[id]) continue;
+                delete petActivityUpdatedAt[id];
+                petActivityTombstones[id] = { id, deletedAt: stamp };
+            }
+
+            return {
+                ...current,
+                petActivityRecords: nextRecords,
+                petActivityUpdatedAt,
+                petActivityTombstones,
+            };
+        });
+    }
+
+    async loadPetActivityRecords(): Promise<PetActivityRecord[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petActivityRecords).map((entry) => clone(entry));
     }
 
     async discardPendingChanges(): Promise<void> {

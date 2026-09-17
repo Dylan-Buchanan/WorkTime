@@ -140,6 +140,9 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         todoTombstones: {},
         todoCompletions: { ...baseline.todoCompletions },
         todoCompletionTombstones: {},
+        petActivityRecords: {},
+        petActivityUpdatedAt: {},
+        petActivityTombstones: {},
         ...overrides,
     };
 }
@@ -174,6 +177,9 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         todoTombstones: {},
         todoCompletions: {},
         todoCompletionTombstones: {},
+        petActivityRecords: {},
+        petActivityUpdatedAt: {},
+        petActivityTombstones: {},
         ...overrides,
     };
 }

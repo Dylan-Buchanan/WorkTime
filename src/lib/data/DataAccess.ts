@@ -5,6 +5,7 @@ import type {
     AppStateData,
     Habit,
     HabitCompletion,
+    PetActivityRecord,
     PMTask,
     ProjectManagerState,
     Settings,
@@ -115,6 +116,8 @@ export interface DataAccess {
     loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }>;
     saveTodos(todos: Todo[], completions: TodoCompletion[]): Promise<void>;
     loadTodos(): Promise<{ todos: Todo[]; completions: TodoCompletion[] }>;
+    savePetActivityRecords(records: PetActivityRecord[]): Promise<void>;
+    loadPetActivityRecords(): Promise<PetActivityRecord[]>;
     sync(options: SyncOptions): Promise<SyncResult>;
     discardPendingChanges(): Promise<void>;
     pendingCount(): number;

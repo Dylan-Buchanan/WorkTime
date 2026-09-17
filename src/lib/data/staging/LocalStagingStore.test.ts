@@ -228,6 +228,43 @@ describe("LocalStagingStore", () => {
         expect(record.habitUpdatedAt).toEqual({});
         expect(record.habitTombstones).toEqual({});
         expect(record.habitCompletionTombstones).toEqual({});
+        expect(record.petActivityRecords).toEqual({});
+        expect(record.petActivityUpdatedAt).toEqual({});
+        expect(record.petActivityTombstones).toEqual({});
+    });
+
+    it("defaults pet activity maps when an existing record predates them", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        await store.update(OWNER_A, (r) => r);
+        const key = stagingKey(OWNER_A);
+        const legacy = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
+        delete legacy.petActivityRecords;
+        delete legacy.petActivityUpdatedAt;
+        delete legacy.petActivityTombstones;
+        window.localStorage.setItem(key, JSON.stringify(legacy));
+
+        const migrated = store.read(OWNER_A);
+        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.petActivityRecords).toEqual({});
+        expect(migrated.petActivityUpdatedAt).toEqual({});
+        expect(migrated.petActivityTombstones).toEqual({});
+
+        // A populated pet activity log round-trips through serialize then parse.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            petActivityRecords: {
+                pa1: {
+                    id: "pa1",
+                    activityType: "potty",
+                    timestamp: "2026-01-01T10:00:00.000Z",
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
+            petActivityUpdatedAt: { pa1: "2026-01-01T10:00:00.000Z" },
+        }));
+        const roundTripped = store.read(OWNER_A);
+        expect(roundTripped.petActivityRecords.pa1.activityType).toBe("potty");
+        expect(roundTripped.petActivityUpdatedAt.pa1).toBe("2026-01-01T10:00:00.000Z");
     });
 
     it("increments revision on every update and re-reads the latest record", async () => {

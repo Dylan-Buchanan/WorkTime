@@ -6,7 +6,7 @@ import { StagedDataAccess } from "./StagedDataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
 import { timerGenerationKey } from "./sync/timerCompletions";
-import type { ActiveTimer, Habit, HabitCompletion } from "../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetActivityType } from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 
 const OWNER_A = "owner-a";
@@ -56,6 +56,16 @@ function TD(id: string, overrides: Partial<Todo> = {}): Todo {
 
 function TC(id: string, todoId: string): TodoCompletion {
     return { id, todoId, bucket: "2026-01-03", createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
+}
+
+function PA(id: string, activityType: PetActivityType, overrides: Partial<PetActivityRecord> = {}): PetActivityRecord {
+    return {
+        id,
+        activityType,
+        timestamp: "2026-01-01T10:00:00.000Z",
+        createdAt: "2026-01-01T10:00:00.000Z",
+        ...overrides,
+    };
 }
 
 function throwingStorage(): StorageLike {
@@ -526,6 +536,41 @@ describe("StagedDataAccess", () => {
         expect(loaded.completions.map((completion) => completion.id)).toEqual(["c1"]);
         loaded.habits[0].name = "mutated";
         expect((await data.loadHabits()).habits[0].name).toBe("Back");
+    });
+
+    it("stages pet activity saves with stamps, tombstones, and zero network calls", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        await data.savePetActivityRecords([PA("pa1", "potty"), PA("pa2", "training", { durationMinutes: 10 })]);
+        let record = store.read(OWNER_A);
+        expect(sync).not.toHaveBeenCalled();
+        expect(record.petActivityRecords.pa1.activityType).toBe("potty");
+        expect(record.petActivityRecords.pa2.durationMinutes).toBe(10);
+        expect(record.petActivityUpdatedAt.pa1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petActivityUpdatedAt.pa2).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petActivityTombstones).toEqual({});
+
+        // Unchanged rows keep their stamp; removals stage id-keyed tombstones.
+        await data.savePetActivityRecords([PA("pa1", "potty")]);
+        record = store.read(OWNER_A);
+        expect(record.petActivityUpdatedAt.pa1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petActivityUpdatedAt.pa2).toBeUndefined();
+        expect(record.petActivityTombstones.pa2).toEqual({ id: "pa2", deletedAt: "2026-01-02T00:00:00.000Z" });
+
+        // Reintroducing an id clears its tombstone.
+        await data.savePetActivityRecords([PA("pa2", "training")]);
+        record = store.read(OWNER_A);
+        expect(record.petActivityTombstones.pa2).toBeUndefined();
+
+        // loadPetActivityRecords returns fresh clones.
+        const loaded = await data.loadPetActivityRecords();
+        loaded[0].activityType = "feeding";
+        const reloaded = await data.loadPetActivityRecords();
+        expect(reloaded.find((entry) => entry.id === loaded[0].id)?.activityType).not.toBe("feeding");
     });
 
     it("records cascade provenance only when a completion is removed with its habit", async () => {

@@ -3,6 +3,7 @@ import type {
     AppStateData,
     Habit,
     HabitCompletion,
+    PetActivityRecord,
     PomodoroLogEntry,
     Settings,
     Task,
@@ -138,6 +139,15 @@ export interface StagedOwnerRecord {
     todoTombstones: Record<string, { id: string; deletedAt: string }>;
     todoCompletions: Record<string, TodoCompletion>;
     todoCompletionTombstones: Record<string, TodoCompletionTombstone>;
+    /**
+     * Current locally-staged pet activity records, keyed by record id. Added
+     * additively to the v6 shape; Issue G threads the full pet domain (including
+     * this group) into `SyncSnapshot` and the sync RPC.
+     */
+    petActivityRecords: Record<string, PetActivityRecord>;
+    /** `updated_at` LWW transport stamps per locally-changed activity record. */
+    petActivityUpdatedAt: Record<string, string>;
+    petActivityTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
 export const STAGING_SCHEMA_VERSION = 6 as const;
@@ -269,6 +279,21 @@ function isTodoCompletion(value: unknown): boolean {
     );
 }
 
+function isPetActivityType(value: unknown): boolean {
+    return value === "potty" || value === "training" || value === "playtime" || value === "feeding";
+}
+
+function isPetActivityRecord(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        isPetActivityType(value.activityType) &&
+        typeof value.timestamp === "string" &&
+        (value.durationMinutes === undefined || (isFiniteNumber(value.durationMinutes) && value.durationMinutes >= 0)) &&
+        typeof value.createdAt === "string"
+    );
+}
+
 function isTombstone(value: unknown): boolean {
     return isObject(value) && typeof value.id === "string" && typeof value.deletedAt === "string";
 }
@@ -390,6 +415,12 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["todoTombstones", isTombstoneMap],
     ["todoCompletions", (v): boolean => isObject(v) && Object.values(v).every(isTodoCompletion)],
     ["todoCompletionTombstones", isTodoCompletionTombstoneMap],
+    ["petActivityRecords", (v): boolean => isObject(v) && Object.values(v).every(isPetActivityRecord)],
+    [
+        "petActivityUpdatedAt",
+        (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string"),
+    ],
+    ["petActivityTombstones", isTombstoneMap],
 ];
 
 /**
@@ -400,7 +431,8 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * records whose embedded `ownerId` differs from the storage key are rejected so
  * local data is never silently overwritten or read under the wrong owner.
  * `unbootstrapped` predates this schema revision and defaults to false when
- * absent so previously stored records keep loading.
+ * absent so previously stored records keep loading. Pet activity maps were
+ * added additively to v6 and also default to empty when absent.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -492,6 +524,22 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     }
     if (record.schemaVersion === 5) {
         record = { ...record, schemaVersion: 6, inProgressPomodoros: {} };
+    }
+    // Pet activity records were added additively to the v6 shape (Issue C). A
+    // record written before them simply receives empty maps; the embedded
+    // schema version is not bumped here because Issue G owns the v7 migration
+    // that threads the full pet domain through the sync pipeline.
+    if (
+        record.petActivityRecords === undefined ||
+        record.petActivityUpdatedAt === undefined ||
+        record.petActivityTombstones === undefined
+    ) {
+        record = {
+            ...record,
+            petActivityRecords: record.petActivityRecords ?? {},
+            petActivityUpdatedAt: record.petActivityUpdatedAt ?? {},
+            petActivityTombstones: record.petActivityTombstones ?? {},
+        };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

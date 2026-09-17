@@ -85,6 +85,7 @@ describe("InMemoryDataAccess", () => {
             habitCompletions: [],
             todos: [],
             todoCompletions: [],
+            petActivityRecords: [],
             completed: false,
         };
         const data = new InMemoryDataAccess(store, {
@@ -206,5 +207,29 @@ describe("InMemoryDataAccess", () => {
         unsubscribe();
         await data.saveHabits([], []);
         expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("round-trips pet activity records as clones with one pending item", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const listener = vi.fn();
+        data.subscribe(listener);
+        const petRecord = {
+            id: "pa1",
+            activityType: "potty" as const,
+            timestamp: "2026-01-01T10:00:00.000Z",
+            createdAt: "2026-01-01T10:00:00.000Z",
+        };
+
+        await data.savePetActivityRecords([petRecord]);
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(data.pendingCount()).toBe(1);
+        expect(await data.loadPetActivityRecords()).toEqual([petRecord]);
+
+        const loaded = await data.loadPetActivityRecords();
+        loaded[0].activityType = "feeding";
+        expect((await data.loadPetActivityRecords())[0].activityType).toBe("potty");
+
+        await data.savePetActivityRecords([]);
+        expect(await data.loadPetActivityRecords()).toEqual([]);
     });
 });

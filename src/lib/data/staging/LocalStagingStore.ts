@@ -65,6 +65,9 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         todoTombstones: {},
         todoCompletions: {},
         todoCompletionTombstones: {},
+        petActivityRecords: {},
+        petActivityUpdatedAt: {},
+        petActivityTombstones: {},
     };
 }
 
@@ -387,6 +390,12 @@ export class LocalStagingStore {
                         Object.entries(baseline.todos).map(([id, row]) => [id, row.value]),
                     ),
                     todoCompletions: { ...baseline.todoCompletions },
+                    // The remote baseline does not carry the pet domain yet
+                    // (Issue G), so preserve the local activity log rather than
+                    // discarding records that could not be restored.
+                    petActivityRecords: { ...current.petActivityRecords },
+                    petActivityUpdatedAt: { ...current.petActivityUpdatedAt },
+                    petActivityTombstones: { ...current.petActivityTombstones },
                 };
             const stored = { ...next, revision: current.revision + 1 };
             try {
