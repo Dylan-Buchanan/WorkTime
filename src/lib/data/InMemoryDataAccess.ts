@@ -26,9 +26,11 @@ import type {
     Habit,
     HabitCompletion,
     PetActivityRecord,
+    PetFixation,
     PetNapRecord,
     PetProfile,
     PetScheduleItem,
+    PetTrainingSkill,
     PetWeightEntry,
     Settings,
     Task,
@@ -71,6 +73,8 @@ export interface InMemoryDataStore {
     petScheduleItems: PetScheduleItem[];
     petNapRecords: PetNapRecord[];
     petWeightEntries: PetWeightEntry[];
+    petTrainingSkills: PetTrainingSkill[];
+    petFixations: PetFixation[];
     completed: boolean;
 }
 
@@ -115,7 +119,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petNapRecords: [], petWeightEntries: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
@@ -136,6 +140,12 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petNapRecords = this.store.petNapRecords ? this.store.petNapRecords.map((nap) => clone(nap)) : [];
         this.store.petWeightEntries = this.store.petWeightEntries
             ? this.store.petWeightEntries.map((entry) => clone(entry))
+            : [];
+        this.store.petTrainingSkills = this.store.petTrainingSkills
+            ? this.store.petTrainingSkills.map((skill) => clone(skill))
+            : [];
+        this.store.petFixations = this.store.petFixations
+            ? this.store.petFixations.map((fixation) => clone(fixation))
             : [];
         this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
@@ -366,6 +376,26 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.petWeightEntries.map((entry) => clone(entry));
     }
 
+    async savePetTrainingSkills(skills: PetTrainingSkill[]): Promise<void> {
+        this.store.petTrainingSkills = skills.map((skill) => clone(skill));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetTrainingSkills(): Promise<PetTrainingSkill[]> {
+        return this.store.petTrainingSkills.map((skill) => clone(skill));
+    }
+
+    async savePetFixations(fixations: PetFixation[]): Promise<void> {
+        this.store.petFixations = fixations.map((fixation) => clone(fixation));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetFixations(): Promise<PetFixation[]> {
+        return this.store.petFixations.map((fixation) => clone(fixation));
+    }
+
     async discardPendingChanges(): Promise<void> {
         const inProgressPomodoros = clone(this.store.inProgressPomodoros);
         this.store.state = cloneAppState(this.baseline.state);
@@ -379,6 +409,8 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petScheduleItems = this.baseline.petScheduleItems.map((item) => clone(item));
         this.store.petNapRecords = this.baseline.petNapRecords.map((nap) => clone(nap));
         this.store.petWeightEntries = this.baseline.petWeightEntries.map((entry) => clone(entry));
+        this.store.petTrainingSkills = this.baseline.petTrainingSkills.map((skill) => clone(skill));
+        this.store.petFixations = this.baseline.petFixations.map((fixation) => clone(fixation));
         this.store.completed = this.baseline.completed;
         this.store.inProgressPomodoros = inProgressPomodoros;
         this.pending = 0;
@@ -422,6 +454,8 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         petScheduleItems: [],
         petNapRecords: [],
         petWeightEntries: [],
+        petTrainingSkills: [],
+        petFixations: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };

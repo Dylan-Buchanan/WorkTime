@@ -25,9 +25,11 @@ import type {
     Habit,
     HabitCompletion,
     PetActivityRecord,
+    PetFixation,
     PetNapRecord,
     PetProfile,
     PetScheduleItem,
+    PetTrainingSkill,
     PetWeightEntry,
     Settings,
     Task,
@@ -598,13 +600,28 @@ export class StagedDataAccess implements DataAccess {
 
     /** Replaces one locally-staged pet record collection (full desired set). */
     private async savePetCollection(
-        recordsKey: "petScheduleItems" | "petNapRecords" | "petWeightEntries",
-        updatedAtKey: "petScheduleUpdatedAt" | "petNapUpdatedAt" | "petWeightUpdatedAt",
-        tombstonesKey: "petScheduleTombstones" | "petNapTombstones" | "petWeightTombstones",
-        rows: Array<PetScheduleItem | PetNapRecord | PetWeightEntry>,
+        recordsKey:
+            | "petScheduleItems"
+            | "petNapRecords"
+            | "petWeightEntries"
+            | "petTrainingSkills"
+            | "petFixations",
+        updatedAtKey:
+            | "petScheduleUpdatedAt"
+            | "petNapUpdatedAt"
+            | "petWeightUpdatedAt"
+            | "petTrainingSkillUpdatedAt"
+            | "petFixationUpdatedAt",
+        tombstonesKey:
+            | "petScheduleTombstones"
+            | "petNapTombstones"
+            | "petWeightTombstones"
+            | "petTrainingSkillTombstones"
+            | "petFixationTombstones",
+        rows: Array<PetScheduleItem | PetNapRecord | PetWeightEntry | PetTrainingSkill | PetFixation>,
     ): Promise<void> {
         const stamp = this.now().toISOString();
-        const nextRows: Record<string, PetScheduleItem | PetNapRecord | PetWeightEntry> = {};
+        const nextRows: Record<string, PetScheduleItem | PetNapRecord | PetWeightEntry | PetTrainingSkill | PetFixation> = {};
         for (const row of rows) nextRows[row.id] = clone(row);
         await this.store.update(this.ownerId, (current) => {
             const updatedAt = { ...current[updatedAtKey] };
@@ -654,6 +671,29 @@ export class StagedDataAccess implements DataAccess {
     async loadPetWeightEntries(): Promise<PetWeightEntry[]> {
         const record = this.store.read(this.ownerId);
         return Object.values(record.petWeightEntries).map((entry) => clone(entry));
+    }
+
+    async savePetTrainingSkills(skills: PetTrainingSkill[]): Promise<void> {
+        await this.savePetCollection(
+            "petTrainingSkills",
+            "petTrainingSkillUpdatedAt",
+            "petTrainingSkillTombstones",
+            skills,
+        );
+    }
+
+    async loadPetTrainingSkills(): Promise<PetTrainingSkill[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petTrainingSkills).map((skill) => clone(skill));
+    }
+
+    async savePetFixations(fixations: PetFixation[]): Promise<void> {
+        await this.savePetCollection("petFixations", "petFixationUpdatedAt", "petFixationTombstones", fixations);
+    }
+
+    async loadPetFixations(): Promise<PetFixation[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petFixations).map((fixation) => clone(fixation));
     }
 
     async discardPendingChanges(): Promise<void> {

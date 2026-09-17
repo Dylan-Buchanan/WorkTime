@@ -6,7 +6,19 @@ import { StagedDataAccess } from "./StagedDataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
 import { timerGenerationKey } from "./sync/timerCompletions";
-import type { ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetActivityType, PetNapRecord, PetProfile, PetScheduleItem, PetWeightEntry } from "../../state/types";
+import type {
+    ActiveTimer,
+    Habit,
+    HabitCompletion,
+    PetActivityRecord,
+    PetActivityType,
+    PetFixation,
+    PetNapRecord,
+    PetProfile,
+    PetScheduleItem,
+    PetTrainingSkill,
+    PetWeightEntry,
+} from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 
 const OWNER_A = "owner-a";
@@ -93,6 +105,32 @@ function PN(id: string, overrides: Partial<PetNapRecord> = {}): PetNapRecord {
 
 function PW(id: string, overrides: Partial<PetWeightEntry> = {}): PetWeightEntry {
     return { id, timestamp: "2026-01-01T10:00:00.000Z", weight: 4.2, createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z", ...overrides };
+}
+
+function PK(id: string, overrides: Partial<PetTrainingSkill> = {}): PetTrainingSkill {
+    return {
+        id,
+        label: `Skill ${id}`,
+        notes: "",
+        status: "introduced",
+        resolvedAt: null,
+        createdAt: "2026-01-01T10:00:00.000Z",
+        updatedAt: "2026-01-01T10:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function PF(id: string, overrides: Partial<PetFixation> = {}): PetFixation {
+    return {
+        id,
+        label: `Fixation ${id}`,
+        notes: "",
+        resolvedAt: null,
+        resolutionNote: "",
+        createdAt: "2026-01-01T10:00:00.000Z",
+        updatedAt: "2026-01-01T10:00:00.000Z",
+        ...overrides,
+    };
 }
 
 function throwingStorage(): StorageLike {
@@ -672,6 +710,47 @@ describe("StagedDataAccess", () => {
         const weights = await data.loadPetWeightEntries();
         weights[0].weight = 99;
         expect((await data.loadPetWeightEntries())[0].weight).not.toBe(99);
+    });
+
+    it("stages training skill and fixation collections with stamps and tombstones", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        await data.savePetTrainingSkills([PK("k1"), PK("k2", { status: "reliable" })]);
+        await data.savePetFixations([PF("f1"), PF("f2", { resolvedAt: "2026-01-01T00:00:00.000Z", resolutionNote: "grew out of it" })]);
+
+        let record = store.read(OWNER_A);
+        expect(sync).not.toHaveBeenCalled();
+        expect(record.petTrainingSkills.k1.status).toBe("introduced");
+        expect(record.petTrainingSkills.k2.status).toBe("reliable");
+        expect(record.petTrainingSkillUpdatedAt.k1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petTrainingSkillTombstones).toEqual({});
+        expect(record.petFixations.f2.resolutionNote).toBe("grew out of it");
+        expect(record.petFixationUpdatedAt.f1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petFixationTombstones).toEqual({});
+
+        // Removals stage id-keyed tombstones; re-adding clears them.
+        await data.savePetTrainingSkills([PK("k1")]);
+        await data.savePetFixations([PF("f1")]);
+        record = store.read(OWNER_A);
+        expect(record.petTrainingSkillTombstones.k2).toEqual({ id: "k2", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(record.petFixationTombstones.f2).toEqual({ id: "f2", deletedAt: "2026-01-02T00:00:00.000Z" });
+        await data.savePetTrainingSkills([PK("k1"), PK("k2")]);
+        await data.savePetFixations([PF("f1"), PF("f2")]);
+        record = store.read(OWNER_A);
+        expect(record.petTrainingSkillTombstones.k2).toBeUndefined();
+        expect(record.petFixationTombstones.f2).toBeUndefined();
+
+        // loadPet* returns fresh clones.
+        const skills = await data.loadPetTrainingSkills();
+        skills[0].status = "reliable";
+        expect((await data.loadPetTrainingSkills())[0].status).not.toBe("reliable");
+        const fixations = await data.loadPetFixations();
+        fixations[0].label = "Mutated";
+        expect((await data.loadPetFixations())[0].label).not.toBe("Mutated");
     });
 
     it("records cascade provenance only when a completion is removed with its habit", async () => {

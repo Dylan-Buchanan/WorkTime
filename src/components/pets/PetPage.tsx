@@ -1,5 +1,7 @@
 import React, { useState } from "react";
+import { PetFixationTab } from "./PetFixationTab";
 import { PetTodayTab } from "./PetTodayTab";
+import { PetTrainingTab } from "./PetTrainingTab";
 
 type PetTabId = "today" | "training" | "fixations" | "timeline";
 
@@ -10,17 +12,13 @@ const PET_TABS: Array<{ id: PetTabId; label: string }> = [
     { id: "timeline", label: "Timeline" },
 ];
 
-const PLACEHOLDER_COPY: Record<Exclude<PetTabId, "today">, string> = {
-    training: "Training skill tracking is coming soon.",
-    fixations: "Fixation tracking is coming soon.",
-    timeline: "The notable-events timeline is coming soon.",
-};
+const TIMELINE_PLACEHOLDER = "The notable-events timeline is coming soon.";
 
 /**
  * The `/pet` page: internal Today | Training | Fixations | Timeline tabs.
- * Today is built here; the other tabs render placeholders until Issues D and
- * E land. The route is named `/pet` (not dog-specific) for a possible future
- * second animal.
+ * Today, Training, and Fixations are built here; Timeline renders a
+ * placeholder until Issue E lands. The route is named `/pet` (not
+ * dog-specific) for a possible future second animal.
  */
 export const PetPage: React.FC = () => {
     const [tab, setTab] = useState<PetTabId>("today");
@@ -54,9 +52,13 @@ export const PetPage: React.FC = () => {
             <div className="min-h-0 flex-1">
                 {tab === "today" ? (
                     <PetTodayTab />
+                ) : tab === "training" ? (
+                    <PetTrainingTab />
+                ) : tab === "fixations" ? (
+                    <PetFixationTab />
                 ) : (
                     <div className="flex h-full items-center justify-center px-4 text-center text-xs text-neutral-500">
-                        {PLACEHOLDER_COPY[tab]}
+                        {TIMELINE_PLACEHOLDER}
                     </div>
                 )}
             </div>

@@ -45,7 +45,7 @@ describe("proposeNapReflow", () => {
         expect(training?.to.getHours()).toBe(16);
         expect(training?.to.getMinutes()).toBe(30);
         expect(proposal.changes.some((change) => change.itemId === "feeding")).toBe(false);
-        expect(proposal.shifts.find((shift) => shift.itemId === "playtime")?.description).toBe("playtime +40m — nap 14:00–14:40");
+        expect(proposal.shifts.find((shift) => shift.itemId === "playtime")?.description).toBe("playtime +40m — nap 2:00 PM–2:40 PM");
     });
 
     it("includes the pulled-forward interval occurrence as a post-wake shift", () => {

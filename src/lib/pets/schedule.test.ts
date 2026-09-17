@@ -122,7 +122,7 @@ describe("buildPetSchedule nap reflow", () => {
         expect(entry.paused).toBe(true);
         expect(entry.start.getHours()).toBe(11);
         expect(entry.start.getMinutes()).toBe(30);
-        expect(entry.shift?.description).toBe("potty +30m — nap 10:30–11:00");
+        expect(entry.shift?.description).toBe("potty +30m — nap 10:30 AM–11:00 AM");
     });
 
     it("pulls the next occurrence forward when a nap spans its due time", () => {
@@ -137,7 +137,7 @@ describe("buildPetSchedule nap reflow", () => {
         expect(entry.start.getHours()).toBe(11);
         expect(entry.start.getMinutes()).toBe(10);
         expect(entry.overdueMinutes).toBe(50);
-        expect(entry.shift?.description).toBe("potty +10m — post-wake 11:10");
+        expect(entry.shift?.description).toBe("potty +10m — post-wake 11:10 AM");
     });
 
     it("leaves fixed items in place when a nap ends just before them", () => {
@@ -194,7 +194,7 @@ describe("buildPetSchedule nap reflow", () => {
         expect(entry.start.getHours()).toBe(12);
         expect(entry.start.getMinutes()).toBe(40);
         expect(entry.shift?.deltaMinutes).toBe(40);
-        expect(entry.shift?.description).toBe("potty +40m — naps 10:10–10:40, 10:20–10:50");
+        expect(entry.shift?.description).toBe("potty +40m — naps 10:10 AM–10:40 AM, 10:20 AM–10:50 AM");
     });
 
     it("does not accrue overdue while the pet is napping", () => {

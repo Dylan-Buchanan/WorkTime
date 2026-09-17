@@ -275,21 +275,133 @@ describe("PetPage", () => {
         expect(items.find((item) => item.id === "play")?.recurrence).toMatchObject({ time: "15:30" });
     });
 
-    it("renders placeholder tabs for Training, Fixations, and Timeline", async () => {
+    it("keeps the Timeline tab as a placeholder", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePetProfile(profileRow());
         await data.savePetScheduleItems([fixedItem("dinner", "feeding", "Dinner", "18:00")]);
         render(wrap(data));
 
         await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
-        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        expect(screen.getByText(/Training skill tracking is coming soon/)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole("tab", { name: "Fixations" }));
-        expect(screen.getByText(/Fixation tracking is coming soon/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
         expect(screen.getByText(/notable-events timeline is coming soon/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("tab", { name: "Today" }));
         await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
+    });
+
+    it("creates, advances, and archives a training skill", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+        await waitFor(() => expect(screen.getByText("Sit")).toBeInTheDocument());
+        expect(await data.loadPetTrainingSkills()).toHaveLength(1);
+
+        fireEvent.click(screen.getByRole("button", { name: "Advance Sit" }));
+        await waitFor(() => expect(screen.getByText("Progressing")).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: "Advance Sit" }));
+        await waitFor(() => expect(screen.getByText("Reliable")).toBeInTheDocument());
+        // Reliable is the end of the line: no further advance control.
+        expect(screen.queryByRole("button", { name: "Advance Sit" })).toBeNull();
+
+        fireEvent.click(screen.getByRole("button", { name: "Mark done Sit" }));
+        await waitFor(async () => expect((await data.loadPetTrainingSkills())[0].resolvedAt).not.toBeNull());
+        await waitFor(() => expect(screen.getByText("No skills in progress yet.")).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: "Show resolved skills (1)" }));
+        expect(screen.getByText("Sit")).toBeInTheDocument();
+    });
+
+    it("edits a training skill without disturbing its status and rejects a blank label", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
+        fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "lure" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+        await waitFor(() => expect(screen.getByText("Sit")).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: "Advance Sit" }));
+        await waitFor(() => expect(screen.getByText("Progressing")).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: "Edit Sit" }));
+        fireEvent.change(screen.getByLabelText("Edit skill"), { target: { value: "Sit (hand signal)" } });
+        fireEvent.change(screen.getByLabelText("Edit notes"), { target: { value: "lure + marker" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(screen.getByText("Sit (hand signal)")).toBeInTheDocument());
+        expect(await data.loadPetTrainingSkills()).toMatchObject([
+            { label: "Sit (hand signal)", notes: "lure + marker", status: "progressing", resolvedAt: null },
+        ]);
+
+        // A blank label is rejected and nothing is persisted.
+        fireEvent.click(screen.getByRole("button", { name: "Edit Sit (hand signal)" }));
+        fireEvent.change(screen.getByLabelText("Edit skill"), { target: { value: "   " } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/label/i));
+        expect((await data.loadPetTrainingSkills())[0].label).toBe("Sit (hand signal)");
+    });
+
+    it("resolves a fixation with a reason and preserves it in the archive", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Fixations" }));
+        await waitFor(() => expect(screen.getByText("Current obsessions and behavior problems.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Fixation"), { target: { value: "Chasing the vacuum" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add fixation" }));
+        await waitFor(() => expect(screen.getByText("Chasing the vacuum")).toBeInTheDocument());
+
+        // A blank reason is rejected and the fixation stays active.
+        fireEvent.click(screen.getByRole("button", { name: "Resolve Chasing the vacuum" }));
+        await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/reason/i));
+        expect((await data.loadPetFixations())[0].resolvedAt).toBeNull();
+
+        fireEvent.change(screen.getByLabelText("Reason for Chasing the vacuum"), {
+            target: { value: "grew out of it" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Resolve Chasing the vacuum" }));
+        await waitFor(() => expect(screen.getByText("Show resolved fixations (1)")).toBeInTheDocument());
+
+        const [saved] = await data.loadPetFixations();
+        expect(saved.resolutionNote).toBe("grew out of it");
+        expect(saved.resolvedAt).not.toBeNull();
+
+        fireEvent.click(screen.getByRole("button", { name: "Show resolved fixations (1)" }));
+        expect(screen.getByText(/grew out of it/)).toBeInTheDocument();
+    });
+
+    it("edits a fixation and cancels without persisting the draft", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Fixations" }));
+        await waitFor(() => expect(screen.getByText("Current obsessions and behavior problems.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Fixation"), { target: { value: "Chasing the vacuum" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add fixation" }));
+        await waitFor(() => expect(screen.getByText("Chasing the vacuum")).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: "Edit Chasing the vacuum" }));
+        fireEvent.change(screen.getByLabelText("Edit fixation"), { target: { value: "Chasing brooms" } });
+        fireEvent.change(screen.getByLabelText("Edit notes"), { target: { value: "redirection" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(screen.getByText("Chasing brooms")).toBeInTheDocument());
+        expect(await data.loadPetFixations()).toMatchObject([
+            { label: "Chasing brooms", notes: "redirection", resolvedAt: null, resolutionNote: "" },
+        ]);
+
+        // Cancel discards the draft and keeps the persisted record.
+        fireEvent.click(screen.getByRole("button", { name: "Edit Chasing brooms" }));
+        fireEvent.change(screen.getByLabelText("Edit fixation"), { target: { value: "Discarded" } });
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.getByText("Chasing brooms")).toBeInTheDocument());
+        expect((await data.loadPetFixations())[0].label).toBe("Chasing brooms");
     });
 
     it("appends weight entries and shows the latest as the current weight", async () => {

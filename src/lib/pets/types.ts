@@ -3,6 +3,7 @@ import type { PetActivityRecord, PetActivityType, PetNapRecord, PetScheduleItem 
 export type {
     PetActivityRecord,
     PetActivityType,
+    PetFixation,
     PetFixedTimeRecurrence,
     PetFlexibility,
     PetIntervalRecurrence,
@@ -10,6 +11,8 @@ export type {
     PetProfile,
     PetScheduleItem,
     PetScheduleRecurrence,
+    PetTrainingSkill,
+    PetTrainingStatus,
     PetWeightEntry,
 } from "../../state/types";
 
@@ -61,6 +64,16 @@ export interface NewPetNapRecordInput {
 export interface NewPetWeightEntryInput {
     timestamp: string | Date;
     weight: number;
+}
+
+export interface NewPetTrainingSkillInput {
+    label: string;
+    notes?: string;
+}
+
+export interface NewPetFixationInput {
+    label: string;
+    notes?: string;
 }
 
 /** Derived, never stored. `unit` follows the weeks-until-6-months house rule. */

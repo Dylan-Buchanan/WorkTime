@@ -6,9 +6,11 @@ import type {
     Habit,
     HabitCompletion,
     PetActivityRecord,
+    PetFixation,
     PetNapRecord,
     PetProfile,
     PetScheduleItem,
+    PetTrainingSkill,
     PetWeightEntry,
     PMTask,
     ProjectManagerState,
@@ -131,6 +133,10 @@ export interface DataAccess {
     loadPetNapRecords(): Promise<PetNapRecord[]>;
     savePetWeightEntries(entries: PetWeightEntry[]): Promise<void>;
     loadPetWeightEntries(): Promise<PetWeightEntry[]>;
+    savePetTrainingSkills(skills: PetTrainingSkill[]): Promise<void>;
+    loadPetTrainingSkills(): Promise<PetTrainingSkill[]>;
+    savePetFixations(fixations: PetFixation[]): Promise<void>;
+    loadPetFixations(): Promise<PetFixation[]>;
     sync(options: SyncOptions): Promise<SyncResult>;
     discardPendingChanges(): Promise<void>;
     pendingCount(): number;

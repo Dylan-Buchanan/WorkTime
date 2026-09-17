@@ -1,6 +1,7 @@
 export type {
     PetActivityRecord,
     PetActivityType,
+    PetFixation,
     PetFixedTimeRecurrence,
     PetFlexibility,
     PetIntervalRecurrence,
@@ -8,17 +9,21 @@ export type {
     PetProfile,
     PetScheduleItem,
     PetScheduleRecurrence,
+    PetTrainingSkill,
+    PetTrainingStatus,
     PetWeightEntry,
 } from "../../state/types";
 export type {
     BuildPetScheduleInput,
     NewPetActivityRecordInput,
+    NewPetFixationInput,
     NewPetFixedTimeScheduleInput,
     NewPetIntervalScheduleInput,
     NewPetNapRecordInput,
     NewPetProfileInput,
     NewPetScheduleItemInput,
     NewPetScheduleRecurrenceInput,
+    NewPetTrainingSkillInput,
     NewPetWeightEntryInput,
     PetAge,
     PetAgeUnit,
@@ -46,11 +51,22 @@ export {
 export { formatClock, formatDeltaMinutes, formatMinuteOfDay } from "./format";
 export {
     createPetActivityRecord,
+    createPetFixation,
     createPetNapRecord,
     createPetProfile,
     createPetScheduleItem,
+    createPetTrainingSkill,
     createPetWeightEntry,
 } from "./factories";
+export { isPetFixationActive, resolvePetFixation } from "./fixations";
+export {
+    advancePetTrainingSkill,
+    isPetTrainingSkillResolved,
+    nextPetTrainingStatus,
+    petTrainingStatusLabel,
+    resolvePetTrainingSkill,
+    PET_TRAINING_STATUSES,
+} from "./training";
 export type { ResolvedIntervalWindow } from "./schedule";
 export {
     buildPetSchedule,

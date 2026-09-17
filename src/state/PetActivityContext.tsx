@@ -183,9 +183,15 @@ export const PetActivityProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, [data, hydrated, initialized, revision, state.records]);
 
     const reloadStagedRecords = useCallback(async () => {
+        // Snapshot the local state before the async read. If a local write lands
+        // while the read is in flight, this snapshot is stale: the guard below
+        // would otherwise compare the pre-write read against refs updated by the
+        // new write and apply the stale slice over the fresh in-memory records.
+        const stateBeforeLoad = serializeRecords(Object.values(stateRef.current.records));
         const loaded = await loadStagedRecords();
         const serialized = serializeRecords(loaded ?? []);
         const currentSerialized = serializeRecords(Object.values(stateRef.current.records));
+        if (currentSerialized !== stateBeforeLoad) return;
         if (lastServerSerializedRef.current !== null && currentSerialized !== lastServerSerializedRef.current) return;
         if (serialized === currentSerialized) {
             lastReloadedRef.current = serialized;

@@ -4,9 +4,11 @@ import type {
     Habit,
     HabitCompletion,
     PetActivityRecord,
+    PetFixation,
     PetNapRecord,
     PetProfile,
     PetScheduleItem,
+    PetTrainingSkill,
     PetWeightEntry,
     PomodoroLogEntry,
     Settings,
@@ -171,6 +173,14 @@ export interface StagedOwnerRecord {
     petWeightEntries: Record<string, PetWeightEntry>;
     petWeightUpdatedAt: Record<string, string>;
     petWeightTombstones: Record<string, { id: string; deletedAt: string }>;
+    /** Current locally-staged training skills, keyed by skill id. */
+    petTrainingSkills: Record<string, PetTrainingSkill>;
+    petTrainingSkillUpdatedAt: Record<string, string>;
+    petTrainingSkillTombstones: Record<string, { id: string; deletedAt: string }>;
+    /** Current locally-staged fixations, keyed by fixation id. */
+    petFixations: Record<string, PetFixation>;
+    petFixationUpdatedAt: Record<string, string>;
+    petFixationTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
 export const STAGING_SCHEMA_VERSION = 6 as const;
@@ -388,6 +398,36 @@ function isPetWeightEntry(value: unknown): boolean {
     );
 }
 
+function isPetTrainingStatus(value: unknown): boolean {
+    return value === "introduced" || value === "progressing" || value === "reliable";
+}
+
+function isPetTrainingSkill(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.label === "string" &&
+        typeof value.notes === "string" &&
+        isPetTrainingStatus(value.status) &&
+        (value.resolvedAt === null || typeof value.resolvedAt === "string") &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isPetFixation(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.label === "string" &&
+        typeof value.notes === "string" &&
+        (value.resolvedAt === null || typeof value.resolvedAt === "string") &&
+        typeof value.resolutionNote === "string" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
 function isStringMap(value: unknown): boolean {
     return isObject(value) && Object.values(value).every((stamp) => typeof stamp === "string");
 }
@@ -530,6 +570,12 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["petWeightEntries", (v): boolean => isObject(v) && Object.values(v).every(isPetWeightEntry)],
     ["petWeightUpdatedAt", isStringMap],
     ["petWeightTombstones", isTombstoneMap],
+    ["petTrainingSkills", (v): boolean => isObject(v) && Object.values(v).every(isPetTrainingSkill)],
+    ["petTrainingSkillUpdatedAt", isStringMap],
+    ["petTrainingSkillTombstones", isTombstoneMap],
+    ["petFixations", (v): boolean => isObject(v) && Object.values(v).every(isPetFixation)],
+    ["petFixationUpdatedAt", isStringMap],
+    ["petFixationTombstones", isTombstoneMap],
 ];
 
 /**
@@ -542,7 +588,8 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * `unbootstrapped` predates this schema revision and defaults to false when
  * absent so previously stored records keep loading. Pet activity maps were
  * added additively to v6 and also default to empty when absent; the pet
- * profile/schedule/nap/weight groups follow the same additive rule.
+ * profile/schedule/nap/weight and training/fixation groups follow the same
+ * additive rule.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -639,8 +686,9 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     // record written before them simply receives empty maps; the embedded
     // schema version is not bumped here because Issue G owns the v7 migration
     // that threads the full pet domain through the sync pipeline. The pet
-    // profile/schedule/nap/weight groups (Issue B) follow the same additive
-    // rule with empty maps and a null profile.
+    // profile/schedule/nap/weight groups (Issue B) and the training/fixation
+    // groups (Issue D) follow the same additive rule with empty maps, and the
+    // profile additionally defaults to null.
     if (
         record.petActivityRecords === undefined ||
         record.petActivityUpdatedAt === undefined ||
@@ -655,7 +703,13 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         record.petNapTombstones === undefined ||
         record.petWeightEntries === undefined ||
         record.petWeightUpdatedAt === undefined ||
-        record.petWeightTombstones === undefined
+        record.petWeightTombstones === undefined ||
+        record.petTrainingSkills === undefined ||
+        record.petTrainingSkillUpdatedAt === undefined ||
+        record.petTrainingSkillTombstones === undefined ||
+        record.petFixations === undefined ||
+        record.petFixationUpdatedAt === undefined ||
+        record.petFixationTombstones === undefined
     ) {
         record = {
             ...record,
@@ -673,6 +727,12 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             petWeightEntries: record.petWeightEntries ?? {},
             petWeightUpdatedAt: record.petWeightUpdatedAt ?? {},
             petWeightTombstones: record.petWeightTombstones ?? {},
+            petTrainingSkills: record.petTrainingSkills ?? {},
+            petTrainingSkillUpdatedAt: record.petTrainingSkillUpdatedAt ?? {},
+            petTrainingSkillTombstones: record.petTrainingSkillTombstones ?? {},
+            petFixations: record.petFixations ?? {},
+            petFixationUpdatedAt: record.petFixationUpdatedAt ?? {},
+            petFixationTombstones: record.petFixationTombstones ?? {},
         };
     }
     if (record.ownerId !== ownerId) {

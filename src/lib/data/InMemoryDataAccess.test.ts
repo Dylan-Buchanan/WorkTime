@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryDataAccess } from "./InMemoryDataAccess";
 import { defaultSettings, makeAppState, makeActiveTimer } from "../../test/mockTauri";
-import type { Habit, HabitCompletion, PetNapRecord, PetProfile, PetScheduleItem, PetWeightEntry } from "../../state/types";
+import type {
+    Habit,
+    HabitCompletion,
+    PetFixation,
+    PetNapRecord,
+    PetProfile,
+    PetScheduleItem,
+    PetTrainingSkill,
+    PetWeightEntry,
+} from "../../state/types";
 
 function H(id: string, overrides: Partial<Habit> = {}): Habit {
     return {
@@ -90,6 +99,8 @@ describe("InMemoryDataAccess", () => {
             petScheduleItems: [],
             petNapRecords: [],
             petWeightEntries: [],
+            petTrainingSkills: [],
+            petFixations: [],
             completed: false,
         };
         const data = new InMemoryDataAccess(store, {
@@ -307,5 +318,46 @@ describe("InMemoryDataAccess", () => {
         expect(await data.loadPetNapRecords()).toEqual([]);
         expect(await data.loadPetWeightEntries()).toEqual([]);
         expect(await data.loadPetProfile()).toBeNull();
+    });
+
+    it("round-trips training skills and fixations as clones", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        expect(await data.loadPetTrainingSkills()).toEqual([]);
+        expect(await data.loadPetFixations()).toEqual([]);
+
+        const skill: PetTrainingSkill = {
+            id: "k1",
+            label: "Sit",
+            notes: "",
+            status: "introduced",
+            resolvedAt: null,
+            createdAt: "2026-01-01T10:00:00.000Z",
+            updatedAt: "2026-01-01T10:00:00.000Z",
+        };
+        const fixation: PetFixation = {
+            id: "f1",
+            label: "Chasing the vacuum",
+            notes: "",
+            resolvedAt: null,
+            resolutionNote: "",
+            createdAt: "2026-01-01T10:00:00.000Z",
+            updatedAt: "2026-01-01T10:00:00.000Z",
+        };
+
+        await data.savePetTrainingSkills([skill]);
+        await data.savePetFixations([fixation]);
+
+        const loadedSkills = await data.loadPetTrainingSkills();
+        loadedSkills[0].status = "reliable";
+        expect((await data.loadPetTrainingSkills())[0].status).toBe("introduced");
+
+        const loadedFixations = await data.loadPetFixations();
+        loadedFixations[0].label = "Mutated";
+        expect((await data.loadPetFixations())[0].label).toBe("Chasing the vacuum");
+
+        await data.savePetTrainingSkills([]);
+        await data.savePetFixations([]);
+        expect(await data.loadPetTrainingSkills()).toEqual([]);
+        expect(await data.loadPetFixations()).toEqual([]);
     });
 });

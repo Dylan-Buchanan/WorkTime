@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { DataProvider } from "./DataContext";
 import { SyncProvider } from "./SyncContext";
@@ -11,6 +11,25 @@ import { makeAppState } from "../test/mockTauri";
 import type { PetActivityRecord, PetActivityType } from "./types";
 
 const OWNER = "owner-1";
+/** Pinned reference time: 2026-09-17 15:00 local. The clock never advances. */
+const NOW = new Date(2026, 8, 17, 15, 0, 0, 0);
+/** A record stamped the day before the pinned "today". */
+const YESTERDAY = new Date(2026, 8, 16, 15, 0, 0, 0);
+
+function at(hour: number, minute = 0): Date {
+    return new Date(2026, 8, 17, hour, minute, 0, 0);
+}
+
+interface Deferred<T> {
+    promise: Promise<T>;
+    resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => { resolve = res; });
+    return { promise, resolve };
+}
 
 function record(id: string, activityType: PetActivityType, timestamp: Date, durationMinutes?: number): PetActivityRecord {
     return {
@@ -66,96 +85,158 @@ function wrap(data: InMemoryDataAccess) {
     </TauriCloseProvider>;
 }
 
-beforeEach(() => localStorage.clear());
+/** Renders the provider tree and waits until staged records have hydrated. */
+async function renderHydrated(data: InMemoryDataAccess): Promise<void> {
+    render(wrap(data));
+    await waitFor(() => expect(screen.getByTestId("hydrated")).toHaveTextContent("true"));
+}
+
+beforeEach(() => {
+    localStorage.clear();
+    // Freeze wall-clock time only: `waitFor`, the toast window, and Vitest
+    // timeouts keep running on real timers, while every `new Date()` in the
+    // provider and probe is pinned to NOW. This removes midnight rollover and
+    // slow-run clock drift from the day-based assertions.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+    vi.useRealTimers();
+});
 
 describe("PetActivityContext", () => {
     it("hydrates staged activity records", async () => {
         const data = new InMemoryDataAccess(makeAppState());
-        await data.savePetActivityRecords([record("a1", "potty", new Date(2026, 8, 17, 9, 0))]);
+        await data.savePetActivityRecords([record("a1", "potty", at(9))]);
 
-        render(wrap(data));
+        await renderHydrated(data);
         await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
-        expect(screen.getByTestId("hydrated")).toHaveTextContent("true");
     });
 
     it("logs through the single write path, stages locally, and offers undo", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const save = vi.spyOn(data, "savePetActivityRecords");
-        render(wrap(data));
-        await waitFor(() => expect(screen.getByTestId("hydrated")).toHaveTextContent("true"));
+        await renderHydrated(data);
         save.mockClear();
         const syncCount = data.syncCalls.length;
 
         fireEvent.click(screen.getByText("log-potty"));
-        await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
-        expect(save).toHaveBeenCalled();
+        await waitFor(async () => {
+            expect(screen.getByTestId("count")).toHaveTextContent("1");
+            expect(await data.loadPetActivityRecords()).toHaveLength(1);
+        });
+        // Exactly one staged write so far, and logging never syncs directly.
+        expect(save).toHaveBeenCalledTimes(1);
         expect(data.syncCalls).toHaveLength(syncCount);
         expect(screen.getByTestId("today-potty")).toHaveTextContent("1");
         expect(screen.getByTestId("toast-message")).toHaveTextContent("Logged potty");
 
-        fireEvent.click(screen.getByText("Undo"));
+        fireEvent.click(within(screen.getByTestId("toast")).getByRole("button", { name: "Undo" }));
         await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("0"));
         await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([]));
+        // The log write and the undo write; nothing else was restaged.
+        expect(save).toHaveBeenCalledTimes(2);
     });
 
     it("carries an optional duration for training but never for potty", async () => {
         const data = new InMemoryDataAccess(makeAppState());
-        render(wrap(data));
-        await waitFor(() => expect(screen.getByTestId("hydrated")).toHaveTextContent("true"));
+        await renderHydrated(data);
 
         fireEvent.click(screen.getByText("log-training"));
-        await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
-        const [saved] = await data.loadPetActivityRecords();
-        expect(saved.activityType).toBe("training");
-        expect(saved.durationMinutes).toBe(10);
-    });
-
-    it("corrects today's timestamp in place and rejects older records", async () => {
-        const data = new InMemoryDataAccess(makeAppState());
-        render(wrap(data));
-        await waitFor(() => expect(screen.getByTestId("hydrated")).toHaveTextContent("true"));
+        await waitFor(async () => {
+            const records = await data.loadPetActivityRecords();
+            expect(records).toHaveLength(1);
+            expect(records[0]).toMatchObject({ activityType: "training", durationMinutes: 10 });
+        });
 
         fireEvent.click(screen.getByText("log-potty"));
-        await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
+        await waitFor(async () => {
+            const records = await data.loadPetActivityRecords();
+            expect(records).toHaveLength(2);
+            expect(records[1]).toMatchObject({ activityType: "potty" });
+            expect(records[1].durationMinutes).toBeUndefined();
+        });
+    });
+
+    it("corrects today's timestamp in place", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await renderHydrated(data);
+
+        fireEvent.click(screen.getByText("log-potty"));
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toHaveLength(1));
         expect(screen.getByTestId("can-correct")).toHaveTextContent("true");
         const before = (await data.loadPetActivityRecords())[0];
 
+        // Move the pinned clock forward, then correct: the rewrite is exactly
+        // that instant, while id and createdAt are preserved.
+        const correctedAt = at(15, 5);
+        vi.setSystemTime(correctedAt);
         fireEvent.click(screen.getByText("correct"));
         await waitFor(async () => {
             const [after] = await data.loadPetActivityRecords();
             expect(after.id).toBe(before.id);
             expect(after.createdAt).toBe(before.createdAt);
-            expect(new Date(after.timestamp).getTime()).toBeGreaterThan(new Date(before.timestamp).getTime());
+            expect(after.timestamp).toBe(correctedAt.toISOString());
         });
+        expect(screen.getByTestId("can-correct")).toHaveTextContent("true");
     });
 
     it("does not allow correcting a record stamped yesterday", async () => {
         const data = new InMemoryDataAccess(makeAppState());
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        await data.savePetActivityRecords([record("old", "potty", yesterday)]);
+        await data.savePetActivityRecords([record("old", "potty", YESTERDAY)]);
 
-        render(wrap(data));
+        await renderHydrated(data);
         await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
         expect(screen.getByTestId("can-correct")).toHaveTextContent("false");
 
         fireEvent.click(screen.getByText("correct"));
         await waitFor(() => expect(screen.getByTestId("error")).toHaveTextContent("today"));
+
+        const [unchanged] = await data.loadPetActivityRecords();
+        expect(unchanged.timestamp).toBe(YESTERDAY.toISOString());
     });
 
     it("reloads staged revisions without restaging the reloaded slice", async () => {
         const data = new InMemoryDataAccess(makeAppState());
-        await data.savePetActivityRecords([record("a1", "potty", new Date(2026, 8, 17, 9, 0))]);
-        render(wrap(data));
+        await data.savePetActivityRecords([record("a1", "potty", at(9))]);
+        await renderHydrated(data);
         await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
 
         const save = vi.spyOn(data, "savePetActivityRecords");
         await data.savePetActivityRecords([
-            record("a1", "potty", new Date(2026, 8, 17, 9, 0)),
-            record("a2", "training", new Date(2026, 8, 17, 10, 0), 5),
+            record("a1", "potty", at(9)),
+            record("a2", "training", at(10), 5),
         ]);
         await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("2"));
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toHaveLength(2));
         // Only the external write above; the provider reloaded without restaging.
         expect(save).toHaveBeenCalledTimes(1);
+    });
+
+    it("discards a staged reload whose read started before a local write", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const originalLoad = data.loadPetActivityRecords.bind(data);
+        const staleRead = deferred<PetActivityRecord[]>();
+        let loadCalls = 0;
+        vi.spyOn(data, "loadPetActivityRecords").mockImplementation(() => {
+            loadCalls += 1;
+            // Hold the post-hydration reload open so a log write can land while
+            // its snapshot is still the empty pre-write store.
+            if (loadCalls === 2) return staleRead.promise;
+            return originalLoad();
+        });
+
+        await renderHydrated(data);
+        await waitFor(() => expect(loadCalls).toBeGreaterThanOrEqual(2));
+
+        fireEvent.click(screen.getByText("log-potty"));
+        await waitFor(async () => expect(await originalLoad()).toHaveLength(1));
+
+        // Resolve the stale pre-write read: it must not clobber the fresh log.
+        await act(async () => { staleRead.resolve([]); });
+        expect(screen.getByTestId("count")).toHaveTextContent("1");
+        expect(screen.getByTestId("today-potty")).toHaveTextContent("1");
+        expect(await originalLoad()).toHaveLength(1);
     });
 });

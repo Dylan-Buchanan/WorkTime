@@ -231,6 +231,12 @@ describe("LocalStagingStore", () => {
         expect(record.petActivityRecords).toEqual({});
         expect(record.petActivityUpdatedAt).toEqual({});
         expect(record.petActivityTombstones).toEqual({});
+        expect(record.petTrainingSkills).toEqual({});
+        expect(record.petTrainingSkillUpdatedAt).toEqual({});
+        expect(record.petTrainingSkillTombstones).toEqual({});
+        expect(record.petFixations).toEqual({});
+        expect(record.petFixationUpdatedAt).toEqual({});
+        expect(record.petFixationTombstones).toEqual({});
     });
 
     it("defaults pet activity maps when an existing record predates them", async () => {
@@ -339,6 +345,67 @@ describe("LocalStagingStore", () => {
         expect(roundTripped.petWeightEntries.w1.weight).toBe(4.2);
     });
 
+    it("defaults the pet training/fixation groups on fresh and legacy records", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        const fresh = store.read(OWNER_A);
+        expect(fresh.petTrainingSkills).toEqual({});
+        expect(fresh.petTrainingSkillUpdatedAt).toEqual({});
+        expect(fresh.petTrainingSkillTombstones).toEqual({});
+        expect(fresh.petFixations).toEqual({});
+        expect(fresh.petFixationUpdatedAt).toEqual({});
+        expect(fresh.petFixationTombstones).toEqual({});
+
+        await store.update(OWNER_A, (r) => r);
+        const key = stagingKey(OWNER_A);
+        const legacy = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
+        delete legacy.petTrainingSkills;
+        delete legacy.petTrainingSkillUpdatedAt;
+        delete legacy.petTrainingSkillTombstones;
+        delete legacy.petFixations;
+        delete legacy.petFixationUpdatedAt;
+        delete legacy.petFixationTombstones;
+        window.localStorage.setItem(key, JSON.stringify(legacy));
+
+        const migrated = store.read(OWNER_A);
+        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.petTrainingSkills).toEqual({});
+        expect(migrated.petFixations).toEqual({});
+
+        // Populated groups round-trip through serialize then parse.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            petTrainingSkills: {
+                k1: {
+                    id: "k1",
+                    label: "Sit",
+                    notes: "",
+                    status: "progressing",
+                    resolvedAt: null,
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                    updatedAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
+            petTrainingSkillUpdatedAt: { k1: "2026-01-01T10:00:00.000Z" },
+            petFixations: {
+                f1: {
+                    id: "f1",
+                    label: "Chasing the vacuum",
+                    notes: "",
+                    resolvedAt: "2026-01-01T10:00:00.000Z",
+                    resolutionNote: "grew out of it",
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                    updatedAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
+            petFixationUpdatedAt: { f1: "2026-01-01T10:00:00.000Z" },
+        }));
+        const roundTripped = store.read(OWNER_A);
+        expect(roundTripped.petTrainingSkills.k1.status).toBe("progressing");
+        expect(roundTripped.petTrainingSkillUpdatedAt.k1).toBe("2026-01-01T10:00:00.000Z");
+        expect(roundTripped.petFixations.f1.resolutionNote).toBe("grew out of it");
+        expect(roundTripped.petFixationUpdatedAt.f1).toBe("2026-01-01T10:00:00.000Z");
+    });
+
     it("preserves the local pet domain when discarding pending changes", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await store.update(OWNER_A, (r) => ({
@@ -369,6 +436,28 @@ describe("LocalStagingStore", () => {
             petActivityRecords: {
                 pa1: { id: "pa1", activityType: "potty", timestamp: "2026-01-01T10:00:00.000Z", createdAt: "2026-01-01T10:00:00.000Z" },
             },
+            petTrainingSkills: {
+                k1: {
+                    id: "k1",
+                    label: "Sit",
+                    notes: "",
+                    status: "introduced",
+                    resolvedAt: null,
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                    updatedAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
+            petFixations: {
+                f1: {
+                    id: "f1",
+                    label: "Chasing the vacuum",
+                    notes: "",
+                    resolvedAt: null,
+                    resolutionNote: "",
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                    updatedAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
         }));
 
         const restored = await store.discardPendingChanges(OWNER_A);
@@ -378,6 +467,8 @@ describe("LocalStagingStore", () => {
         expect(Object.keys(restored.petNapRecords)).toEqual(["n1"]);
         expect(Object.keys(restored.petWeightEntries)).toEqual(["w1"]);
         expect(Object.keys(restored.petActivityRecords)).toEqual(["pa1"]);
+        expect(Object.keys(restored.petTrainingSkills)).toEqual(["k1"]);
+        expect(Object.keys(restored.petFixations)).toEqual(["f1"]);
     });
 
     it("increments revision on every update and re-reads the latest record", async () => {

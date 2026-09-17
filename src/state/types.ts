@@ -240,3 +240,33 @@ export interface PetWeightEntry {
     createdAt: string;
     updatedAt: string;
 }
+
+/** Forward-only progression order for a training skill. */
+export type PetTrainingStatus = "introduced" | "progressing" | "reliable";
+
+/** A command or skill the pet is learning, with a forward-only progression. */
+export interface PetTrainingSkill {
+    id: string;
+    /** Command/skill label, e.g. "Sit". */
+    label: string;
+    notes: string;
+    status: PetTrainingStatus;
+    /** ISO timestamp when the skill was closed as effectively done; null while active. */
+    resolvedAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+/** A current obsession or behavior problem with an active → resolved lifecycle. */
+export interface PetFixation {
+    id: string;
+    /** Short description, e.g. "Chasing the vacuum". */
+    label: string;
+    notes: string;
+    /** ISO timestamp when the fixation was archived; null while active. */
+    resolvedAt: string | null;
+    /** Freeform reason captured on resolve, e.g. "grew out of it". Empty while active. */
+    resolutionNote: string;
+    createdAt: string;
+    updatedAt: string;
+}

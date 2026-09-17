@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
     createPetActivityRecord,
+    createPetFixation,
     createPetNapRecord,
     createPetProfile,
     createPetScheduleItem,
+    createPetTrainingSkill,
     createPetWeightEntry,
 } from "./factories";
 
@@ -88,5 +90,34 @@ describe("pet factories", () => {
         const entry = createPetWeightEntry({ timestamp: now, weight: 4.2 }, now, "w1");
         expect(entry.weight).toBe(4.2);
         expect(() => createPetWeightEntry({ timestamp: now, weight: 0 }, now, "w2")).toThrow(RangeError);
+    });
+
+    it("creates training skills as introduced and requires a label", () => {
+        const skill = createPetTrainingSkill({ label: "  Sit  ", notes: "lure + marker" }, now, "k1");
+        expect(skill).toMatchObject({
+            id: "k1",
+            label: "Sit",
+            notes: "lure + marker",
+            status: "introduced",
+            resolvedAt: null,
+            createdAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+        });
+        expect(createPetTrainingSkill({ label: "Sit" }, now, "k2").notes).toBe("");
+        expect(() => createPetTrainingSkill({ label: "   " }, now, "k3")).toThrow(RangeError);
+    });
+
+    it("creates fixations active with an empty resolution note and requires a label", () => {
+        const fixation = createPetFixation({ label: "  Chasing the vacuum  " }, now, "f1");
+        expect(fixation).toMatchObject({
+            id: "f1",
+            label: "Chasing the vacuum",
+            notes: "",
+            resolvedAt: null,
+            resolutionNote: "",
+            createdAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+        });
+        expect(() => createPetFixation({ label: "  " }, now, "f2")).toThrow(RangeError);
     });
 });

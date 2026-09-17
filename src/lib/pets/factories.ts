@@ -1,19 +1,23 @@
 import type {
     PetActivityRecord,
+    PetFixation,
     PetNapRecord,
     PetProfile,
     PetScheduleItem,
     PetScheduleRecurrence,
+    PetTrainingSkill,
     PetWeightEntry,
 } from "../../state/types";
 import { isWallClockTime } from "../projectSchedule";
 import { petBirthDateKey } from "./age";
 import type {
     NewPetActivityRecordInput,
+    NewPetFixationInput,
     NewPetNapRecordInput,
     NewPetProfileInput,
     NewPetScheduleItemInput,
     NewPetScheduleRecurrenceInput,
+    NewPetTrainingSkillInput,
     NewPetWeightEntryInput,
 } from "./types";
 
@@ -111,6 +115,34 @@ export function createPetWeightEntry(input: NewPetWeightEntryInput, now: Date, i
         id,
         timestamp: toIso(input.timestamp, "pet weight timestamp"),
         weight: input.weight,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+    };
+}
+
+export function createPetTrainingSkill(input: NewPetTrainingSkillInput, now: Date, id: string): PetTrainingSkill {
+    const label = input.label?.trim();
+    if (!label) throw new RangeError("Pet training skill requires a label");
+    return {
+        id,
+        label,
+        notes: input.notes ?? "",
+        status: "introduced",
+        resolvedAt: null,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+    };
+}
+
+export function createPetFixation(input: NewPetFixationInput, now: Date, id: string): PetFixation {
+    const label = input.label?.trim();
+    if (!label) throw new RangeError("Pet fixation requires a label");
+    return {
+        id,
+        label,
+        notes: input.notes ?? "",
+        resolvedAt: null,
+        resolutionNote: "",
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
     };
