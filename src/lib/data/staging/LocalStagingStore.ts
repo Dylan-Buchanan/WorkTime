@@ -68,6 +68,17 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         petActivityRecords: {},
         petActivityUpdatedAt: {},
         petActivityTombstones: {},
+        petProfile: null,
+        petProfileUpdatedAt: null,
+        petScheduleItems: {},
+        petScheduleUpdatedAt: {},
+        petScheduleTombstones: {},
+        petNapRecords: {},
+        petNapUpdatedAt: {},
+        petNapTombstones: {},
+        petWeightEntries: {},
+        petWeightUpdatedAt: {},
+        petWeightTombstones: {},
     };
 }
 
@@ -391,11 +402,22 @@ export class LocalStagingStore {
                     ),
                     todoCompletions: { ...baseline.todoCompletions },
                     // The remote baseline does not carry the pet domain yet
-                    // (Issue G), so preserve the local activity log rather than
-                    // discarding records that could not be restored.
+                    // (Issue G), so preserve the local pet records rather than
+                    // discarding data that could not be restored.
                     petActivityRecords: { ...current.petActivityRecords },
                     petActivityUpdatedAt: { ...current.petActivityUpdatedAt },
                     petActivityTombstones: { ...current.petActivityTombstones },
+                    petProfile: current.petProfile,
+                    petProfileUpdatedAt: current.petProfileUpdatedAt,
+                    petScheduleItems: { ...current.petScheduleItems },
+                    petScheduleUpdatedAt: { ...current.petScheduleUpdatedAt },
+                    petScheduleTombstones: { ...current.petScheduleTombstones },
+                    petNapRecords: { ...current.petNapRecords },
+                    petNapUpdatedAt: { ...current.petNapUpdatedAt },
+                    petNapTombstones: { ...current.petNapTombstones },
+                    petWeightEntries: { ...current.petWeightEntries },
+                    petWeightUpdatedAt: { ...current.petWeightUpdatedAt },
+                    petWeightTombstones: { ...current.petWeightTombstones },
                 };
             const stored = { ...next, revision: current.revision + 1 };
             try {

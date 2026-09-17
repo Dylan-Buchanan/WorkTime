@@ -6,7 +6,7 @@ import { StagedDataAccess } from "./StagedDataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
 import { timerGenerationKey } from "./sync/timerCompletions";
-import type { ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetActivityType } from "../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetActivityType, PetNapRecord, PetProfile, PetScheduleItem, PetWeightEntry } from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 
 const OWNER_A = "owner-a";
@@ -66,6 +66,33 @@ function PA(id: string, activityType: PetActivityType, overrides: Partial<PetAct
         createdAt: "2026-01-01T10:00:00.000Z",
         ...overrides,
     };
+}
+
+function PP(id: string, overrides: Partial<PetProfile> = {}): PetProfile {
+    return { id, name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z", ...overrides };
+}
+
+function PSI(id: string, overrides: Partial<PetScheduleItem> = {}): PetScheduleItem {
+    return {
+        id,
+        activityType: "potty",
+        label: `Item ${id}`,
+        flexibility: "flexible",
+        priority: 0,
+        recurrence: { mode: "interval", minMinutes: 60, maxMinutes: 90 },
+        isActive: true,
+        createdAt: "2026-01-01T10:00:00.000Z",
+        updatedAt: "2026-01-01T10:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function PN(id: string, overrides: Partial<PetNapRecord> = {}): PetNapRecord {
+    return { id, start: "2026-01-01T13:00:00.000Z", end: null, createdAt: "2026-01-01T13:00:00.000Z", updatedAt: "2026-01-01T13:00:00.000Z", ...overrides };
+}
+
+function PW(id: string, overrides: Partial<PetWeightEntry> = {}): PetWeightEntry {
+    return { id, timestamp: "2026-01-01T10:00:00.000Z", weight: 4.2, createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z", ...overrides };
 }
 
 function throwingStorage(): StorageLike {
@@ -571,6 +598,80 @@ describe("StagedDataAccess", () => {
         loaded[0].activityType = "feeding";
         const reloaded = await data.loadPetActivityRecords();
         expect(reloaded.find((entry) => entry.id === loaded[0].id)?.activityType).not.toBe("feeding");
+    });
+
+    it("stages pet profile saves with stamps and never syncs", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        let current = new Date("2026-01-02T00:00:00.000Z");
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => current });
+
+        expect(await data.loadPetProfile()).toBeNull();
+
+        await data.savePetProfile(PP("p1"));
+        let record = store.read(OWNER_A);
+        expect(sync).not.toHaveBeenCalled();
+        expect(record.petProfile?.name).toBe("Whitney");
+        expect(record.petProfileUpdatedAt).toBe("2026-01-02T00:00:00.000Z");
+
+        // An unchanged profile keeps its stamp; a changed one is re-stamped.
+        await data.savePetProfile(PP("p1"));
+        record = store.read(OWNER_A);
+        expect(record.petProfileUpdatedAt).toBe("2026-01-02T00:00:00.000Z");
+        current = new Date("2026-01-02T01:00:00.000Z");
+        await data.savePetProfile(PP("p1", { name: "Whitney II" }));
+        record = store.read(OWNER_A);
+        expect(record.petProfile?.name).toBe("Whitney II");
+        expect(record.petProfileUpdatedAt).toBe("2026-01-02T01:00:00.000Z");
+
+        // Clearing the profile clears its stamp too.
+        await data.savePetProfile(null);
+        record = store.read(OWNER_A);
+        expect(record.petProfile).toBeNull();
+        expect(record.petProfileUpdatedAt).toBeNull();
+        expect(await data.loadPetProfile()).toBeNull();
+    });
+
+    it("stages pet schedule/nap/weight collections with stamps and tombstones", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        await data.savePetScheduleItems([PSI("s1"), PSI("s2", { activityType: "training" })]);
+        await data.savePetNapRecords([PN("n1", { end: "2026-01-01T13:40:00.000Z" })]);
+        await data.savePetWeightEntries([PW("w1")]);
+
+        let record = store.read(OWNER_A);
+        expect(sync).not.toHaveBeenCalled();
+        expect(record.petScheduleItems.s1.label).toBe("Item s1");
+        expect(record.petScheduleUpdatedAt.s1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petScheduleTombstones).toEqual({});
+        expect(record.petNapRecords.n1.end).toBe("2026-01-01T13:40:00.000Z");
+        expect(record.petNapUpdatedAt.n1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petWeightEntries.w1.weight).toBe(4.2);
+        expect(record.petWeightUpdatedAt.w1).toBe("2026-01-02T00:00:00.000Z");
+
+        // Removals stage id-keyed tombstones; re-adding clears them.
+        await data.savePetScheduleItems([PSI("s1")]);
+        record = store.read(OWNER_A);
+        expect(record.petScheduleUpdatedAt.s2).toBeUndefined();
+        expect(record.petScheduleTombstones.s2).toEqual({ id: "s2", deletedAt: "2026-01-02T00:00:00.000Z" });
+        await data.savePetScheduleItems([PSI("s1"), PSI("s2")]);
+        record = store.read(OWNER_A);
+        expect(record.petScheduleTombstones.s2).toBeUndefined();
+
+        // loadPet* returns fresh clones.
+        const items = await data.loadPetScheduleItems();
+        items[0].label = "Mutated";
+        expect((await data.loadPetScheduleItems()).find((entry) => entry.id === items[0].id)?.label).not.toBe("Mutated");
+        const naps = await data.loadPetNapRecords();
+        naps[0].end = "2026-01-01T23:59:00.000Z";
+        expect((await data.loadPetNapRecords())[0].end).not.toBe("2026-01-01T23:59:00.000Z");
+        const weights = await data.loadPetWeightEntries();
+        weights[0].weight = 99;
+        expect((await data.loadPetWeightEntries())[0].weight).not.toBe(99);
     });
 
     it("records cascade provenance only when a completion is removed with its habit", async () => {

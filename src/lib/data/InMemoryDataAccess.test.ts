@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryDataAccess } from "./InMemoryDataAccess";
 import { defaultSettings, makeAppState, makeActiveTimer } from "../../test/mockTauri";
-import type { Habit, HabitCompletion } from "../../state/types";
+import type { Habit, HabitCompletion, PetNapRecord, PetProfile, PetScheduleItem, PetWeightEntry } from "../../state/types";
 
 function H(id: string, overrides: Partial<Habit> = {}): Habit {
     return {
@@ -86,6 +86,10 @@ describe("InMemoryDataAccess", () => {
             todos: [],
             todoCompletions: [],
             petActivityRecords: [],
+            petProfile: null,
+            petScheduleItems: [],
+            petNapRecords: [],
+            petWeightEntries: [],
             completed: false,
         };
         const data = new InMemoryDataAccess(store, {
@@ -231,5 +235,77 @@ describe("InMemoryDataAccess", () => {
 
         await data.savePetActivityRecords([]);
         expect(await data.loadPetActivityRecords()).toEqual([]);
+    });
+
+    it("round-trips the pet profile, schedule items, naps, and weight log as clones", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        expect(await data.loadPetProfile()).toBeNull();
+        expect(await data.loadPetScheduleItems()).toEqual([]);
+        expect(await data.loadPetNapRecords()).toEqual([]);
+        expect(await data.loadPetWeightEntries()).toEqual([]);
+
+        const profile: PetProfile = {
+            id: "p1",
+            name: "Whitney",
+            birthDate: "2026-07-10",
+            createdAt: "2026-01-01T10:00:00.000Z",
+            updatedAt: "2026-01-01T10:00:00.000Z",
+        };
+        const item: PetScheduleItem = {
+            id: "s1",
+            activityType: "potty",
+            label: "Potty",
+            flexibility: "flexible",
+            priority: 0,
+            recurrence: { mode: "interval", minMinutes: 60, maxMinutes: 90 },
+            isActive: true,
+            createdAt: "2026-01-01T10:00:00.000Z",
+            updatedAt: "2026-01-01T10:00:00.000Z",
+        };
+        const nap: PetNapRecord = {
+            id: "n1",
+            start: "2026-01-01T13:00:00.000Z",
+            end: null,
+            createdAt: "2026-01-01T13:00:00.000Z",
+            updatedAt: "2026-01-01T13:00:00.000Z",
+        };
+        const weight: PetWeightEntry = {
+            id: "w1",
+            timestamp: "2026-01-01T10:00:00.000Z",
+            weight: 4.2,
+            createdAt: "2026-01-01T10:00:00.000Z",
+            updatedAt: "2026-01-01T10:00:00.000Z",
+        };
+
+        await data.savePetProfile(profile);
+        await data.savePetScheduleItems([item]);
+        await data.savePetNapRecords([nap]);
+        await data.savePetWeightEntries([weight]);
+
+        const loadedProfile = await data.loadPetProfile();
+        loadedProfile!.name = "Mutated";
+        expect((await data.loadPetProfile())!.name).toBe("Whitney");
+
+        const loadedItems = await data.loadPetScheduleItems();
+        loadedItems[0].label = "Mutated";
+        expect((await data.loadPetScheduleItems())[0].label).toBe("Potty");
+
+        const loadedNaps = await data.loadPetNapRecords();
+        loadedNaps[0].end = "2026-01-01T23:59:00.000Z";
+        expect((await data.loadPetNapRecords())[0].end).toBeNull();
+
+        const loadedWeights = await data.loadPetWeightEntries();
+        loadedWeights[0].weight = 99;
+        expect((await data.loadPetWeightEntries())[0].weight).toBe(4.2);
+
+        // Full-set saves replace; null clears the profile.
+        await data.savePetScheduleItems([]);
+        await data.savePetNapRecords([]);
+        await data.savePetWeightEntries([]);
+        await data.savePetProfile(null);
+        expect(await data.loadPetScheduleItems()).toEqual([]);
+        expect(await data.loadPetNapRecords()).toEqual([]);
+        expect(await data.loadPetWeightEntries()).toEqual([]);
+        expect(await data.loadPetProfile()).toBeNull();
     });
 });

@@ -61,4 +61,4 @@ export {
     nextDue,
     resolveIntervalWindow,
 } from "./schedule";
-export { proposeNapReflow } from "./reflow";
+export { applyNapReflow, proposeNapReflow } from "./reflow";

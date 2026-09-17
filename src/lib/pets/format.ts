@@ -2,9 +2,11 @@ function pad(value: number): string {
     return String(value).padStart(2, "0");
 }
 
-/** Formats a Date as local 24-hour HH:mm without touching UTC. */
+/** Formats a Date as local 12-hour h:mm AM/PM without touching UTC. */
 export function formatClock(date: Date): string {
-    return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const hours = date.getHours();
+    const hour12 = hours % 12 || 12;
+    return `${hour12}:${pad(date.getMinutes())} ${hours >= 12 ? "PM" : "AM"}`;
 }
 
 /** Formats minutes-from-local-midnight as 24-hour HH:mm, wrapping at midnight. */

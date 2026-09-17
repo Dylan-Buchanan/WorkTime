@@ -60,6 +60,21 @@ function nap(id: string, start: Date, end: Date | null): PetNapRecord {
 }
 
 describe("buildPetSchedule interval anchoring", () => {
+    it("starts a new interval at item creation instead of local midnight", () => {
+        const item = intervalItem({ createdAt: at(15, 0).toISOString() });
+        const schedule = buildPetSchedule({
+            now: at(15, 0),
+            scheduleItems: [item],
+            activityRecords: [],
+            naps: [],
+        });
+        const entry = schedule.entries[0];
+        expect(entry.start).toEqual(at(16, 0));
+        expect(entry.end).toEqual(at(16, 30));
+        expect(entry.overdueMinutes).toBe(0);
+        expect(nextDue(schedule)?.overdueMinutes).toBe(0);
+    });
+
     it("anchors to the latest matching activity record", () => {
         const schedule = buildPetSchedule({
             now: at(10, 30),

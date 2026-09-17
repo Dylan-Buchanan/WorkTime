@@ -4,6 +4,10 @@ import type {
     Habit,
     HabitCompletion,
     PetActivityRecord,
+    PetNapRecord,
+    PetProfile,
+    PetScheduleItem,
+    PetWeightEntry,
     PomodoroLogEntry,
     Settings,
     Task,
@@ -148,6 +152,25 @@ export interface StagedOwnerRecord {
     /** `updated_at` LWW transport stamps per locally-changed activity record. */
     petActivityUpdatedAt: Record<string, string>;
     petActivityTombstones: Record<string, { id: string; deletedAt: string }>;
+    /**
+     * Current locally-staged pet profile, or null before the first setup. Added
+     * additively to the v6 shape alongside the schedule/nap/weight groups; Issue
+     * G threads the full pet domain into `SyncSnapshot` and the sync RPC.
+     */
+    petProfile: PetProfile | null;
+    petProfileUpdatedAt: string | null;
+    /** Current locally-staged pet schedule items, keyed by item id. */
+    petScheduleItems: Record<string, PetScheduleItem>;
+    petScheduleUpdatedAt: Record<string, string>;
+    petScheduleTombstones: Record<string, { id: string; deletedAt: string }>;
+    /** Current locally-staged pet nap records, keyed by nap id. */
+    petNapRecords: Record<string, PetNapRecord>;
+    petNapUpdatedAt: Record<string, string>;
+    petNapTombstones: Record<string, { id: string; deletedAt: string }>;
+    /** Current locally-staged pet weight log entries, keyed by entry id. */
+    petWeightEntries: Record<string, PetWeightEntry>;
+    petWeightUpdatedAt: Record<string, string>;
+    petWeightTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
 export const STAGING_SCHEMA_VERSION = 6 as const;
@@ -294,6 +317,81 @@ function isPetActivityRecord(value: unknown): boolean {
     );
 }
 
+function isPetFlexibility(value: unknown): boolean {
+    return value === "fixed" || value === "flexible";
+}
+
+function isPetProfile(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.name === "string" &&
+        typeof value.birthDate === "string" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isPetFixedTimeRecurrence(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        value.mode === "fixed-time" &&
+        typeof value.time === "string" &&
+        isFiniteNumber(value.startMinutes) &&
+        isFiniteNumber(value.endMinutes)
+    );
+}
+
+function isPetIntervalRecurrence(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        value.mode === "interval" &&
+        isFiniteNumber(value.minMinutes) &&
+        isFiniteNumber(value.maxMinutes)
+    );
+}
+
+function isPetScheduleItem(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        isPetActivityType(value.activityType) &&
+        typeof value.label === "string" &&
+        isPetFlexibility(value.flexibility) &&
+        isFiniteNumber(value.priority) &&
+        (isPetFixedTimeRecurrence(value.recurrence) || isPetIntervalRecurrence(value.recurrence)) &&
+        typeof value.isActive === "boolean" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isPetNapRecord(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.start === "string" &&
+        (value.end === null || typeof value.end === "string") &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isPetWeightEntry(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.timestamp === "string" &&
+        isFiniteNumber(value.weight) &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
+function isStringMap(value: unknown): boolean {
+    return isObject(value) && Object.values(value).every((stamp) => typeof stamp === "string");
+}
+
 function isTombstone(value: unknown): boolean {
     return isObject(value) && typeof value.id === "string" && typeof value.deletedAt === "string";
 }
@@ -421,6 +519,17 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
         (v): boolean => isObject(v) && Object.values(v).every((stamp) => typeof stamp === "string"),
     ],
     ["petActivityTombstones", isTombstoneMap],
+    ["petProfile", (v): boolean => v === null || isPetProfile(v)],
+    ["petProfileUpdatedAt", (v): boolean => v === null || typeof v === "string"],
+    ["petScheduleItems", (v): boolean => isObject(v) && Object.values(v).every(isPetScheduleItem)],
+    ["petScheduleUpdatedAt", isStringMap],
+    ["petScheduleTombstones", isTombstoneMap],
+    ["petNapRecords", (v): boolean => isObject(v) && Object.values(v).every(isPetNapRecord)],
+    ["petNapUpdatedAt", isStringMap],
+    ["petNapTombstones", isTombstoneMap],
+    ["petWeightEntries", (v): boolean => isObject(v) && Object.values(v).every(isPetWeightEntry)],
+    ["petWeightUpdatedAt", isStringMap],
+    ["petWeightTombstones", isTombstoneMap],
 ];
 
 /**
@@ -432,7 +541,8 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * local data is never silently overwritten or read under the wrong owner.
  * `unbootstrapped` predates this schema revision and defaults to false when
  * absent so previously stored records keep loading. Pet activity maps were
- * added additively to v6 and also default to empty when absent.
+ * added additively to v6 and also default to empty when absent; the pet
+ * profile/schedule/nap/weight groups follow the same additive rule.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -528,17 +638,41 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     // Pet activity records were added additively to the v6 shape (Issue C). A
     // record written before them simply receives empty maps; the embedded
     // schema version is not bumped here because Issue G owns the v7 migration
-    // that threads the full pet domain through the sync pipeline.
+    // that threads the full pet domain through the sync pipeline. The pet
+    // profile/schedule/nap/weight groups (Issue B) follow the same additive
+    // rule with empty maps and a null profile.
     if (
         record.petActivityRecords === undefined ||
         record.petActivityUpdatedAt === undefined ||
-        record.petActivityTombstones === undefined
+        record.petActivityTombstones === undefined ||
+        record.petProfile === undefined ||
+        record.petProfileUpdatedAt === undefined ||
+        record.petScheduleItems === undefined ||
+        record.petScheduleUpdatedAt === undefined ||
+        record.petScheduleTombstones === undefined ||
+        record.petNapRecords === undefined ||
+        record.petNapUpdatedAt === undefined ||
+        record.petNapTombstones === undefined ||
+        record.petWeightEntries === undefined ||
+        record.petWeightUpdatedAt === undefined ||
+        record.petWeightTombstones === undefined
     ) {
         record = {
             ...record,
             petActivityRecords: record.petActivityRecords ?? {},
             petActivityUpdatedAt: record.petActivityUpdatedAt ?? {},
             petActivityTombstones: record.petActivityTombstones ?? {},
+            petProfile: record.petProfile ?? null,
+            petProfileUpdatedAt: record.petProfileUpdatedAt ?? null,
+            petScheduleItems: record.petScheduleItems ?? {},
+            petScheduleUpdatedAt: record.petScheduleUpdatedAt ?? {},
+            petScheduleTombstones: record.petScheduleTombstones ?? {},
+            petNapRecords: record.petNapRecords ?? {},
+            petNapUpdatedAt: record.petNapUpdatedAt ?? {},
+            petNapTombstones: record.petNapTombstones ?? {},
+            petWeightEntries: record.petWeightEntries ?? {},
+            petWeightUpdatedAt: record.petWeightUpdatedAt ?? {},
+            petWeightTombstones: record.petWeightTombstones ?? {},
         };
     }
     if (record.ownerId !== ownerId) {

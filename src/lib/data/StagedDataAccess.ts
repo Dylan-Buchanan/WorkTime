@@ -19,7 +19,19 @@ import {
     updateSettings,
 } from "../engine";
 import { EngineError } from "../engine";
-import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PetActivityRecord, Settings, Task } from "../../state/types";
+import type {
+    ActiveTimer,
+    AppStateData,
+    Habit,
+    HabitCompletion,
+    PetActivityRecord,
+    PetNapRecord,
+    PetProfile,
+    PetScheduleItem,
+    PetWeightEntry,
+    Settings,
+    Task,
+} from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 import type { LocalStagingStore } from "./staging/LocalStagingStore";
 import { deepValuesEqual } from "./staging/serialization";
@@ -558,6 +570,90 @@ export class StagedDataAccess implements DataAccess {
     async loadPetActivityRecords(): Promise<PetActivityRecord[]> {
         const record = this.store.read(this.ownerId);
         return Object.values(record.petActivityRecords).map((entry) => clone(entry));
+    }
+
+    /**
+     * Replaces the locally staged pet profile in one store write. The input is
+     * the full desired value: an equal profile keeps its existing LWW stamp, a
+     * changed profile receives a fresh one, and `null` clears it. Pure local
+     * persistence; never touches the network.
+     */
+    async savePetProfile(profile: PetProfile | null): Promise<void> {
+        const stamp = this.now().toISOString();
+        await this.store.update(this.ownerId, (current) => {
+            const petProfile = profile ? clone(profile) : null;
+            const petProfileUpdatedAt = equal(current.petProfile, petProfile)
+                ? current.petProfileUpdatedAt
+                : profile
+                  ? stamp
+                  : null;
+            return { ...current, petProfile, petProfileUpdatedAt };
+        });
+    }
+
+    async loadPetProfile(): Promise<PetProfile | null> {
+        const record = this.store.read(this.ownerId);
+        return record.petProfile ? clone(record.petProfile) : null;
+    }
+
+    /** Replaces one locally-staged pet record collection (full desired set). */
+    private async savePetCollection(
+        recordsKey: "petScheduleItems" | "petNapRecords" | "petWeightEntries",
+        updatedAtKey: "petScheduleUpdatedAt" | "petNapUpdatedAt" | "petWeightUpdatedAt",
+        tombstonesKey: "petScheduleTombstones" | "petNapTombstones" | "petWeightTombstones",
+        rows: Array<PetScheduleItem | PetNapRecord | PetWeightEntry>,
+    ): Promise<void> {
+        const stamp = this.now().toISOString();
+        const nextRows: Record<string, PetScheduleItem | PetNapRecord | PetWeightEntry> = {};
+        for (const row of rows) nextRows[row.id] = clone(row);
+        await this.store.update(this.ownerId, (current) => {
+            const updatedAt = { ...current[updatedAtKey] };
+            const tombstones = { ...current[tombstonesKey] };
+            const currentRows = current[recordsKey];
+            for (const id of Object.keys(nextRows)) {
+                const previous = currentRows[id as string];
+                if (previous === undefined || !equal(previous, nextRows[id as string])) updatedAt[id as string] = stamp;
+                delete tombstones[id as string];
+            }
+            for (const id of Object.keys(currentRows)) {
+                if (nextRows[id]) continue;
+                delete updatedAt[id];
+                tombstones[id] = { id, deletedAt: stamp };
+            }
+            return {
+                ...current,
+                [recordsKey]: nextRows,
+                [updatedAtKey]: updatedAt,
+                [tombstonesKey]: tombstones,
+            };
+        });
+    }
+
+    async savePetScheduleItems(items: PetScheduleItem[]): Promise<void> {
+        await this.savePetCollection("petScheduleItems", "petScheduleUpdatedAt", "petScheduleTombstones", items);
+    }
+
+    async loadPetScheduleItems(): Promise<PetScheduleItem[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petScheduleItems).map((entry) => clone(entry));
+    }
+
+    async savePetNapRecords(naps: PetNapRecord[]): Promise<void> {
+        await this.savePetCollection("petNapRecords", "petNapUpdatedAt", "petNapTombstones", naps);
+    }
+
+    async loadPetNapRecords(): Promise<PetNapRecord[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petNapRecords).map((entry) => clone(entry));
+    }
+
+    async savePetWeightEntries(entries: PetWeightEntry[]): Promise<void> {
+        await this.savePetCollection("petWeightEntries", "petWeightUpdatedAt", "petWeightTombstones", entries);
+    }
+
+    async loadPetWeightEntries(): Promise<PetWeightEntry[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petWeightEntries).map((entry) => clone(entry));
     }
 
     async discardPendingChanges(): Promise<void> {

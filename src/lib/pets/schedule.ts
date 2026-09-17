@@ -167,7 +167,7 @@ function latestCompletedNap(naps: readonly PetNapRecord[], fromMs: number, toMs:
 }
 
 export interface ResolvedIntervalWindow {
-    /** Latest matching record used as the anchor; null when falling back to day start. */
+    /** Latest matching record used as the anchor; null before the first matching record. */
     anchor: Date | null;
     /** Anchor + min interval, before nap pauses. */
     baseStart: Date;
@@ -188,11 +188,11 @@ export interface ResolvedIntervalWindow {
 
 /**
  * Resolves the next interval occurrence for an item. The anchor is the latest
- * matching activity record at or before `now` (falling back to local day start
- * when the owner has never logged that activity). Nap time after the anchor
- * pauses the interval so overdue never accrues while the pet is asleep, and a
- * nap that ran through the due moment pulls the next occurrence forward to the
- * wake time.
+ * matching activity record at or before `now` (falling back to the schedule
+ * item's creation time when no matching record exists). Nap time after the
+ * anchor pauses the interval so overdue never accrues while the pet is asleep,
+ * and a nap that ran through the due moment pulls the next occurrence forward
+ * to the wake time.
  */
 export function resolveIntervalWindow(
     item: PetScheduleItem,
@@ -205,8 +205,10 @@ export function resolveIntervalWindow(
         throw new RangeError("resolveIntervalWindow requires an interval recurrence");
     }
     const nowMs = now.getTime();
+    const itemCreatedMs = new Date(item.createdAt).getTime();
+    const firstAnchorMs = Number.isNaN(itemCreatedMs) ? dayStart.getTime() : itemCreatedMs;
     const anchorRecord = latestRecordAtOrBefore(records, item.activityType, nowMs);
-    const anchorMs = anchorRecord ? new Date(anchorRecord.timestamp).getTime() : dayStart.getTime();
+    const anchorMs = anchorRecord ? new Date(anchorRecord.timestamp).getTime() : firstAnchorMs;
     const baseStartMs = anchorMs + item.recurrence.minMinutes * MS_PER_MINUTE;
     const baseEndMs = anchorMs + item.recurrence.maxMinutes * MS_PER_MINUTE;
     const pause = summarizePause(naps, anchorMs, nowMs);

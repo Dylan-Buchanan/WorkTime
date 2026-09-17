@@ -38,6 +38,7 @@ const ProjectManagerPage = lazy(() =>
 const AnalyticsPage = lazy(() => import("./components/AnalyticsPage"));
 const HabitsPage = lazy(() => import("./components/HabitsPage").then((m) => ({ default: m.HabitsPage })));
 const TodosPage = lazy(() => import("./components/TodosPage").then((m) => ({ default: m.TodosPage })));
+const PetPage = lazy(() => import("./components/pets/PetPage").then((m) => ({ default: m.PetPage })));
 const WeekOverviewPage = lazy(() =>
     import("./components/WeekOverviewPage").then((m) => ({ default: m.WeekOverviewPage })),
 );
@@ -79,6 +80,7 @@ const App: React.FC = () => (
                         <Route path="/analytics" element={<AnalyticsPage />} />
                         <Route path="/habits" element={<HabitsPage />} />
                         <Route path="/todos" element={<TodosPage />} />
+                        <Route path="/pet" element={<PetPage />} />
                         <Route path="/week" element={<WeekOverviewPage />} />
                         <Route path="/integrations" element={<ErrorBoundary><AuthenticatedIntegrationsRoute /></ErrorBoundary>} />
                     </Route>
@@ -186,6 +188,7 @@ const TopNav: React.FC = () => {
             <Link to="/analytics" onClick={() => handleClick("/analytics")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/analytics"))}>Analytics</Link>
             <Link to="/habits" onClick={() => handleClick("/habits")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/habits"))}>Habits</Link>
             <Link to="/todos" onClick={() => handleClick("/todos")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/todos"))}>To-dos</Link>
+            <Link to="/pet" onClick={() => handleClick("/pet")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/pet"))}>Pet</Link>
             <Link to="/week" onClick={() => handleClick("/week")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/week"))}>Week</Link>
             <Link to="/integrations" onClick={() => handleClick("/integrations")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/integrations"))}>Integrations</Link>
             <div className="ml-auto flex flex-wrap items-center gap-2">

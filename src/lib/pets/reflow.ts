@@ -1,3 +1,5 @@
+import type { PetScheduleItem } from "../../state/types";
+import { formatMinuteOfDay } from "./format";
 import { formatShiftIndicator, resolveIntervalWindow } from "./schedule";
 import type {
     PetNapReflowProposal,
@@ -7,6 +9,7 @@ import type {
 } from "./types";
 
 const MS_PER_MINUTE = 60_000;
+const MINUTES_PER_DAY = 1440;
 
 function startOfLocalDay(date: Date): Date {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
@@ -78,4 +81,45 @@ export function proposeNapReflow(input: ProposeNapReflowInput): PetNapReflowProp
     }
 
     return { nap: input.nap, napMinutes, changes, shifts };
+}
+
+function wrapDayMinutes(minute: number): number {
+    return ((Math.round(minute) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+}
+
+/**
+ * Applies a confirmed nap-reflow proposal to the stored schedule items.
+ * Flexible fixed-time items move by their proposed delta, wrapping within the
+ * local day and preserving their window length; fixed and interval items come
+ * back untouched because their occurrences are either immovable or already
+ * recomputed from the nap log itself.
+ */
+export function applyNapReflow(
+    scheduleItems: readonly PetScheduleItem[],
+    proposal: PetNapReflowProposal,
+    now: Date,
+): PetScheduleItem[] {
+    if (Number.isNaN(now.getTime())) throw new RangeError("Invalid pet reflow reference date");
+    const deltas = new Map<string, number>();
+    for (const change of proposal.changes) {
+        deltas.set(change.itemId, Math.round(change.deltaMinutes));
+    }
+    const stamp = now.toISOString();
+    return scheduleItems.map((item): PetScheduleItem => {
+        const delta = deltas.get(item.id);
+        if (delta === undefined || delta === 0) return item;
+        if (item.recurrence.mode !== "fixed-time" || item.flexibility !== "flexible") return item;
+        const startMinutes = wrapDayMinutes(item.recurrence.startMinutes + delta);
+        const windowMinutes = item.recurrence.endMinutes - item.recurrence.startMinutes;
+        return {
+            ...item,
+            recurrence: {
+                mode: "fixed-time",
+                time: formatMinuteOfDay(startMinutes),
+                startMinutes,
+                endMinutes: startMinutes + windowMinutes,
+            },
+            updatedAt: stamp,
+        };
+    });
 }

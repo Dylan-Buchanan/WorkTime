@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PetActivityRecord, PetActivityType, PetNapRecord, PetScheduleItem } from "../../state/types";
-import { proposeNapReflow } from "./reflow";
+import { applyNapReflow, proposeNapReflow } from "./reflow";
 
 const createdAt = new Date(2026, 8, 17, 0, 0, 0, 0).toISOString();
 
@@ -72,5 +72,61 @@ describe("proposeNapReflow", () => {
                 naps: [],
             }),
         ).toThrow(RangeError);
+    });
+});
+
+describe("applyNapReflow", () => {
+    const schedule = (): PetScheduleItem[] => [
+        item("potty", "potty", "flexible", { mode: "interval", minMinutes: 60, maxMinutes: 90 }),
+        item("playtime", "playtime", "flexible", { mode: "fixed-time", time: "15:05", startMinutes: 905, endMinutes: 935 }),
+        item("feeding", "feeding", "fixed", { mode: "fixed-time", time: "17:00", startMinutes: 1020, endMinutes: 1020 }),
+    ];
+
+    const proposalFor = (items: PetScheduleItem[]): ReturnType<typeof proposeNapReflow> =>
+        proposeNapReflow({
+            nap: endedNap,
+            now: at(14, 45),
+            scheduleItems: items,
+            activityRecords: [activity("p1", at(13, 20))],
+            naps: [endedNap],
+        });
+
+    it("moves flexible fixed-time items by the nap minutes and keeps their window length", () => {
+        const items = schedule();
+        const next = applyNapReflow(items, proposalFor(items), at(14, 46));
+        const playtime = next.find((entry) => entry.id === "playtime");
+        expect(playtime?.recurrence).toEqual({
+            mode: "fixed-time",
+            time: "15:45",
+            startMinutes: 945,
+            endMinutes: 975,
+        });
+        expect(playtime?.updatedAt).toBe(at(14, 46).toISOString());
+    });
+
+    it("leaves fixed items and interval items untouched", () => {
+        const items = schedule();
+        const next = applyNapReflow(items, proposalFor(items), at(14, 46));
+        expect(next.find((entry) => entry.id === "feeding")).toEqual(items[2]);
+        // The interval item's proposal is informational only; its occurrence
+        // already reflows from the stored nap log.
+        expect(next.find((entry) => entry.id === "potty")).toEqual(items[0]);
+    });
+
+    it("wraps a shift that crosses midnight within the same day", () => {
+        const items = [item("walk", "playtime", "flexible", { mode: "fixed-time", time: "23:40", startMinutes: 1420, endMinutes: 1450 })];
+        const next = applyNapReflow(items, proposalFor(items), at(14, 46));
+        expect(next[0].recurrence).toEqual({ mode: "fixed-time", time: "00:20", startMinutes: 20, endMinutes: 50 });
+    });
+
+    it("returns the input items unchanged when the proposal has no changes", () => {
+        const items = schedule();
+        const empty = { ...proposalFor(items), changes: [], shifts: [] };
+        expect(applyNapReflow(items, empty, at(14, 46))).toEqual(items);
+    });
+
+    it("rejects an invalid reference date", () => {
+        const items = schedule();
+        expect(() => applyNapReflow(items, proposalFor(items), new Date(Number.NaN))).toThrow(RangeError);
     });
 });

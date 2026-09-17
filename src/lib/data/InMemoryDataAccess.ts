@@ -20,7 +20,19 @@ import {
     resumeTimer,
     skipBreak,
 } from "../engine";
-import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PetActivityRecord, Settings, Task } from "../../state/types";
+import type {
+    ActiveTimer,
+    AppStateData,
+    Habit,
+    HabitCompletion,
+    PetActivityRecord,
+    PetNapRecord,
+    PetProfile,
+    PetScheduleItem,
+    PetWeightEntry,
+    Settings,
+    Task,
+} from "../../state/types";
 import type { Todo, TodoCompletion } from "../todos";
 import type { CompleteTimerResult, DataAccess, FetchStateResult, SyncOptions, SyncResult, SyncedPMState } from "./DataAccess";
 
@@ -55,6 +67,10 @@ export interface InMemoryDataStore {
     todos: Todo[];
     todoCompletions: TodoCompletion[];
     petActivityRecords: PetActivityRecord[];
+    petProfile: PetProfile | null;
+    petScheduleItems: PetScheduleItem[];
+    petNapRecords: PetNapRecord[];
+    petWeightEntries: PetWeightEntry[];
     completed: boolean;
 }
 
@@ -99,7 +115,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petNapRecords: [], petWeightEntries: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
@@ -112,6 +128,14 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.todoCompletions = this.store.todoCompletions ? this.store.todoCompletions.map((completion) => clone(completion)) : [];
         this.store.petActivityRecords = this.store.petActivityRecords
             ? this.store.petActivityRecords.map((record) => clone(record))
+            : [];
+        this.store.petProfile = this.store.petProfile ? clone(this.store.petProfile) : null;
+        this.store.petScheduleItems = this.store.petScheduleItems
+            ? this.store.petScheduleItems.map((item) => clone(item))
+            : [];
+        this.store.petNapRecords = this.store.petNapRecords ? this.store.petNapRecords.map((nap) => clone(nap)) : [];
+        this.store.petWeightEntries = this.store.petWeightEntries
+            ? this.store.petWeightEntries.map((entry) => clone(entry))
             : [];
         this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
@@ -302,6 +326,46 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.petActivityRecords.map((record) => clone(record));
     }
 
+    async savePetProfile(profile: PetProfile | null): Promise<void> {
+        this.store.petProfile = profile ? clone(profile) : null;
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetProfile(): Promise<PetProfile | null> {
+        return this.store.petProfile ? clone(this.store.petProfile) : null;
+    }
+
+    async savePetScheduleItems(items: PetScheduleItem[]): Promise<void> {
+        this.store.petScheduleItems = items.map((item) => clone(item));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetScheduleItems(): Promise<PetScheduleItem[]> {
+        return this.store.petScheduleItems.map((item) => clone(item));
+    }
+
+    async savePetNapRecords(naps: PetNapRecord[]): Promise<void> {
+        this.store.petNapRecords = naps.map((nap) => clone(nap));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetNapRecords(): Promise<PetNapRecord[]> {
+        return this.store.petNapRecords.map((nap) => clone(nap));
+    }
+
+    async savePetWeightEntries(entries: PetWeightEntry[]): Promise<void> {
+        this.store.petWeightEntries = entries.map((entry) => clone(entry));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetWeightEntries(): Promise<PetWeightEntry[]> {
+        return this.store.petWeightEntries.map((entry) => clone(entry));
+    }
+
     async discardPendingChanges(): Promise<void> {
         const inProgressPomodoros = clone(this.store.inProgressPomodoros);
         this.store.state = cloneAppState(this.baseline.state);
@@ -311,6 +375,10 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.todos = this.baseline.todos.map((todo) => clone(todo));
         this.store.todoCompletions = this.baseline.todoCompletions.map((completion) => clone(completion));
         this.store.petActivityRecords = this.baseline.petActivityRecords.map((record) => clone(record));
+        this.store.petProfile = this.baseline.petProfile ? clone(this.baseline.petProfile) : null;
+        this.store.petScheduleItems = this.baseline.petScheduleItems.map((item) => clone(item));
+        this.store.petNapRecords = this.baseline.petNapRecords.map((nap) => clone(nap));
+        this.store.petWeightEntries = this.baseline.petWeightEntries.map((entry) => clone(entry));
         this.store.completed = this.baseline.completed;
         this.store.inProgressPomodoros = inProgressPomodoros;
         this.pending = 0;
@@ -350,6 +418,10 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         todos: [],
         todoCompletions: [],
         petActivityRecords: [],
+        petProfile: null,
+        petScheduleItems: [],
+        petNapRecords: [],
+        petWeightEntries: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };

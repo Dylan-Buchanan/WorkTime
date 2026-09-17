@@ -267,6 +267,119 @@ describe("LocalStagingStore", () => {
         expect(roundTripped.petActivityUpdatedAt.pa1).toBe("2026-01-01T10:00:00.000Z");
     });
 
+    it("defaults the pet profile/schedule/nap/weight groups on fresh and legacy records", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        const fresh = store.read(OWNER_A);
+        expect(fresh.petProfile).toBeNull();
+        expect(fresh.petProfileUpdatedAt).toBeNull();
+        expect(fresh.petScheduleItems).toEqual({});
+        expect(fresh.petScheduleUpdatedAt).toEqual({});
+        expect(fresh.petScheduleTombstones).toEqual({});
+        expect(fresh.petNapRecords).toEqual({});
+        expect(fresh.petNapUpdatedAt).toEqual({});
+        expect(fresh.petNapTombstones).toEqual({});
+        expect(fresh.petWeightEntries).toEqual({});
+        expect(fresh.petWeightUpdatedAt).toEqual({});
+        expect(fresh.petWeightTombstones).toEqual({});
+
+        await store.update(OWNER_A, (r) => r);
+        const key = stagingKey(OWNER_A);
+        const legacy = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
+        delete legacy.petProfile;
+        delete legacy.petProfileUpdatedAt;
+        delete legacy.petScheduleItems;
+        delete legacy.petScheduleUpdatedAt;
+        delete legacy.petScheduleTombstones;
+        delete legacy.petNapRecords;
+        delete legacy.petNapUpdatedAt;
+        delete legacy.petNapTombstones;
+        delete legacy.petWeightEntries;
+        delete legacy.petWeightUpdatedAt;
+        delete legacy.petWeightTombstones;
+        window.localStorage.setItem(key, JSON.stringify(legacy));
+
+        const migrated = store.read(OWNER_A);
+        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.petProfile).toBeNull();
+        expect(migrated.petProfileUpdatedAt).toBeNull();
+        expect(migrated.petScheduleItems).toEqual({});
+        expect(migrated.petNapRecords).toEqual({});
+        expect(migrated.petWeightEntries).toEqual({});
+
+        // Populated groups round-trip through serialize then parse.
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            petProfile: { id: "p1", name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
+            petProfileUpdatedAt: "2026-01-01T10:00:00.000Z",
+            petScheduleItems: {
+                s1: {
+                    id: "s1",
+                    activityType: "potty",
+                    label: "Potty",
+                    flexibility: "flexible",
+                    priority: 0,
+                    recurrence: { mode: "interval", minMinutes: 60, maxMinutes: 90 },
+                    isActive: true,
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                    updatedAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
+            petScheduleUpdatedAt: { s1: "2026-01-01T10:00:00.000Z" },
+            petNapRecords: {
+                n1: { id: "n1", start: "2026-01-01T13:00:00.000Z", end: null, createdAt: "2026-01-01T13:00:00.000Z", updatedAt: "2026-01-01T13:00:00.000Z" },
+            },
+            petWeightEntries: {
+                w1: { id: "w1", timestamp: "2026-01-01T10:00:00.000Z", weight: 4.2, createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
+            },
+        }));
+        const roundTripped = store.read(OWNER_A);
+        expect(roundTripped.petProfile?.name).toBe("Whitney");
+        expect(roundTripped.petScheduleItems.s1.recurrence).toEqual({ mode: "interval", minMinutes: 60, maxMinutes: 90 });
+        expect(roundTripped.petNapRecords.n1.end).toBeNull();
+        expect(roundTripped.petWeightEntries.w1.weight).toBe(4.2);
+    });
+
+    it("preserves the local pet domain when discarding pending changes", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        await store.update(OWNER_A, (r) => ({
+            ...r,
+            initialized: true,
+            lastSynced: makeBaseline(),
+            petProfile: { id: "p1", name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
+            petProfileUpdatedAt: "2026-01-01T10:00:00.000Z",
+            petScheduleItems: {
+                s1: {
+                    id: "s1",
+                    activityType: "potty",
+                    label: "Potty",
+                    flexibility: "flexible",
+                    priority: 0,
+                    recurrence: { mode: "interval", minMinutes: 60, maxMinutes: 90 },
+                    isActive: true,
+                    createdAt: "2026-01-01T10:00:00.000Z",
+                    updatedAt: "2026-01-01T10:00:00.000Z",
+                },
+            },
+            petNapRecords: {
+                n1: { id: "n1", start: "2026-01-01T13:00:00.000Z", end: null, createdAt: "2026-01-01T13:00:00.000Z", updatedAt: "2026-01-01T13:00:00.000Z" },
+            },
+            petWeightEntries: {
+                w1: { id: "w1", timestamp: "2026-01-01T10:00:00.000Z", weight: 4.2, createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
+            },
+            petActivityRecords: {
+                pa1: { id: "pa1", activityType: "potty", timestamp: "2026-01-01T10:00:00.000Z", createdAt: "2026-01-01T10:00:00.000Z" },
+            },
+        }));
+
+        const restored = await store.discardPendingChanges(OWNER_A);
+        expect(restored.petProfile?.name).toBe("Whitney");
+        expect(restored.petProfileUpdatedAt).toBe("2026-01-01T10:00:00.000Z");
+        expect(Object.keys(restored.petScheduleItems)).toEqual(["s1"]);
+        expect(Object.keys(restored.petNapRecords)).toEqual(["n1"]);
+        expect(Object.keys(restored.petWeightEntries)).toEqual(["w1"]);
+        expect(Object.keys(restored.petActivityRecords)).toEqual(["pa1"]);
+    });
+
     it("increments revision on every update and re-reads the latest record", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, current_cycle_pomodoros: 1 } }));

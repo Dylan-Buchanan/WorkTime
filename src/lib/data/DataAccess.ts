@@ -6,6 +6,10 @@ import type {
     Habit,
     HabitCompletion,
     PetActivityRecord,
+    PetNapRecord,
+    PetProfile,
+    PetScheduleItem,
+    PetWeightEntry,
     PMTask,
     ProjectManagerState,
     Settings,
@@ -118,6 +122,15 @@ export interface DataAccess {
     loadTodos(): Promise<{ todos: Todo[]; completions: TodoCompletion[] }>;
     savePetActivityRecords(records: PetActivityRecord[]): Promise<void>;
     loadPetActivityRecords(): Promise<PetActivityRecord[]>;
+    /** Stages the single pet profile; `null` clears it locally. */
+    savePetProfile(profile: PetProfile | null): Promise<void>;
+    loadPetProfile(): Promise<PetProfile | null>;
+    savePetScheduleItems(items: PetScheduleItem[]): Promise<void>;
+    loadPetScheduleItems(): Promise<PetScheduleItem[]>;
+    savePetNapRecords(naps: PetNapRecord[]): Promise<void>;
+    loadPetNapRecords(): Promise<PetNapRecord[]>;
+    savePetWeightEntries(entries: PetWeightEntry[]): Promise<void>;
+    loadPetWeightEntries(): Promise<PetWeightEntry[]>;
     sync(options: SyncOptions): Promise<SyncResult>;
     discardPendingChanges(): Promise<void>;
     pendingCount(): number;
