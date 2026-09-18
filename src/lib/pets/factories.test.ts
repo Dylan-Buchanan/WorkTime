@@ -3,6 +3,7 @@ import {
     createPetActivityRecord,
     createPetFixation,
     createPetNapRecord,
+    createPetNotableEvent,
     createPetProfile,
     createPetScheduleItem,
     createPetTrainingSkill,
@@ -119,5 +120,27 @@ describe("pet factories", () => {
             updatedAt: now.toISOString(),
         });
         expect(() => createPetFixation({ label: "  " }, now, "f2")).toThrow(RangeError);
+    });
+
+    it("creates notable events with a trimmed title and a validated timestamp", () => {
+        const timestamp = new Date(2026, 6, 9, 12, 0, 0, 0);
+        const event = createPetNotableEvent(
+            { title: "  First reliable sit  ", notes: "held for five seconds", timestamp },
+            now,
+            "e1",
+        );
+        expect(event).toMatchObject({
+            id: "e1",
+            title: "First reliable sit",
+            notes: "held for five seconds",
+            timestamp: timestamp.toISOString(),
+            createdAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+        });
+        expect(createPetNotableEvent({ title: "First hike", timestamp: now }, now, "e2").notes).toBe("");
+        expect(() => createPetNotableEvent({ title: "   ", timestamp: now }, now, "e3")).toThrow(RangeError);
+        expect(() => createPetNotableEvent({ title: "First hike", timestamp: "not-a-date" }, now, "e4")).toThrow(
+            RangeError,
+        );
     });
 });

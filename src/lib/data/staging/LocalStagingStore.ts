@@ -85,6 +85,9 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         petFixations: {},
         petFixationUpdatedAt: {},
         petFixationTombstones: {},
+        petNotableEvents: {},
+        petNotableEventUpdatedAt: {},
+        petNotableEventTombstones: {},
     };
 }
 
@@ -430,6 +433,9 @@ export class LocalStagingStore {
                     petFixations: { ...current.petFixations },
                     petFixationUpdatedAt: { ...current.petFixationUpdatedAt },
                     petFixationTombstones: { ...current.petFixationTombstones },
+                    petNotableEvents: { ...current.petNotableEvents },
+                    petNotableEventUpdatedAt: { ...current.petNotableEventUpdatedAt },
+                    petNotableEventTombstones: { ...current.petNotableEventTombstones },
                 };
             const stored = { ...next, revision: current.revision + 1 };
             try {

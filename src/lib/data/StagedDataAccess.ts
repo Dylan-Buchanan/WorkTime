@@ -27,6 +27,7 @@ import type {
     PetActivityRecord,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetTrainingSkill,
@@ -605,23 +606,26 @@ export class StagedDataAccess implements DataAccess {
             | "petNapRecords"
             | "petWeightEntries"
             | "petTrainingSkills"
-            | "petFixations",
+            | "petFixations"
+            | "petNotableEvents",
         updatedAtKey:
             | "petScheduleUpdatedAt"
             | "petNapUpdatedAt"
             | "petWeightUpdatedAt"
             | "petTrainingSkillUpdatedAt"
-            | "petFixationUpdatedAt",
+            | "petFixationUpdatedAt"
+            | "petNotableEventUpdatedAt",
         tombstonesKey:
             | "petScheduleTombstones"
             | "petNapTombstones"
             | "petWeightTombstones"
             | "petTrainingSkillTombstones"
-            | "petFixationTombstones",
-        rows: Array<PetScheduleItem | PetNapRecord | PetWeightEntry | PetTrainingSkill | PetFixation>,
+            | "petFixationTombstones"
+            | "petNotableEventTombstones",
+        rows: Array<PetScheduleItem | PetNapRecord | PetWeightEntry | PetTrainingSkill | PetFixation | PetNotableEvent>,
     ): Promise<void> {
         const stamp = this.now().toISOString();
-        const nextRows: Record<string, PetScheduleItem | PetNapRecord | PetWeightEntry | PetTrainingSkill | PetFixation> = {};
+        const nextRows: Record<string, PetScheduleItem | PetNapRecord | PetWeightEntry | PetTrainingSkill | PetFixation | PetNotableEvent> = {};
         for (const row of rows) nextRows[row.id] = clone(row);
         await this.store.update(this.ownerId, (current) => {
             const updatedAt = { ...current[updatedAtKey] };
@@ -694,6 +698,20 @@ export class StagedDataAccess implements DataAccess {
     async loadPetFixations(): Promise<PetFixation[]> {
         const record = this.store.read(this.ownerId);
         return Object.values(record.petFixations).map((fixation) => clone(fixation));
+    }
+
+    async savePetNotableEvents(events: PetNotableEvent[]): Promise<void> {
+        await this.savePetCollection(
+            "petNotableEvents",
+            "petNotableEventUpdatedAt",
+            "petNotableEventTombstones",
+            events,
+        );
+    }
+
+    async loadPetNotableEvents(): Promise<PetNotableEvent[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petNotableEvents).map((event) => clone(event));
     }
 
     async discardPendingChanges(): Promise<void> {

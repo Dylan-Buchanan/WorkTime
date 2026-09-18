@@ -6,6 +6,7 @@ export type {
     PetFlexibility,
     PetIntervalRecurrence,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetScheduleRecurrence,
@@ -20,6 +21,7 @@ export type {
     NewPetFixedTimeScheduleInput,
     NewPetIntervalScheduleInput,
     NewPetNapRecordInput,
+    NewPetNotableEventInput,
     NewPetProfileInput,
     NewPetScheduleItemInput,
     NewPetScheduleRecurrenceInput,
@@ -35,6 +37,7 @@ export type {
     PetScheduleMode,
     PetShiftIndicator,
     PetShiftReason,
+    PetTimelineDateRange,
     ProposeNapReflowInput,
 } from "./types";
 
@@ -53,12 +56,21 @@ export {
     createPetActivityRecord,
     createPetFixation,
     createPetNapRecord,
+    createPetNotableEvent,
     createPetProfile,
     createPetScheduleItem,
     createPetTrainingSkill,
     createPetWeightEntry,
 } from "./factories";
 export { isPetFixationActive, resolvePetFixation } from "./fixations";
+export {
+    annotateNotableEvent,
+    correctNotableEvent,
+    filterNotableEvents,
+    notableEventDateKey,
+    notableEventTimestamp,
+    sortNotableEventsNewestFirst,
+} from "./timeline";
 export {
     advancePetTrainingSkill,
     isPetTrainingSkillResolved,

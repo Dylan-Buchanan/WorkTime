@@ -2,6 +2,7 @@ import type {
     PetActivityRecord,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetScheduleRecurrence,
@@ -14,6 +15,7 @@ import type {
     NewPetActivityRecordInput,
     NewPetFixationInput,
     NewPetNapRecordInput,
+    NewPetNotableEventInput,
     NewPetProfileInput,
     NewPetScheduleItemInput,
     NewPetScheduleRecurrenceInput,
@@ -143,6 +145,19 @@ export function createPetFixation(input: NewPetFixationInput, now: Date, id: str
         notes: input.notes ?? "",
         resolvedAt: null,
         resolutionNote: "",
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+    };
+}
+
+export function createPetNotableEvent(input: NewPetNotableEventInput, now: Date, id: string): PetNotableEvent {
+    const title = input.title?.trim();
+    if (!title) throw new RangeError("Pet notable event requires a title");
+    return {
+        id,
+        title,
+        notes: input.notes ?? "",
+        timestamp: toIso(input.timestamp, "pet notable event timestamp"),
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
     };

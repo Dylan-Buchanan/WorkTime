@@ -8,6 +8,7 @@ export type {
     PetFlexibility,
     PetIntervalRecurrence,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetScheduleRecurrence,
@@ -74,6 +75,20 @@ export interface NewPetTrainingSkillInput {
 export interface NewPetFixationInput {
     label: string;
     notes?: string;
+}
+
+export interface NewPetNotableEventInput {
+    title: string;
+    notes?: string;
+    timestamp: string | Date;
+}
+
+/** Inclusive local-calendar date range for timeline filtering; null is open. */
+export interface PetTimelineDateRange {
+    /** Inclusive local-calendar start date in YYYY-MM-DD form, or null. */
+    from: string | null;
+    /** Inclusive local-calendar end date in YYYY-MM-DD form, or null. */
+    to: string | null;
 }
 
 /** Derived, never stored. `unit` follows the weeks-until-6-months house rule. */

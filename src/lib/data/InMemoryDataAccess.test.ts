@@ -6,6 +6,7 @@ import type {
     HabitCompletion,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetTrainingSkill,
@@ -101,6 +102,7 @@ describe("InMemoryDataAccess", () => {
             petWeightEntries: [],
             petTrainingSkills: [],
             petFixations: [],
+            petNotableEvents: [],
             completed: false,
         };
         const data = new InMemoryDataAccess(store, {
@@ -359,5 +361,29 @@ describe("InMemoryDataAccess", () => {
         await data.savePetFixations([]);
         expect(await data.loadPetTrainingSkills()).toEqual([]);
         expect(await data.loadPetFixations()).toEqual([]);
+    });
+
+    it("round-trips pet notable events as clones", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        expect(await data.loadPetNotableEvents()).toEqual([]);
+
+        const event: PetNotableEvent = {
+            id: "e1",
+            title: "First reliable sit",
+            notes: "held for five seconds",
+            timestamp: "2026-07-09T16:00:00.000Z",
+            createdAt: "2026-09-17T10:00:00.000Z",
+            updatedAt: "2026-09-17T10:00:00.000Z",
+        };
+        await data.savePetNotableEvents([event]);
+        expect(data.pendingCount()).toBe(1);
+        expect(await data.loadPetNotableEvents()).toEqual([event]);
+
+        const loaded = await data.loadPetNotableEvents();
+        loaded[0].title = "Mutated";
+        expect((await data.loadPetNotableEvents())[0].title).toBe("First reliable sit");
+
+        await data.savePetNotableEvents([]);
+        expect(await data.loadPetNotableEvents()).toEqual([]);
     });
 });

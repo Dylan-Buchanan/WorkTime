@@ -270,3 +270,22 @@ export interface PetFixation {
     createdAt: string;
     updatedAt: string;
 }
+
+/**
+ * A manually-recorded notable moment in the pet's life (first reliable "sit",
+ * met the neighbor's dog, first hike). Append-plus-correct: events are added
+ * and edited, never deleted. The age at the event is computed from the profile
+ * birth date and never stored here. Mechanical activity records (potty, naps,
+ * weight, training status) stay in their own lanes and never enter this list.
+ */
+export interface PetNotableEvent {
+    id: string;
+    /** Short headline, e.g. "First reliable sit". */
+    title: string;
+    /** Optional longer note; empty when unused. */
+    notes: string;
+    /** ISO timestamp when the event happened; drives the computed age stamp. */
+    timestamp: string;
+    createdAt: string;
+    updatedAt: string;
+}

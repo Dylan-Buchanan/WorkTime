@@ -28,6 +28,7 @@ import type {
     PetActivityRecord,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetTrainingSkill,
@@ -75,6 +76,7 @@ export interface InMemoryDataStore {
     petWeightEntries: PetWeightEntry[];
     petTrainingSkills: PetTrainingSkill[];
     petFixations: PetFixation[];
+    petNotableEvents: PetNotableEvent[];
     completed: boolean;
 }
 
@@ -119,7 +121,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
@@ -146,6 +148,9 @@ export class InMemoryDataAccess implements DataAccess {
             : [];
         this.store.petFixations = this.store.petFixations
             ? this.store.petFixations.map((fixation) => clone(fixation))
+            : [];
+        this.store.petNotableEvents = this.store.petNotableEvents
+            ? this.store.petNotableEvents.map((event) => clone(event))
             : [];
         this.baseline = clone(this.store);
         this.now = options.now ?? (() => new Date());
@@ -396,6 +401,16 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.petFixations.map((fixation) => clone(fixation));
     }
 
+    async savePetNotableEvents(events: PetNotableEvent[]): Promise<void> {
+        this.store.petNotableEvents = events.map((event) => clone(event));
+        this.pending += 1;
+        this.notify();
+    }
+
+    async loadPetNotableEvents(): Promise<PetNotableEvent[]> {
+        return this.store.petNotableEvents.map((event) => clone(event));
+    }
+
     async discardPendingChanges(): Promise<void> {
         const inProgressPomodoros = clone(this.store.inProgressPomodoros);
         this.store.state = cloneAppState(this.baseline.state);
@@ -411,6 +426,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petWeightEntries = this.baseline.petWeightEntries.map((entry) => clone(entry));
         this.store.petTrainingSkills = this.baseline.petTrainingSkills.map((skill) => clone(skill));
         this.store.petFixations = this.baseline.petFixations.map((fixation) => clone(fixation));
+        this.store.petNotableEvents = this.baseline.petNotableEvents.map((event) => clone(event));
         this.store.completed = this.baseline.completed;
         this.store.inProgressPomodoros = inProgressPomodoros;
         this.pending = 0;
@@ -456,6 +472,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         petWeightEntries: [],
         petTrainingSkills: [],
         petFixations: [],
+        petNotableEvents: [],
         completed: false,
     };
     return { store, dataAccess: new InMemoryDataAccess(store, options) };

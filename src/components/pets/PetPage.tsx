@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { PetFixationTab } from "./PetFixationTab";
+import { PetTimelineTab } from "./PetTimelineTab";
 import { PetTodayTab } from "./PetTodayTab";
 import { PetTrainingTab } from "./PetTrainingTab";
 
@@ -12,13 +13,10 @@ const PET_TABS: Array<{ id: PetTabId; label: string }> = [
     { id: "timeline", label: "Timeline" },
 ];
 
-const TIMELINE_PLACEHOLDER = "The notable-events timeline is coming soon.";
-
 /**
- * The `/pet` page: internal Today | Training | Fixations | Timeline tabs.
- * Today, Training, and Fixations are built here; Timeline renders a
- * placeholder until Issue E lands. The route is named `/pet` (not
- * dog-specific) for a possible future second animal.
+ * The `/pet` page: internal Today | Training | Fixations | Timeline tabs. All
+ * four tabs are built here. The route is named `/pet` (not dog-specific) for a
+ * possible future second animal.
  */
 export const PetPage: React.FC = () => {
     const [tab, setTab] = useState<PetTabId>("today");
@@ -57,9 +55,7 @@ export const PetPage: React.FC = () => {
                 ) : tab === "fixations" ? (
                     <PetFixationTab />
                 ) : (
-                    <div className="flex h-full items-center justify-center px-4 text-center text-xs text-neutral-500">
-                        {TIMELINE_PLACEHOLDER}
-                    </div>
+                    <PetTimelineTab />
                 )}
             </div>
         </div>

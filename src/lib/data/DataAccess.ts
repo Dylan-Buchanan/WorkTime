@@ -8,6 +8,7 @@ import type {
     PetActivityRecord,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetTrainingSkill,
@@ -137,6 +138,8 @@ export interface DataAccess {
     loadPetTrainingSkills(): Promise<PetTrainingSkill[]>;
     savePetFixations(fixations: PetFixation[]): Promise<void>;
     loadPetFixations(): Promise<PetFixation[]>;
+    savePetNotableEvents(events: PetNotableEvent[]): Promise<void>;
+    loadPetNotableEvents(): Promise<PetNotableEvent[]>;
     sync(options: SyncOptions): Promise<SyncResult>;
     discardPendingChanges(): Promise<void>;
     pendingCount(): number;

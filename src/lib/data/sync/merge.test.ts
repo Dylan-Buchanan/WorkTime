@@ -160,6 +160,9 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         petFixations: {},
         petFixationUpdatedAt: {},
         petFixationTombstones: {},
+        petNotableEvents: {},
+        petNotableEventUpdatedAt: {},
+        petNotableEventTombstones: {},
         ...overrides,
     };
 }
@@ -214,6 +217,9 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         petFixations: {},
         petFixationUpdatedAt: {},
         petFixationTombstones: {},
+        petNotableEvents: {},
+        petNotableEventUpdatedAt: {},
+        petNotableEventTombstones: {},
         ...overrides,
     };
 }

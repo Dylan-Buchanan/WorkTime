@@ -13,6 +13,7 @@ import type {
     PetActivityType,
     PetFlexibility,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetWeightEntry,
@@ -74,6 +75,10 @@ function activityRow(id: string, activityType: PetActivityType, timestamp: Date)
 
 function napRow(id: string, start: Date, end: Date | null): PetNapRecord {
     return { id, start: start.toISOString(), end: end ? end.toISOString() : null, createdAt: T0, updatedAt: T0 };
+}
+
+function notableEventRow(id: string, title: string, timestamp: Date): PetNotableEvent {
+    return { id, title, notes: "", timestamp: timestamp.toISOString(), createdAt: T0, updatedAt: T0 };
 }
 
 function wrap(data: InMemoryDataAccess) {
@@ -275,17 +280,114 @@ describe("PetPage", () => {
         expect(items.find((item) => item.id === "play")?.recurrence).toMatchObject({ time: "15:30" });
     });
 
-    it("keeps the Timeline tab as a placeholder", async () => {
+    it("adds notable events with a computed age stamp and filters by date range", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePetProfile(profileRow());
-        await data.savePetScheduleItems([fixedItem("dinner", "feeding", "Dinner", "18:00")]);
         render(wrap(data));
 
-        await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("No weight logged yet")).toBeInTheDocument());
         fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
-        expect(screen.getByText(/notable-events timeline is coming soon/)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole("tab", { name: "Today" }));
-        await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("No notable events yet.")).toBeInTheDocument());
+
+        // Today's default date: 2026-09-17 is 9 weeks after the 2026-07-10 birth.
+        fireEvent.change(screen.getByLabelText("Event"), { target: { value: "First reliable sit" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add event" }));
+        await waitFor(() => expect(screen.getByText("at 9 weeks: First reliable sit")).toBeInTheDocument());
+
+        // A backdated event is stamped with the age at the event time.
+        fireEvent.change(screen.getByLabelText("Event"), { target: { value: "First wag" } });
+        fireEvent.change(screen.getByLabelText("Event date"), { target: { value: "2026-08-21" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add event" }));
+        await waitFor(() => expect(screen.getByText("at 6 weeks: First wag")).toBeInTheDocument());
+
+        // Chronological, newest first.
+        const entries = screen.getAllByRole("listitem").map((item) => item.textContent);
+        expect(entries[0]).toContain("First reliable sit");
+        expect(entries[1]).toContain("First wag");
+
+        // Date-range filtering over the event list.
+        fireEvent.change(screen.getByLabelText("Filter from"), { target: { value: "2026-08-01" } });
+        fireEvent.change(screen.getByLabelText("Filter to"), { target: { value: "2026-08-31" } });
+        expect(screen.queryByText("at 9 weeks: First reliable sit")).toBeNull();
+        expect(screen.getByText("at 6 weeks: First wag")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Clear dates" }));
+        expect(screen.getByText("at 9 weeks: First reliable sit")).toBeInTheDocument();
+
+        expect(await data.loadPetNotableEvents()).toHaveLength(2);
+    });
+
+    it("corrects a notable event in place and offers no delete", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetNotableEvents([notableEventRow("e1", "First reliable sit", new Date(2026, 7, 21, 12, 0))]);
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText("No weight logged yet")).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
+        await waitFor(() => expect(screen.getByText("at 6 weeks: First reliable sit")).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: "Edit First reliable sit" }));
+        fireEvent.change(screen.getByLabelText("Edit event"), {
+            target: { value: "First reliable sit (hand signal)" },
+        });
+        fireEvent.change(screen.getByLabelText("Edit date"), { target: { value: "2026-12-25" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() =>
+            expect(screen.getByText("at 24 weeks: First reliable sit (hand signal)")).toBeInTheDocument(),
+        );
+
+        // Curated history: no delete control exists anywhere in the tab.
+        expect(screen.queryByRole("button", { name: /delete|remove/i })).toBeNull();
+
+        const [saved] = await data.loadPetNotableEvents();
+        expect(saved).toMatchObject({ id: "e1", title: "First reliable sit (hand signal)", createdAt: T0 });
+        expect(saved.updatedAt).not.toBe(T0);
+    });
+
+    it("keeps mechanical records out of the notable timeline", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetActivityRecords([activityRow("a1", "potty", at(13, 0))]);
+        await data.savePetNapRecords([napRow("n1", at(14, 0), at(15, 0))]);
+        await data.savePetWeightEntries([
+            { id: "w1", timestamp: at(9, 0).toISOString(), weight: 4.2, createdAt: T0, updatedAt: T0 },
+        ]);
+        await data.savePetNotableEvents([notableEventRow("e1", "First reliable sit", new Date(2026, 7, 21, 12, 0))]);
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
+        await waitFor(() => expect(screen.getByText("at 6 weeks: First reliable sit")).toBeInTheDocument());
+
+        // Only the manually-created notable event is listed, never potty/nap/weight rows.
+        const entries = screen.getAllByRole("listitem");
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toHaveTextContent("at 6 weeks: First reliable sit");
+    });
+
+    it("requires the pet profile before allowing timeline events", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
+        await waitFor(() => expect(screen.getByText(/Today tab/)).toBeInTheDocument());
+        expect(screen.queryByRole("button", { name: "Add event" })).toBeNull();
+        expect(screen.queryByLabelText("Event")).toBeNull();
+        expect(await data.loadPetNotableEvents()).toEqual([]);
+    });
+
+    it("rejects a blank notable event title without persisting", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
+        await waitFor(() => expect(screen.getByText("No notable events yet.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Event"), { target: { value: "   " } });
+        fireEvent.click(screen.getByRole("button", { name: "Add event" }));
+        await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/title/i));
+        expect(await data.loadPetNotableEvents()).toEqual([]);
     });
 
     it("creates, advances, and archives a training skill", async () => {

@@ -6,6 +6,7 @@ import type {
     PetActivityRecord,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetTrainingSkill,
@@ -181,6 +182,14 @@ export interface StagedOwnerRecord {
     petFixations: Record<string, PetFixation>;
     petFixationUpdatedAt: Record<string, string>;
     petFixationTombstones: Record<string, { id: string; deletedAt: string }>;
+    /**
+     * Current locally-staged notable timeline events, keyed by event id. Added
+     * additively to the v6 shape; Issue G threads the full pet domain (including
+     * this group) into `SyncSnapshot` and the sync RPC.
+     */
+    petNotableEvents: Record<string, PetNotableEvent>;
+    petNotableEventUpdatedAt: Record<string, string>;
+    petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
 export const STAGING_SCHEMA_VERSION = 6 as const;
@@ -428,6 +437,18 @@ function isPetFixation(value: unknown): boolean {
     );
 }
 
+function isPetNotableEvent(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.title === "string" &&
+        typeof value.notes === "string" &&
+        typeof value.timestamp === "string" &&
+        typeof value.createdAt === "string" &&
+        typeof value.updatedAt === "string"
+    );
+}
+
 function isStringMap(value: unknown): boolean {
     return isObject(value) && Object.values(value).every((stamp) => typeof stamp === "string");
 }
@@ -576,6 +597,9 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["petFixations", (v): boolean => isObject(v) && Object.values(v).every(isPetFixation)],
     ["petFixationUpdatedAt", isStringMap],
     ["petFixationTombstones", isTombstoneMap],
+    ["petNotableEvents", (v): boolean => isObject(v) && Object.values(v).every(isPetNotableEvent)],
+    ["petNotableEventUpdatedAt", isStringMap],
+    ["petNotableEventTombstones", isTombstoneMap],
 ];
 
 /**
@@ -588,8 +612,8 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * `unbootstrapped` predates this schema revision and defaults to false when
  * absent so previously stored records keep loading. Pet activity maps were
  * added additively to v6 and also default to empty when absent; the pet
- * profile/schedule/nap/weight and training/fixation groups follow the same
- * additive rule.
+ * profile/schedule/nap/weight, training/fixation, and notable-event groups
+ * follow the same additive rule.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -686,9 +710,10 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     // record written before them simply receives empty maps; the embedded
     // schema version is not bumped here because Issue G owns the v7 migration
     // that threads the full pet domain through the sync pipeline. The pet
-    // profile/schedule/nap/weight groups (Issue B) and the training/fixation
-    // groups (Issue D) follow the same additive rule with empty maps, and the
-    // profile additionally defaults to null.
+    // profile/schedule/nap/weight groups (Issue B), the training/fixation
+    // groups (Issue D), and the notable-event group (Issue E) follow the same
+    // additive rule with empty maps, and the profile additionally defaults to
+    // null.
     if (
         record.petActivityRecords === undefined ||
         record.petActivityUpdatedAt === undefined ||
@@ -709,7 +734,10 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         record.petTrainingSkillTombstones === undefined ||
         record.petFixations === undefined ||
         record.petFixationUpdatedAt === undefined ||
-        record.petFixationTombstones === undefined
+        record.petFixationTombstones === undefined ||
+        record.petNotableEvents === undefined ||
+        record.petNotableEventUpdatedAt === undefined ||
+        record.petNotableEventTombstones === undefined
     ) {
         record = {
             ...record,
@@ -733,6 +761,9 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             petFixations: record.petFixations ?? {},
             petFixationUpdatedAt: record.petFixationUpdatedAt ?? {},
             petFixationTombstones: record.petFixationTombstones ?? {},
+            petNotableEvents: record.petNotableEvents ?? {},
+            petNotableEventUpdatedAt: record.petNotableEventUpdatedAt ?? {},
+            petNotableEventTombstones: record.petNotableEventTombstones ?? {},
         };
     }
     if (record.ownerId !== ownerId) {

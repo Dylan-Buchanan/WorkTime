@@ -161,6 +161,9 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
         petFixations: {},
         petFixationUpdatedAt: {},
         petFixationTombstones: {},
+        petNotableEvents: {},
+        petNotableEventUpdatedAt: {},
+        petNotableEventTombstones: {},
         ...overrides,
     };
 }

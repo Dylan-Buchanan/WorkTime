@@ -14,6 +14,7 @@ import type {
     PetActivityType,
     PetFixation,
     PetNapRecord,
+    PetNotableEvent,
     PetProfile,
     PetScheduleItem,
     PetTrainingSkill,
@@ -127,6 +128,18 @@ function PF(id: string, overrides: Partial<PetFixation> = {}): PetFixation {
         notes: "",
         resolvedAt: null,
         resolutionNote: "",
+        createdAt: "2026-01-01T10:00:00.000Z",
+        updatedAt: "2026-01-01T10:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function PE(id: string, overrides: Partial<PetNotableEvent> = {}): PetNotableEvent {
+    return {
+        id,
+        title: `Event ${id}`,
+        notes: "",
+        timestamp: "2026-01-01T12:00:00.000Z",
         createdAt: "2026-01-01T10:00:00.000Z",
         updatedAt: "2026-01-01T10:00:00.000Z",
         ...overrides,
@@ -751,6 +764,38 @@ describe("StagedDataAccess", () => {
         const fixations = await data.loadPetFixations();
         fixations[0].label = "Mutated";
         expect((await data.loadPetFixations())[0].label).not.toBe("Mutated");
+    });
+
+    it("stages the notable event collection with stamps and tombstones", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        await data.savePetNotableEvents([PE("e1"), PE("e2", { title: "First wag" })]);
+        let record = store.read(OWNER_A);
+        expect(sync).not.toHaveBeenCalled();
+        expect(record.petNotableEvents.e2.title).toBe("First wag");
+        expect(record.petNotableEventUpdatedAt.e1).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petNotableEventUpdatedAt.e2).toBe("2026-01-02T00:00:00.000Z");
+        expect(record.petNotableEventTombstones).toEqual({});
+
+        // Removals stage id-keyed tombstones; re-adding clears them.
+        await data.savePetNotableEvents([PE("e1")]);
+        record = store.read(OWNER_A);
+        expect(record.petNotableEventUpdatedAt.e2).toBeUndefined();
+        expect(record.petNotableEventTombstones.e2).toEqual({ id: "e2", deletedAt: "2026-01-02T00:00:00.000Z" });
+        await data.savePetNotableEvents([PE("e1"), PE("e2")]);
+        record = store.read(OWNER_A);
+        expect(record.petNotableEventTombstones.e2).toBeUndefined();
+
+        // loadPetNotableEvents returns fresh clones.
+        const events = await data.loadPetNotableEvents();
+        events[0].title = "Mutated";
+        expect((await data.loadPetNotableEvents()).find((entry) => entry.id === events[0].id)?.title).not.toBe(
+            "Mutated",
+        );
     });
 
     it("records cascade provenance only when a completion is removed with its habit", async () => {
