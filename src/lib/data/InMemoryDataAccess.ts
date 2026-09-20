@@ -30,6 +30,7 @@ import type {
     PetNapRecord,
     PetNotableEvent,
     PetProfile,
+    PetReminderMark,
     PetScheduleItem,
     PetTrainingSkill,
     PetWeightEntry,
@@ -72,6 +73,7 @@ export interface InMemoryDataStore {
     petActivityRecords: PetActivityRecord[];
     petProfile: PetProfile | null;
     petScheduleItems: PetScheduleItem[];
+    petReminderMarks: PetReminderMark[];
     petNapRecords: PetNapRecord[];
     petWeightEntries: PetWeightEntry[];
     petTrainingSkills: PetTrainingSkill[];
@@ -121,7 +123,7 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petReminderMarks: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
         }
         this.store.state = cloneAppState(this.store.state);
         this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
@@ -138,6 +140,9 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petProfile = this.store.petProfile ? clone(this.store.petProfile) : null;
         this.store.petScheduleItems = this.store.petScheduleItems
             ? this.store.petScheduleItems.map((item) => clone(item))
+            : [];
+        this.store.petReminderMarks = this.store.petReminderMarks
+            ? this.store.petReminderMarks.map((mark) => clone(mark))
             : [];
         this.store.petNapRecords = this.store.petNapRecords ? this.store.petNapRecords.map((nap) => clone(nap)) : [];
         this.store.petWeightEntries = this.store.petWeightEntries
@@ -361,6 +366,17 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.petScheduleItems.map((item) => clone(item));
     }
 
+    async savePetReminderMarks(marks: PetReminderMark[]): Promise<void> {
+        const merged = new Map(this.store.petReminderMarks.map((mark) => [mark.id, mark]));
+        for (const mark of marks) merged.set(mark.id, clone(mark));
+        this.store.petReminderMarks = [...merged.values()].map((mark) => clone(mark));
+        this.notify();
+    }
+
+    async loadPetReminderMarks(): Promise<PetReminderMark[]> {
+        return this.store.petReminderMarks.map((mark) => clone(mark));
+    }
+
     async savePetNapRecords(naps: PetNapRecord[]): Promise<void> {
         this.store.petNapRecords = naps.map((nap) => clone(nap));
         this.pending += 1;
@@ -422,6 +438,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petActivityRecords = this.baseline.petActivityRecords.map((record) => clone(record));
         this.store.petProfile = this.baseline.petProfile ? clone(this.baseline.petProfile) : null;
         this.store.petScheduleItems = this.baseline.petScheduleItems.map((item) => clone(item));
+        this.store.petReminderMarks = this.baseline.petReminderMarks.map((mark) => clone(mark));
         this.store.petNapRecords = this.baseline.petNapRecords.map((nap) => clone(nap));
         this.store.petWeightEntries = this.baseline.petWeightEntries.map((entry) => clone(entry));
         this.store.petTrainingSkills = this.baseline.petTrainingSkills.map((skill) => clone(skill));
@@ -468,6 +485,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         petActivityRecords: [],
         petProfile: null,
         petScheduleItems: [],
+        petReminderMarks: [],
         petNapRecords: [],
         petWeightEntries: [],
         petTrainingSkills: [],

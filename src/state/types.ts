@@ -209,6 +209,15 @@ export interface PetScheduleItem {
     updatedAt: string;
 }
 
+/** Local persisted dedup marker for one resolved pet schedule occurrence. */
+export interface PetReminderMark {
+    /** Stable occurrence identity: schedule item id plus its resolved due time. */
+    id: string;
+    itemId: string;
+    dueAt: string;
+    remindedAt: string;
+}
+
 /** Append-only care log row. Durations are only meaningful for training/playtime. */
 export interface PetActivityRecord {
     id: string;

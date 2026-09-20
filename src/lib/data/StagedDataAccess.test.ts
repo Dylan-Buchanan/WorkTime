@@ -16,6 +16,7 @@ import type {
     PetNapRecord,
     PetNotableEvent,
     PetProfile,
+    PetReminderMark,
     PetScheduleItem,
     PetTrainingSkill,
     PetWeightEntry,
@@ -96,6 +97,16 @@ function PSI(id: string, overrides: Partial<PetScheduleItem> = {}): PetScheduleI
         isActive: true,
         createdAt: "2026-01-01T10:00:00.000Z",
         updatedAt: "2026-01-01T10:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function PRM(id: string, overrides: Partial<PetReminderMark> = {}): PetReminderMark {
+    return {
+        id,
+        itemId: "s1",
+        dueAt: "2026-01-01T11:00:00.000Z",
+        remindedAt: "2026-01-01T11:00:00.000Z",
         ...overrides,
     };
 }
@@ -723,6 +734,23 @@ describe("StagedDataAccess", () => {
         const weights = await data.loadPetWeightEntries();
         weights[0].weight = 99;
         expect((await data.loadPetWeightEntries())[0].weight).not.toBe(99);
+    });
+
+    it("persists owner-local pet reminder marks without syncing", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor);
+
+        await data.savePetReminderMarks([PRM("s1:2026-01-01T11:00:00.000Z")]);
+        expect(sync).not.toHaveBeenCalled();
+        expect(store.read(OWNER_A).petReminderMarks["s1:2026-01-01T11:00:00.000Z"]?.itemId).toBe("s1");
+
+        await data.savePetReminderMarks([PRM("s1:2026-01-02T11:00:00.000Z", { dueAt: "2026-01-02T11:00:00.000Z" })]);
+        expect(Object.keys(store.read(OWNER_A).petReminderMarks)).toHaveLength(2);
+
+        const loaded = await data.loadPetReminderMarks();
+        loaded[0].itemId = "mutated";
+        expect((await data.loadPetReminderMarks())[0].itemId).toBe("s1");
     });
 
     it("stages training skill and fixation collections with stamps and tombstones", async () => {

@@ -24,6 +24,7 @@ import { AgentApprovalProvider } from "./state/AgentApprovalContext";
 import { TodoProvider } from "./state/TodoContext";
 import { ToastProvider } from "./state/ToastContext";
 import { PetActivityProvider } from "./state/PetActivityContext";
+import { PetReminderProvider } from "./state/PetReminderContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
@@ -145,12 +146,14 @@ const AuthenticatedShell: React.FC = () => {
                                 <TodoProvider>
                                     <ToastProvider>
                                         <PetActivityProvider>
-                                            <StateSyncBridge />
-                                            <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
-                                                <TopNav />
-                                                <UnsyncedBanner />
-                                                <div className="flex-1 min-h-0"><Outlet /></div>
-                                            </div>
+                                            <PetReminderProvider>
+                                                <StateSyncBridge />
+                                                <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
+                                                    <TopNav />
+                                                    <UnsyncedBanner />
+                                                    <div className="flex-1 min-h-0"><Outlet /></div>
+                                                </div>
+                                            </PetReminderProvider>
                                         </PetActivityProvider>
                                     </ToastProvider>
                                 </TodoProvider>

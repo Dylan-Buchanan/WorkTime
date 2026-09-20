@@ -8,6 +8,7 @@ import type {
     PetNapRecord,
     PetNotableEvent,
     PetProfile,
+    PetReminderMark,
     PetScheduleItem,
     PetTrainingSkill,
     PetWeightEntry,
@@ -166,6 +167,8 @@ export interface StagedOwnerRecord {
     petScheduleItems: Record<string, PetScheduleItem>;
     petScheduleUpdatedAt: Record<string, string>;
     petScheduleTombstones: Record<string, { id: string; deletedAt: string }>;
+    /** Owner-local reminder dedup state until Issue G adds sync transport. */
+    petReminderMarks: Record<string, PetReminderMark>;
     /** Current locally-staged pet nap records, keyed by nap id. */
     petNapRecords: Record<string, PetNapRecord>;
     petNapUpdatedAt: Record<string, string>;
@@ -449,6 +452,16 @@ function isPetNotableEvent(value: unknown): boolean {
     );
 }
 
+function isPetReminderMark(value: unknown): boolean {
+    return (
+        isObject(value) &&
+        typeof value.id === "string" &&
+        typeof value.itemId === "string" &&
+        typeof value.dueAt === "string" &&
+        typeof value.remindedAt === "string"
+    );
+}
+
 function isStringMap(value: unknown): boolean {
     return isObject(value) && Object.values(value).every((stamp) => typeof stamp === "string");
 }
@@ -585,6 +598,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["petScheduleItems", (v): boolean => isObject(v) && Object.values(v).every(isPetScheduleItem)],
     ["petScheduleUpdatedAt", isStringMap],
     ["petScheduleTombstones", isTombstoneMap],
+    ["petReminderMarks", (v): boolean => isObject(v) && Object.values(v).every(isPetReminderMark)],
     ["petNapRecords", (v): boolean => isObject(v) && Object.values(v).every(isPetNapRecord)],
     ["petNapUpdatedAt", isStringMap],
     ["petNapTombstones", isTombstoneMap],
@@ -723,6 +737,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         record.petScheduleItems === undefined ||
         record.petScheduleUpdatedAt === undefined ||
         record.petScheduleTombstones === undefined ||
+        record.petReminderMarks === undefined ||
         record.petNapRecords === undefined ||
         record.petNapUpdatedAt === undefined ||
         record.petNapTombstones === undefined ||
@@ -749,6 +764,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             petScheduleItems: record.petScheduleItems ?? {},
             petScheduleUpdatedAt: record.petScheduleUpdatedAt ?? {},
             petScheduleTombstones: record.petScheduleTombstones ?? {},
+            petReminderMarks: record.petReminderMarks ?? {},
             petNapRecords: record.petNapRecords ?? {},
             petNapUpdatedAt: record.petNapUpdatedAt ?? {},
             petNapTombstones: record.petNapTombstones ?? {},

@@ -98,6 +98,7 @@ describe("InMemoryDataAccess", () => {
             petActivityRecords: [],
             petProfile: null,
             petScheduleItems: [],
+            petReminderMarks: [],
             petNapRecords: [],
             petWeightEntries: [],
             petTrainingSkills: [],

@@ -29,6 +29,7 @@ import type {
     PetNapRecord,
     PetNotableEvent,
     PetProfile,
+    PetReminderMark,
     PetScheduleItem,
     PetTrainingSkill,
     PetWeightEntry,
@@ -657,6 +658,19 @@ export class StagedDataAccess implements DataAccess {
     async loadPetScheduleItems(): Promise<PetScheduleItem[]> {
         const record = this.store.read(this.ownerId);
         return Object.values(record.petScheduleItems).map((entry) => clone(entry));
+    }
+
+    async savePetReminderMarks(marks: PetReminderMark[]): Promise<void> {
+        const additions = Object.fromEntries(marks.map((mark) => [mark.id, clone(mark)]));
+        await this.store.update(this.ownerId, (current) => ({
+            ...current,
+            petReminderMarks: { ...current.petReminderMarks, ...additions },
+        }));
+    }
+
+    async loadPetReminderMarks(): Promise<PetReminderMark[]> {
+        const record = this.store.read(this.ownerId);
+        return Object.values(record.petReminderMarks).map((mark) => clone(mark));
     }
 
     async savePetNapRecords(naps: PetNapRecord[]): Promise<void> {

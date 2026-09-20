@@ -149,6 +149,7 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
         petScheduleItems: {},
         petScheduleUpdatedAt: {},
         petScheduleTombstones: {},
+        petReminderMarks: {},
         petNapRecords: {},
         petNapUpdatedAt: {},
         petNapTombstones: {},

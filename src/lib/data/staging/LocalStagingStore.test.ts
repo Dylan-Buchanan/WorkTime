@@ -284,6 +284,7 @@ describe("LocalStagingStore", () => {
         expect(fresh.petScheduleItems).toEqual({});
         expect(fresh.petScheduleUpdatedAt).toEqual({});
         expect(fresh.petScheduleTombstones).toEqual({});
+        expect(fresh.petReminderMarks).toEqual({});
         expect(fresh.petNapRecords).toEqual({});
         expect(fresh.petNapUpdatedAt).toEqual({});
         expect(fresh.petNapTombstones).toEqual({});
@@ -299,6 +300,7 @@ describe("LocalStagingStore", () => {
         delete legacy.petScheduleItems;
         delete legacy.petScheduleUpdatedAt;
         delete legacy.petScheduleTombstones;
+        delete legacy.petReminderMarks;
         delete legacy.petNapRecords;
         delete legacy.petNapUpdatedAt;
         delete legacy.petNapTombstones;
@@ -312,6 +314,7 @@ describe("LocalStagingStore", () => {
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petScheduleItems).toEqual({});
+        expect(migrated.petReminderMarks).toEqual({});
         expect(migrated.petNapRecords).toEqual({});
         expect(migrated.petWeightEntries).toEqual({});
 
@@ -334,6 +337,14 @@ describe("LocalStagingStore", () => {
                 },
             },
             petScheduleUpdatedAt: { s1: "2026-01-01T10:00:00.000Z" },
+            petReminderMarks: {
+                "s1:2026-01-01T11:00:00.000Z": {
+                    id: "s1:2026-01-01T11:00:00.000Z",
+                    itemId: "s1",
+                    dueAt: "2026-01-01T11:00:00.000Z",
+                    remindedAt: "2026-01-01T11:00:00.000Z",
+                },
+            },
             petNapRecords: {
                 n1: { id: "n1", start: "2026-01-01T13:00:00.000Z", end: null, createdAt: "2026-01-01T13:00:00.000Z", updatedAt: "2026-01-01T13:00:00.000Z" },
             },
@@ -344,6 +355,7 @@ describe("LocalStagingStore", () => {
         const roundTripped = store.read(OWNER_A);
         expect(roundTripped.petProfile?.name).toBe("Whitney");
         expect(roundTripped.petScheduleItems.s1.recurrence).toEqual({ mode: "interval", minMinutes: 60, maxMinutes: 90 });
+        expect(roundTripped.petReminderMarks["s1:2026-01-01T11:00:00.000Z"]?.itemId).toBe("s1");
         expect(roundTripped.petNapRecords.n1.end).toBeNull();
         expect(roundTripped.petWeightEntries.w1.weight).toBe(4.2);
     });
@@ -471,6 +483,14 @@ describe("LocalStagingStore", () => {
                     updatedAt: "2026-01-01T10:00:00.000Z",
                 },
             },
+            petReminderMarks: {
+                "s1:2026-01-01T11:00:00.000Z": {
+                    id: "s1:2026-01-01T11:00:00.000Z",
+                    itemId: "s1",
+                    dueAt: "2026-01-01T11:00:00.000Z",
+                    remindedAt: "2026-01-01T11:00:00.000Z",
+                },
+            },
             petNapRecords: {
                 n1: { id: "n1", start: "2026-01-01T13:00:00.000Z", end: null, createdAt: "2026-01-01T13:00:00.000Z", updatedAt: "2026-01-01T13:00:00.000Z" },
             },
@@ -518,6 +538,7 @@ describe("LocalStagingStore", () => {
         expect(restored.petProfile?.name).toBe("Whitney");
         expect(restored.petProfileUpdatedAt).toBe("2026-01-01T10:00:00.000Z");
         expect(Object.keys(restored.petScheduleItems)).toEqual(["s1"]);
+        expect(Object.keys(restored.petReminderMarks)).toEqual(["s1:2026-01-01T11:00:00.000Z"]);
         expect(Object.keys(restored.petNapRecords)).toEqual(["n1"]);
         expect(Object.keys(restored.petWeightEntries)).toEqual(["w1"]);
         expect(Object.keys(restored.petActivityRecords)).toEqual(["pa1"]);

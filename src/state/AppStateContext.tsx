@@ -8,24 +8,47 @@ import type { EngineResult } from "../lib/engine";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
 
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
+let notificationSetup: Promise<void> | null = null;
 export function resetNotifyForTesting(): void {
     notify = null;
+    notificationSetup = null;
 }
 async function ensureNotification() {
     if (notify) return;
-    try {
-        const mod: any = await import("@tauri-apps/plugin-notification");
-        if (mod) {
-            if (mod.isPermissionGranted && !(await mod.isPermissionGranted())) await mod.requestPermission?.();
-            notify = (opts) => mod.sendNotification?.(opts);
-        }
-    } catch {
-        if (typeof window !== "undefined" && "Notification" in window) {
+    if (!notificationSetup) {
+        notificationSetup = (async () => {
             try {
-                if ((window as any).Notification?.permission === "default") await (window as any).Notification.requestPermission?.();
-                if ((window as any).Notification?.permission === "granted") notify = ({ title, body }) => new (window as any).Notification(title, { body });
-            } catch { /* notifications are optional */ }
+                const mod: any = await import("@tauri-apps/plugin-notification");
+                if (mod) {
+                    if (mod.isPermissionGranted && !(await mod.isPermissionGranted())) await mod.requestPermission?.();
+                    notify = (opts) => mod.sendNotification?.(opts);
+                }
+            } catch {
+                if (typeof window !== "undefined" && "Notification" in window) {
+                    try {
+                        if ((window as any).Notification?.permission === "default") await (window as any).Notification.requestPermission?.();
+                        if ((window as any).Notification?.permission === "granted") notify = ({ title, body }) => new (window as any).Notification(title, { body });
+                    } catch { /* notifications are optional */ }
+                }
+            }
+        })();
+        try {
+            await notificationSetup;
+        } finally {
+            if (!notify) notificationSetup = null;
         }
+    } else await notificationSetup;
+}
+
+/** Shared notification entry point for timer and app-open reminder sources. */
+export async function notifyNow(opts: { title: string; body?: string }): Promise<boolean> {
+    try {
+        await ensureNotification();
+        if (!notify) return false;
+        notify(opts);
+        return true;
+    } catch {
+        return false;
     }
 }
 
@@ -91,12 +114,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const hidden = typeof document !== "undefined" ? document.hidden : false;
             const hasFocus = typeof document !== "undefined" && typeof document.hasFocus === "function" ? document.hasFocus() : !hidden;
             if (!hidden && hasFocus) return;
-            await ensureNotification();
-            if (!notify) return;
             if (kind === "Work") {
                 const taskName = taskId && stateRef.current?.tasks[taskId]?.name;
-                notify({ title: "Pomodoro Complete", body: taskName ? `Finished: ${taskName}` : "Time for a break" });
-            } else notify({ title: "Break Over", body: "Time to focus" });
+                await notifyNow({ title: "Pomodoro Complete", body: taskName ? `Finished: ${taskName}` : "Time for a break" });
+            } else await notifyNow({ title: "Break Over", body: "Time to focus" });
         } catch { /* notifications are optional */ }
     }, []);
 
