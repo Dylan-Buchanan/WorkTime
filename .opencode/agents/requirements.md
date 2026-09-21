@@ -31,7 +31,7 @@ Converts a GitHub issue (and optional research document) into a structured requi
 
 ## Output
 
-- **Path**: `docs/requirements/<issue-number>-<short-slug>.md`
+- **Path**: `docs/requirements/issue-<issue-number>-requirements.md`
 - **Format**: Must follow the `requirement-document` skill's required format, order, and writing rules exactly.
 
 ## Process (6 Passes)
@@ -79,7 +79,7 @@ Before writing the file, ask the user:
 
 ### Pass 6 — Write Final `requirements.md`
 
-Write the finalized requirements document to `docs/requirements/<issue-number>-<short-slug>.md`. The file must follow the `requirement-document` skill's format and rules exactly.
+Write the finalized requirements document to `docs/requirements/issue-<issue-number>-requirements.md`. The file must follow the `requirement-document` skill's format and rules exactly.
 
 ## Question Quality
 

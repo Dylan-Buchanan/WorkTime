@@ -31,7 +31,9 @@ Your final report, when findings exist, must use the `review-document` skill. Tr
 - Run `git diff` to get the full diff of all unstaged changes.
 - Use the `review-document` skill when compiling the final review report.
 - Spawn a **dedicated subagent** for each distinct investigation topic (e.g., per file, per concern area, per cross-cutting theme).
-- Produce a final markdown report saved to `docs/reviews/` with timestamped filename (e.g., `docs/reviews/2026-02-17-branch-review.md`) using the exact section order and finding format required by the `review-document` skill.
+- Produce a final markdown report saved to `docs/reviews/`
+    - If the user mentions or is working on an issue then create the file with this naming format: `docs/reviews/issue-<issue-number>-review.md`
+    - If the user is not working on issue create the file with timestamped filename (e.g., `docs/reviews/2026-02-17-branch-review.md`) using the exact section order and finding format required by the `review-document` skill.
 - Include **file paths and line numbers** as clickable markdown links (e.g., `[src/foo.ts#L42]...`) for every finding.
 - If there are **no issues**, tell the user directly: _"All changes look good — no bugs, breakages, or concerns found."_ Do **not** create a report file in this case.
 
@@ -145,7 +147,7 @@ If you find no issues, return exactly: "No issues found for [TOPIC NAME]."
 
 ### Phase 5 — Write Report
 
-Create the report file at `docs/reviews/YYYY-MM-DD-branch-review.md`.
+Create the report file at `docs/reviews/YYYY-MM-DD-branch-review.md` or `docs/reviews/issue-<issue-number>-review.md` depending on the circumstances.
 
 Before writing, verify the report against the `review-document` skill quality checklist. The final file must be a review-document formatted artifact, not a freeform summary or chat response.
 

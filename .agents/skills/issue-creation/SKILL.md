@@ -3,7 +3,8 @@ name: issue-creation
 description: Create a well-formatted issue based on user description
 ---
 
-Create the issue as a markdown file at `docs/issues/<short-kebab-case-title>.md`. Assume that this folder already exists.
+Create the issue as a markdown file at `docs/issues/issue-<issue-number>.md`. Assume that this folder already exists. You can use `git log` to see what number this issue is.
+If you are creating multiple issues at once then the issues should be numbered based on the order in which they should be completed.
 
 Use the template below. Fill every section. Omit sections only if they truly do not apply.
 
