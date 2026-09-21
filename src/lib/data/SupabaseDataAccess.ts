@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../state/types";
+import type {
+    ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetFixation, PetNapRecord,
+    PetNotableEvent, PetProfile, PetScheduleItem, PetTrainingSkill, PetWeightEntry,
+    PomodoroLogEntry, Task,
+} from "../../state/types";
 import { DataAccessAuthError } from "./DataAccess";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./staging/types";
 import type { PushPlan, SyncRemote } from "./sync/types";
@@ -92,6 +96,31 @@ function todoRow(todo: Todo, updatedAt?: string) {
 
 function todoCompletionRow(completion: TodoCompletion) {
     return { id: completion.id, todo_id: completion.todoId, bucket: completion.bucket, created_at: completion.createdAt, updated_at: completion.updatedAt };
+}
+
+function petActivityRow(value: PetActivityRecord, updatedAt: string) {
+    return { id: value.id, activity_type: value.activityType, occurred_at: value.timestamp, duration_minutes: value.durationMinutes ?? null, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petProfileRow(value: PetProfile, updatedAt: string) {
+    return { id: value.id, name: value.name, birth_date: value.birthDate, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petScheduleRow(value: PetScheduleItem, updatedAt: string) {
+    return { id: value.id, activity_type: value.activityType, label: value.label, flexibility: value.flexibility, priority: value.priority, recurrence: value.recurrence, is_active: value.isActive, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petNapRow(value: PetNapRecord, updatedAt: string) {
+    return { id: value.id, started_at: value.start, ended_at: value.end, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petWeightRow(value: PetWeightEntry, updatedAt: string) {
+    return { id: value.id, measured_at: value.timestamp, weight: value.weight, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petTrainingSkillRow(value: PetTrainingSkill, updatedAt: string) {
+    return { id: value.id, label: value.label, notes: value.notes, status: value.status, resolved_at: value.resolvedAt, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petFixationRow(value: PetFixation, updatedAt: string) {
+    return { id: value.id, label: value.label, notes: value.notes, resolved_at: value.resolvedAt, resolution_note: value.resolutionNote, created_at: value.createdAt, updated_at: updatedAt };
+}
+function petNotableEventRow(value: PetNotableEvent, updatedAt: string) {
+    return { id: value.id, title: value.title, notes: value.notes, occurred_at: value.timestamp, created_at: value.createdAt, updated_at: updatedAt };
 }
 
 /**
@@ -255,6 +284,58 @@ export class SupabaseDataAccess implements SyncRemote {
         return { id: row.id, todoId: row.todo_id, bucket: row.bucket, createdAt: row.created_at, updatedAt: row.updated_at };
     }
 
+    private validPetBase(table: string, row: any): void {
+        if (!row || typeof row.id !== "string" || typeof row.created_at !== "string" || typeof row.updated_at !== "string") {
+            this.fail(table, new Error(`invalid row for ${row?.id ?? "unknown"}`));
+        }
+    }
+
+    private validatePetActivity(row: any): PetActivityRecord {
+        this.validPetBase("pet_activity_records", row);
+        if (!["potty", "training", "playtime", "feeding"].includes(row.activity_type) || typeof row.occurred_at !== "string" ||
+            (row.duration_minutes !== null && (typeof row.duration_minutes !== "number" || row.duration_minutes < 0))) this.fail("pet_activity_records", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, activityType: row.activity_type, timestamp: row.occurred_at, ...(row.duration_minutes === null ? {} : { durationMinutes: row.duration_minutes }), createdAt: row.created_at };
+    }
+    private validatePetProfile(row: any): PetProfile {
+        this.validPetBase("pet_profiles", row);
+        if (typeof row.name !== "string" || typeof row.birth_date !== "string") this.fail("pet_profiles", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, name: row.name, birthDate: row.birth_date, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    private validatePetSchedule(row: any): PetScheduleItem {
+        this.validPetBase("pet_schedule_items", row);
+        const recurrence = row.recurrence;
+        const validRecurrence = isRecord(recurrence) && ((recurrence.mode === "fixed-time" && typeof recurrence.time === "string" && typeof recurrence.startMinutes === "number" && typeof recurrence.endMinutes === "number") ||
+            (recurrence.mode === "interval" && typeof recurrence.minMinutes === "number" && typeof recurrence.maxMinutes === "number"));
+        if (!["potty", "training", "playtime", "feeding"].includes(row.activity_type) || typeof row.label !== "string" ||
+            !["fixed", "flexible"].includes(row.flexibility) || typeof row.priority !== "number" || typeof row.is_active !== "boolean" || !validRecurrence) this.fail("pet_schedule_items", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, activityType: row.activity_type, label: row.label, flexibility: row.flexibility, priority: row.priority, recurrence: clone(recurrence) as unknown as PetScheduleItem["recurrence"], isActive: row.is_active, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    private validatePetNap(row: any): PetNapRecord {
+        this.validPetBase("pet_nap_records", row);
+        if (typeof row.started_at !== "string" || (row.ended_at !== null && typeof row.ended_at !== "string")) this.fail("pet_nap_records", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, start: row.started_at, end: row.ended_at, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    private validatePetWeight(row: any): PetWeightEntry {
+        this.validPetBase("pet_weight_entries", row);
+        if (typeof row.measured_at !== "string" || typeof row.weight !== "number" || !Number.isFinite(row.weight)) this.fail("pet_weight_entries", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, timestamp: row.measured_at, weight: row.weight, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    private validatePetTrainingSkill(row: any): PetTrainingSkill {
+        this.validPetBase("pet_training_skills", row);
+        if (typeof row.label !== "string" || typeof row.notes !== "string" || !["introduced", "progressing", "reliable"].includes(row.status) || (row.resolved_at !== null && typeof row.resolved_at !== "string")) this.fail("pet_training_skills", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, label: row.label, notes: row.notes, status: row.status, resolvedAt: row.resolved_at, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    private validatePetFixation(row: any): PetFixation {
+        this.validPetBase("pet_fixations", row);
+        if (typeof row.label !== "string" || typeof row.notes !== "string" || typeof row.resolution_note !== "string" || (row.resolved_at !== null && typeof row.resolved_at !== "string")) this.fail("pet_fixations", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, label: row.label, notes: row.notes, resolvedAt: row.resolved_at, resolutionNote: row.resolution_note, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+    private validatePetNotableEvent(row: any): PetNotableEvent {
+        this.validPetBase("pet_notable_events", row);
+        if (typeof row.title !== "string" || typeof row.notes !== "string" || typeof row.occurred_at !== "string") this.fail("pet_notable_events", new Error(`invalid row for ${row.id}`));
+        return { id: row.id, title: row.title, notes: row.notes, timestamp: row.occurred_at, createdAt: row.created_at, updatedAt: row.updated_at };
+    }
+
     private validateTimer(value: unknown): ActiveTimer | null {
         if (value === null || value === undefined) return null;
         if (!isRecord(value) || typeof value.task_id !== "string" || typeof value.started_at !== "string" || typeof value.ends_at !== "string" || !["Work", "ShortBreak", "LongBreak"].includes(String(value.kind))) {
@@ -277,7 +358,8 @@ export class SupabaseDataAccess implements SyncRemote {
     async pull(expectedOwnerId: string): Promise<SyncSnapshot> {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
 
-        const [taskRows, logRows, habitRows, completionRows, todoRows, todoCompletionRows, settingsResponse, timerResponse, pmResponse] = await Promise.all([
+        const [taskRows, logRows, habitRows, completionRows, todoRows, todoCompletionRows, settingsResponse, timerResponse, pmResponse,
+            petActivityRows, petProfileRows, petScheduleRows, petNapRows, petWeightRows, petTrainingRows, petFixationRows, petEventRows] = await Promise.all([
             this.page("tasks", ownerId, [{ column: "id" }]),
             this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
             this.page("habits", ownerId, [{ column: "id" }]),
@@ -287,6 +369,14 @@ export class SupabaseDataAccess implements SyncRemote {
             this.client.from("settings").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("timer_state").select("data, completed, updated_at").eq("owner_id", ownerId).maybeSingle(),
             this.client.from("pm_state").select("data, updated_at").eq("owner_id", ownerId).maybeSingle(),
+            this.page("pet_activity_records", ownerId, [{ column: "id" }]),
+            this.page("pet_profiles", ownerId, [{ column: "id" }]),
+            this.page("pet_schedule_items", ownerId, [{ column: "id" }]),
+            this.page("pet_nap_records", ownerId, [{ column: "id" }]),
+            this.page("pet_weight_entries", ownerId, [{ column: "id" }]),
+            this.page("pet_training_skills", ownerId, [{ column: "id" }]),
+            this.page("pet_fixations", ownerId, [{ column: "id" }]),
+            this.page("pet_notable_events", ownerId, [{ column: "id" }]),
         ]);
         if (settingsResponse.error) this.fail("settings", settingsResponse.error);
         if (timerResponse.error) this.fail("timer_state", timerResponse.error);
@@ -338,6 +428,9 @@ export class SupabaseDataAccess implements SyncRemote {
         if (pmData !== undefined && !isRecord(pmData)) {
             this.fail("pm_state", new Error(`invalid PM row for ${ownerId}`));
         }
+        const versionedMap = <T>(rows: any[], validate: (row: any) => T): Record<string, { value: T; updatedAt: string }> =>
+            Object.fromEntries(rows.map((row) => [row.id, { value: validate(row), updatedAt: row.updated_at }]));
+        const profileRow = petProfileRows[0];
 
         // Absent singleton rows stay `{ value: null, updatedAt: null }` so the
         // merge engine can distinguish "never existed" from default app values.
@@ -361,6 +454,14 @@ export class SupabaseDataAccess implements SyncRemote {
                 value: pmResponse.data ? clone(pmData) : null,
                 updatedAt: pmResponse.data?.updated_at ?? null,
             },
+            petActivityRecords: versionedMap(petActivityRows, (row) => this.validatePetActivity(row)),
+            petProfile: profileRow ? { value: this.validatePetProfile(profileRow), updatedAt: profileRow.updated_at } : { value: null, updatedAt: null },
+            petScheduleItems: versionedMap(petScheduleRows, (row) => this.validatePetSchedule(row)),
+            petNapRecords: versionedMap(petNapRows, (row) => this.validatePetNap(row)),
+            petWeightEntries: versionedMap(petWeightRows, (row) => this.validatePetWeight(row)),
+            petTrainingSkills: versionedMap(petTrainingRows, (row) => this.validatePetTrainingSkill(row)),
+            petFixations: versionedMap(petFixationRows, (row) => this.validatePetFixation(row)),
+            petNotableEvents: versionedMap(petEventRows, (row) => this.validatePetNotableEvent(row)),
         };
         return clone(snapshot);
     }
@@ -427,6 +528,8 @@ export class SupabaseDataAccess implements SyncRemote {
         // frontend update; omitted new-domain arrays are equivalent to empty.
         const todoCompletionUpserts = plan.todoCompletionUpserts ?? [];
         const todoCompletionTombstones = plan.todoCompletionTombstones ?? [];
+        const tombstones = (items: Array<{ id: string; deletedAt: string }> | undefined) =>
+            items?.length ? items.map(({ id, deletedAt }) => ({ id, deleted_at: deletedAt })) : null;
         const response = await this.client.rpc("apply_staged_sync", {
             p_task_upserts: plan.taskUpserts.length
                 ? plan.taskUpserts.map(({ value, updatedAt }) => taskRow(ownerId, value, updatedAt))
@@ -466,6 +569,22 @@ export class SupabaseDataAccess implements SyncRemote {
             p_todo_completion_tombstones: todoCompletionTombstones.length
                 ? todoCompletionTombstones.map(({ id, deletedAt, todoId }) => ({ id, deleted_at: deletedAt, ...(todoId !== undefined ? { todo_id: todoId } : {}) }))
                 : null,
+            p_pet_activity_upserts: plan.petActivityUpserts?.length ? plan.petActivityUpserts.map(({ value, updatedAt }) => petActivityRow(value, updatedAt)) : null,
+            p_pet_activity_tombstones: tombstones(plan.petActivityTombstones),
+            p_pet_profile_upsert: plan.petProfile ? petProfileRow(plan.petProfile.value, plan.petProfile.updatedAt) : null,
+            p_pet_profile_tombstone: plan.petProfileTombstone ? { id: plan.petProfileTombstone.id, deleted_at: plan.petProfileTombstone.deletedAt } : null,
+            p_pet_schedule_upserts: plan.petScheduleUpserts?.length ? plan.petScheduleUpserts.map(({ value, updatedAt }) => petScheduleRow(value, updatedAt)) : null,
+            p_pet_schedule_tombstones: tombstones(plan.petScheduleTombstones),
+            p_pet_nap_upserts: plan.petNapUpserts?.length ? plan.petNapUpserts.map(({ value, updatedAt }) => petNapRow(value, updatedAt)) : null,
+            p_pet_nap_tombstones: tombstones(plan.petNapTombstones),
+            p_pet_weight_upserts: plan.petWeightUpserts?.length ? plan.petWeightUpserts.map(({ value, updatedAt }) => petWeightRow(value, updatedAt)) : null,
+            p_pet_weight_tombstones: tombstones(plan.petWeightTombstones),
+            p_pet_training_skill_upserts: plan.petTrainingSkillUpserts?.length ? plan.petTrainingSkillUpserts.map(({ value, updatedAt }) => petTrainingSkillRow(value, updatedAt)) : null,
+            p_pet_training_skill_tombstones: tombstones(plan.petTrainingSkillTombstones),
+            p_pet_fixation_upserts: plan.petFixationUpserts?.length ? plan.petFixationUpserts.map(({ value, updatedAt }) => petFixationRow(value, updatedAt)) : null,
+            p_pet_fixation_tombstones: tombstones(plan.petFixationTombstones),
+            p_pet_notable_event_upserts: plan.petNotableEventUpserts?.length ? plan.petNotableEventUpserts.map(({ value, updatedAt }) => petNotableEventRow(value, updatedAt)) : null,
+            p_pet_notable_event_tombstones: tombstones(plan.petNotableEventTombstones),
             p_settings_data: plan.settings?.value ?? null,
             p_settings_updated_at: plan.settings?.updatedAt ?? null,
             p_timer_data: plan.timerState?.value ?? null,

@@ -1,4 +1,8 @@
-import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
+import type {
+    ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetFixation, PetNapRecord,
+    PetNotableEvent, PetProfile, PetScheduleItem, PetTrainingSkill, PetWeightEntry,
+    PomodoroLogEntry, Settings, Task,
+} from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
 import type { Todo, TodoCompletion } from "../../todos";
 import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone, TodoCompletionTombstone } from "../staging/types";
@@ -51,6 +55,22 @@ export interface AcknowledgedChanges {
     todoTombstones: Record<string, { deletedAt: string }>;
     todoCompletionUpserts: Record<string, TodoCompletion>;
     todoCompletionTombstones: Record<string, Omit<TodoCompletionTombstone, "id">>;
+    petActivityUpserts?: Record<string, { value: PetActivityRecord; updatedAt: string }>;
+    petActivityTombstones?: Record<string, { deletedAt: string }>;
+    petProfile?: { value: PetProfile; updatedAt: string } | null;
+    petProfileTombstone?: { deletedAt: string } | null;
+    petScheduleUpserts?: Record<string, { value: PetScheduleItem; updatedAt: string }>;
+    petScheduleTombstones?: Record<string, { deletedAt: string }>;
+    petNapUpserts?: Record<string, { value: PetNapRecord; updatedAt: string }>;
+    petNapTombstones?: Record<string, { deletedAt: string }>;
+    petWeightUpserts?: Record<string, { value: PetWeightEntry; updatedAt: string }>;
+    petWeightTombstones?: Record<string, { deletedAt: string }>;
+    petTrainingSkillUpserts?: Record<string, { value: PetTrainingSkill; updatedAt: string }>;
+    petTrainingSkillTombstones?: Record<string, { deletedAt: string }>;
+    petFixationUpserts?: Record<string, { value: PetFixation; updatedAt: string }>;
+    petFixationTombstones?: Record<string, { deletedAt: string }>;
+    petNotableEventUpserts?: Record<string, { value: PetNotableEvent; updatedAt: string }>;
+    petNotableEventTombstones?: Record<string, { deletedAt: string }>;
     settings: VersionedValue<Settings> | null;
     timerState: VersionedValue<TimerStateSlice> | null;
     pmState: VersionedValue<SyncedPMState> | null;
@@ -77,6 +97,22 @@ export interface PushPlan {
     todoTombstones: Array<{ id: string; deletedAt: string }>;
     todoCompletionUpserts: TodoCompletion[];
     todoCompletionTombstones: TodoCompletionTombstone[];
+    petActivityUpserts?: Array<{ value: PetActivityRecord; updatedAt: string }>;
+    petActivityTombstones?: Array<{ id: string; deletedAt: string }>;
+    petProfile?: { value: PetProfile; updatedAt: string } | null;
+    petProfileTombstone?: { id: string; deletedAt: string } | null;
+    petScheduleUpserts?: Array<{ value: PetScheduleItem; updatedAt: string }>;
+    petScheduleTombstones?: Array<{ id: string; deletedAt: string }>;
+    petNapUpserts?: Array<{ value: PetNapRecord; updatedAt: string }>;
+    petNapTombstones?: Array<{ id: string; deletedAt: string }>;
+    petWeightUpserts?: Array<{ value: PetWeightEntry; updatedAt: string }>;
+    petWeightTombstones?: Array<{ id: string; deletedAt: string }>;
+    petTrainingSkillUpserts?: Array<{ value: PetTrainingSkill; updatedAt: string }>;
+    petTrainingSkillTombstones?: Array<{ id: string; deletedAt: string }>;
+    petFixationUpserts?: Array<{ value: PetFixation; updatedAt: string }>;
+    petFixationTombstones?: Array<{ id: string; deletedAt: string }>;
+    petNotableEventUpserts?: Array<{ value: PetNotableEvent; updatedAt: string }>;
+    petNotableEventTombstones?: Array<{ id: string; deletedAt: string }>;
     settings: VersionedValue<Settings> | null;
     timerState: (VersionedValue<TimerStateSlice> & { newGeneration: boolean }) | null;
     pmState: VersionedValue<SyncedPMState> | null;

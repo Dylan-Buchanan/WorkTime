@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
     advancePetTrainingSkill,
     createPetTrainingSkill,
@@ -8,18 +8,13 @@ import {
     resolvePetTrainingSkill,
 } from "../../lib/pets";
 import type { PetTrainingSkill, PetTrainingStatus } from "../../state/types";
-import { useData } from "../../state/DataContext";
-import { petUuid } from "./petShared";
+import { usePets } from "../../state/PetContext";
 
 const STATUS_TONES: Record<PetTrainingStatus, string> = {
     introduced: "bg-neutral-800 text-neutral-300",
     progressing: "bg-amber-900/40 text-amber-300",
     reliable: "bg-emerald-900/40 text-emerald-300",
 };
-
-function persistenceError(context: string): (error: unknown) => void {
-    return (error) => console.warn(`[PetPage] failed to persist ${context}`, error);
-}
 
 function messageFor(error: unknown, fallback: string): string {
     return error instanceof RangeError ? error.message : fallback;
@@ -42,35 +37,22 @@ interface EditDraft {
  * this component only persists the resulting full set.
  */
 export const PetTrainingTab: React.FC = () => {
-    const data = useData();
-    const [skills, setSkills] = useState<PetTrainingSkill[]>([]);
-    const [hydrated, setHydrated] = useState(false);
+    const pets = usePets();
+    const skills = Object.values(pets.state.trainingSkills);
     const [draft, setDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [error, setError] = useState<string | null>(null);
     const [archiveOpen, setArchiveOpen] = useState(false);
 
-    useEffect(() => {
-        let cancelled = false;
-        void (async () => {
-            const loaded = await data.loadPetTrainingSkills().catch(() => [] as PetTrainingSkill[]);
-            if (cancelled) return;
-            setSkills(loaded);
-            setHydrated(true);
-        })();
-        return () => { cancelled = true; };
-    }, [data]);
-
     const persist = (next: PetTrainingSkill[]): void => {
-        setSkills(next);
-        void data.savePetTrainingSkills(next).catch(persistenceError("pet training skills"));
+        pets.setTrainingSkills(next);
     };
 
     const addSkill = (event: React.FormEvent): void => {
         event.preventDefault();
         try {
-            const skill = createPetTrainingSkill(draft, new Date(), petUuid());
+            const skill = createPetTrainingSkill(draft, pets.now(), pets.uuid());
             persist([...skills, skill]);
             setDraft({ label: "", notes: "" });
             setError(null);
@@ -83,7 +65,7 @@ export const PetTrainingTab: React.FC = () => {
         const skill = skills.find((entry) => entry.id === id);
         if (!skill) return;
         try {
-            const updated = advancePetTrainingSkill(skill, new Date());
+            const updated = advancePetTrainingSkill(skill, pets.now());
             persist(skills.map((entry) => (entry.id === id ? updated : entry)));
             setError(null);
         } catch (caught) {
@@ -95,7 +77,7 @@ export const PetTrainingTab: React.FC = () => {
         const skill = skills.find((entry) => entry.id === id);
         if (!skill) return;
         try {
-            const updated = resolvePetTrainingSkill(skill, new Date());
+            const updated = resolvePetTrainingSkill(skill, pets.now());
             persist(skills.map((entry) => (entry.id === id ? updated : entry)));
             setError(null);
         } catch (caught) {
@@ -116,7 +98,7 @@ export const PetTrainingTab: React.FC = () => {
             setError("A training skill needs a label");
             return;
         }
-        const updatedAt = new Date().toISOString();
+        const updatedAt = pets.now().toISOString();
         persist(
             skills.map((entry) =>
                 entry.id === editingId ? { ...entry, label, notes: editDraft.notes, updatedAt } : entry,
@@ -126,7 +108,7 @@ export const PetTrainingTab: React.FC = () => {
         setError(null);
     };
 
-    if (!hydrated) {
+    if (!pets.hydrated) {
         return (
             <div className="flex h-full items-center justify-center text-xs text-neutral-500" role="status">
                 Loading…

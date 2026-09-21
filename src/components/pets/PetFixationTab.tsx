@@ -1,12 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { createPetFixation, isPetFixationActive, resolvePetFixation } from "../../lib/pets";
 import type { PetFixation } from "../../state/types";
-import { useData } from "../../state/DataContext";
-import { petUuid } from "./petShared";
-
-function persistenceError(context: string): (error: unknown) => void {
-    return (error) => console.warn(`[PetPage] failed to persist ${context}`, error);
-}
+import { usePets } from "../../state/PetContext";
 
 function messageFor(error: unknown, fallback: string): string {
     return error instanceof RangeError ? error.message : fallback;
@@ -29,9 +24,8 @@ interface EditDraft {
  * deleted.
  */
 export const PetFixationTab: React.FC = () => {
-    const data = useData();
-    const [fixations, setFixations] = useState<PetFixation[]>([]);
-    const [hydrated, setHydrated] = useState(false);
+    const pets = usePets();
+    const fixations = Object.values(pets.state.fixations);
     const [draft, setDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [reasons, setReasons] = useState<Record<string, string>>({});
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -39,26 +33,14 @@ export const PetFixationTab: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [archiveOpen, setArchiveOpen] = useState(false);
 
-    useEffect(() => {
-        let cancelled = false;
-        void (async () => {
-            const loaded = await data.loadPetFixations().catch(() => [] as PetFixation[]);
-            if (cancelled) return;
-            setFixations(loaded);
-            setHydrated(true);
-        })();
-        return () => { cancelled = true; };
-    }, [data]);
-
     const persist = (next: PetFixation[]): void => {
-        setFixations(next);
-        void data.savePetFixations(next).catch(persistenceError("pet fixations"));
+        pets.setFixations(next);
     };
 
     const addFixation = (event: React.FormEvent): void => {
         event.preventDefault();
         try {
-            const fixation = createPetFixation(draft, new Date(), petUuid());
+            const fixation = createPetFixation(draft, pets.now(), pets.uuid());
             persist([...fixations, fixation]);
             setDraft({ label: "", notes: "" });
             setError(null);
@@ -71,7 +53,7 @@ export const PetFixationTab: React.FC = () => {
         const fixation = fixations.find((entry) => entry.id === id);
         if (!fixation) return;
         try {
-            const updated = resolvePetFixation(fixation, reasons[id] ?? "", new Date());
+            const updated = resolvePetFixation(fixation, reasons[id] ?? "", pets.now());
             persist(fixations.map((entry) => (entry.id === id ? updated : entry)));
             setReasons((previous) => {
                 const next = { ...previous };
@@ -97,7 +79,7 @@ export const PetFixationTab: React.FC = () => {
             setError("A fixation needs a label");
             return;
         }
-        const updatedAt = new Date().toISOString();
+        const updatedAt = pets.now().toISOString();
         persist(
             fixations.map((entry) =>
                 entry.id === editingId ? { ...entry, label, notes: editDraft.notes, updatedAt } : entry,
@@ -107,7 +89,7 @@ export const PetFixationTab: React.FC = () => {
         setError(null);
     };
 
-    if (!hydrated) {
+    if (!pets.hydrated) {
         return (
             <div className="flex h-full items-center justify-center text-xs text-neutral-500" role="status">
                 Loading…

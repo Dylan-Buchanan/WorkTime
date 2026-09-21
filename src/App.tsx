@@ -25,6 +25,7 @@ import { TodoProvider } from "./state/TodoContext";
 import { ToastProvider } from "./state/ToastContext";
 import { PetActivityProvider } from "./state/PetActivityContext";
 import { PetReminderProvider } from "./state/PetReminderContext";
+import { PetProvider } from "./state/PetContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
@@ -145,16 +146,18 @@ const AuthenticatedShell: React.FC = () => {
                             <HabitProvider>
                                 <TodoProvider>
                                     <ToastProvider>
-                                        <PetActivityProvider>
-                                            <PetReminderProvider>
+                                        <PetProvider>
+                                            <PetActivityProvider>
+                                                <PetReminderProvider>
                                                 <StateSyncBridge />
                                                 <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
                                                     <TopNav />
                                                     <UnsyncedBanner />
                                                     <div className="flex-1 min-h-0"><Outlet /></div>
                                                 </div>
-                                            </PetReminderProvider>
-                                        </PetActivityProvider>
+                                                </PetReminderProvider>
+                                            </PetActivityProvider>
+                                        </PetProvider>
                                     </ToastProvider>
                                 </TodoProvider>
                             </HabitProvider>

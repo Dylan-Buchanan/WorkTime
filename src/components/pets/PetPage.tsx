@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import React from "react";
+import { usePets } from "../../state/PetContext";
+import type { PetTabId } from "../../state/PetContext";
 import { PetFixationTab } from "./PetFixationTab";
 import { PetTimelineTab } from "./PetTimelineTab";
 import { PetTodayTab } from "./PetTodayTab";
 import { PetTrainingTab } from "./PetTrainingTab";
-
-type PetTabId = "today" | "training" | "fixations" | "timeline";
 
 const PET_TABS: Array<{ id: PetTabId; label: string }> = [
     { id: "today", label: "Today" },
@@ -19,7 +19,8 @@ const PET_TABS: Array<{ id: PetTabId; label: string }> = [
  * possible future second animal.
  */
 export const PetPage: React.FC = () => {
-    const [tab, setTab] = useState<PetTabId>("today");
+    const { state, setActiveTab } = usePets();
+    const tab = state.ui.activeTab;
 
     return (
         <div className="flex h-full min-h-0 flex-col">
@@ -34,7 +35,7 @@ export const PetPage: React.FC = () => {
                                 type="button"
                                 role="tab"
                                 aria-selected={active}
-                                onClick={() => setTab(entry.id)}
+                                onClick={() => setActiveTab(entry.id)}
                                 className={
                                     active
                                         ? "rounded-lg bg-neutral-800 px-3 py-1.5 text-[11px] font-medium text-neutral-100"

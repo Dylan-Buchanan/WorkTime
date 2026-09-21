@@ -1,20 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { buildPetSchedule } from "../lib/pets";
 import type { PetScheduleEntry } from "../lib/pets";
-import type { PetNapRecord, PetReminderMark, PetScheduleItem } from "./types";
+import type { PetReminderMark } from "./types";
 import { notifyNow } from "./AppStateContext";
 import { useData } from "./DataContext";
 import { usePetActivity } from "./PetActivityContext";
+import { usePets } from "./PetContext";
 import { useSync } from "./SyncContext";
 import { useToast } from "./ToastContext";
 
 interface ReminderSnapshot {
-    scheduleItems: PetScheduleItem[];
-    naps: PetNapRecord[];
     marks: Record<string, PetReminderMark>;
 }
 
-const EMPTY_SNAPSHOT: ReminderSnapshot = { scheduleItems: [], naps: [], marks: {} };
+const EMPTY_SNAPSHOT: ReminderSnapshot = { marks: {} };
 
 /** Item id plus resolved start re-arms after corrections, new anchors, or reflow. */
 export function petOccurrenceId(entry: Pick<PetScheduleEntry, "itemId" | "start">): string {
@@ -29,6 +28,7 @@ export function petOccurrenceId(entry: Pick<PetScheduleEntry, "itemId" | "start"
  */
 export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const data = useData();
+    const pets = usePets();
     const { revision } = useSync();
     const { state: activityState, hydrated: activityHydrated } = usePetActivity();
     const { showToast } = useToast();
@@ -47,16 +47,12 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     useEffect(() => {
         let cancelled = false;
-        void Promise.all([
-            data.loadPetScheduleItems(),
-            data.loadPetNapRecords(),
-            data.loadPetReminderMarks(),
-        ]).then(([scheduleItems, naps, loadedMarks]) => {
+        void data.loadPetReminderMarks().then((loadedMarks) => {
             if (cancelled) return;
             const marks = { ...marksRef.current };
             for (const mark of loadedMarks) marks[mark.id] = mark;
             marksRef.current = marks;
-            setSnapshot({ scheduleItems, naps, marks });
+            setSnapshot({ marks });
             setHydrated(true);
         }).catch((error) => {
             if (cancelled) return;
@@ -68,13 +64,13 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const schedule = useMemo(() => buildPetSchedule({
         now,
-        scheduleItems: snapshot.scheduleItems,
+        scheduleItems: Object.values(pets.state.scheduleItems),
         activityRecords: Object.values(activityState.records),
-        naps: snapshot.naps,
-    }), [activityState.records, now, snapshot.naps, snapshot.scheduleItems]);
+        naps: Object.values(pets.state.naps),
+    }), [activityState.records, now, pets.state.naps, pets.state.scheduleItems]);
 
     useEffect(() => {
-        if (!hydrated || !activityHydrated) return;
+        if (!hydrated || !pets.hydrated || !activityHydrated) return;
 
         const dueEntries = schedule.entries.filter((entry) =>
             !entry.fulfilled && !entry.paused && entry.start.getTime() <= now.getTime(),
@@ -127,7 +123,7 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 console.warn("[PetReminder] failed to persist reminder marks", error);
             });
         });
-    }, [activityHydrated, data, hydrated, now, schedule.entries, showToast, snapshot.marks]);
+    }, [activityHydrated, data, hydrated, now, pets.hydrated, schedule.entries, showToast, snapshot.marks]);
 
     return <>{children}</>;
 };

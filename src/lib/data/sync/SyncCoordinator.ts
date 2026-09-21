@@ -11,7 +11,7 @@ function clone<T>(value: T): T {
 }
 
 /** True when a push plan carries at least one entity/marker to apply. */
-function isPlanNonEmpty(plan: PushPlan): boolean {
+export function isPlanNonEmpty(plan: PushPlan): boolean {
     return (
         plan.taskUpserts.length > 0 ||
         plan.taskTombstones.length > 0 ||
@@ -25,6 +25,15 @@ function isPlanNonEmpty(plan: PushPlan): boolean {
         plan.todoTombstones.length > 0 ||
         plan.todoCompletionUpserts.length > 0 ||
         plan.todoCompletionTombstones.length > 0 ||
+        (plan.petActivityUpserts?.length ?? 0) > 0 ||
+        (plan.petActivityTombstones?.length ?? 0) > 0 ||
+        plan.petProfile != null || plan.petProfileTombstone != null ||
+        (plan.petScheduleUpserts?.length ?? 0) > 0 || (plan.petScheduleTombstones?.length ?? 0) > 0 ||
+        (plan.petNapUpserts?.length ?? 0) > 0 || (plan.petNapTombstones?.length ?? 0) > 0 ||
+        (plan.petWeightUpserts?.length ?? 0) > 0 || (plan.petWeightTombstones?.length ?? 0) > 0 ||
+        (plan.petTrainingSkillUpserts?.length ?? 0) > 0 || (plan.petTrainingSkillTombstones?.length ?? 0) > 0 ||
+        (plan.petFixationUpserts?.length ?? 0) > 0 || (plan.petFixationTombstones?.length ?? 0) > 0 ||
+        (plan.petNotableEventUpserts?.length ?? 0) > 0 || (plan.petNotableEventTombstones?.length ?? 0) > 0 ||
         plan.settings !== null ||
         plan.timerState !== null ||
         plan.pmState !== null ||
@@ -37,7 +46,7 @@ function isPlanNonEmpty(plan: PushPlan): boolean {
  * baseline advanced by exactly the values/tombstones the plan acknowledged. The
  * timer `completed` guard is derived from the plan's `newGeneration` flag.
  */
-function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): SyncSnapshot {
+export function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): SyncSnapshot {
     const base = record.lastSynced;
     if (!base) {
         throw new Error("Cannot build the pushed snapshot without a lastSynced baseline");
@@ -52,6 +61,14 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
         settings: { ...base.settings },
         timerState: { ...base.timerState },
         pmState: { ...base.pmState },
+        petActivityRecords: { ...base.petActivityRecords },
+        petProfile: { ...base.petProfile },
+        petScheduleItems: { ...base.petScheduleItems },
+        petNapRecords: { ...base.petNapRecords },
+        petWeightEntries: { ...base.petWeightEntries },
+        petTrainingSkills: { ...base.petTrainingSkills },
+        petFixations: { ...base.petFixations },
+        petNotableEvents: { ...base.petNotableEvents },
     };
     const ack = plan.acknowledged;
 
@@ -91,6 +108,23 @@ function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan): Sync
     for (const id of Object.keys(ack.todoCompletionTombstones)) {
         delete pushed.todoCompletions[id];
     }
+    const applyPetCollection = <T>(
+        target: Record<string, { value: T; updatedAt: string }>,
+        upserts: Record<string, { value: T; updatedAt: string }> = {},
+        tombstones: Record<string, { deletedAt: string }> = {},
+    ) => {
+        for (const [id, row] of Object.entries(upserts)) target[id] = clone(row);
+        for (const id of Object.keys(tombstones)) delete target[id];
+    };
+    applyPetCollection(pushed.petActivityRecords, ack.petActivityUpserts, ack.petActivityTombstones);
+    applyPetCollection(pushed.petScheduleItems, ack.petScheduleUpserts, ack.petScheduleTombstones);
+    applyPetCollection(pushed.petNapRecords, ack.petNapUpserts, ack.petNapTombstones);
+    applyPetCollection(pushed.petWeightEntries, ack.petWeightUpserts, ack.petWeightTombstones);
+    applyPetCollection(pushed.petTrainingSkills, ack.petTrainingSkillUpserts, ack.petTrainingSkillTombstones);
+    applyPetCollection(pushed.petFixations, ack.petFixationUpserts, ack.petFixationTombstones);
+    applyPetCollection(pushed.petNotableEvents, ack.petNotableEventUpserts, ack.petNotableEventTombstones);
+    if (ack.petProfile) pushed.petProfile = clone(ack.petProfile);
+    if (ack.petProfileTombstone) pushed.petProfile = { value: null, updatedAt: null };
     if (ack.settings) pushed.settings = clone(ack.settings);
     if (ack.timerState) {
         pushed.timerState = {

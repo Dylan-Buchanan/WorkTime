@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
     annotateNotableEvent,
     correctNotableEvent,
@@ -8,13 +8,8 @@ import {
     notableEventTimestamp,
     sortNotableEventsNewestFirst,
 } from "../../lib/pets";
-import type { PetNotableEvent, PetProfile } from "../../state/types";
-import { useData } from "../../state/DataContext";
-import { petUuid } from "./petShared";
-
-function persistenceError(context: string): (error: unknown) => void {
-    return (error) => console.warn(`[PetPage] failed to persist ${context}`, error);
-}
+import type { PetNotableEvent } from "../../state/types";
+import { usePets } from "../../state/PetContext";
 
 function messageFor(error: unknown, fallback: string): string {
     return error instanceof RangeError ? error.message : fallback;
@@ -33,8 +28,8 @@ interface EventDraft {
     date: string;
 }
 
-function emptyDraft(): EventDraft {
-    return { title: "", notes: "", date: notableEventDateKey(new Date()) };
+function emptyDraft(now = new Date()): EventDraft {
+    return { title: "", notes: "", date: notableEventDateKey(now) };
 }
 
 /**
@@ -45,34 +40,17 @@ function emptyDraft(): EventDraft {
  * live in their own tabs and are deliberately absent here.
  */
 export const PetTimelineTab: React.FC = () => {
-    const data = useData();
-    const [events, setEvents] = useState<PetNotableEvent[]>([]);
-    const [profile, setProfile] = useState<PetProfile | null>(null);
-    const [hydrated, setHydrated] = useState(false);
-    const [draft, setDraft] = useState<EventDraft>(emptyDraft);
+    const pets = usePets();
+    const events = Object.values(pets.state.notableEvents);
+    const profile = pets.state.profile;
+    const [draft, setDraft] = useState<EventDraft>(() => emptyDraft(pets.now()));
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [editDraft, setEditDraft] = useState<EventDraft>(emptyDraft);
+    const [editDraft, setEditDraft] = useState<EventDraft>(() => emptyDraft(pets.now()));
     const [range, setRange] = useState({ from: "", to: "" });
     const [error, setError] = useState<string | null>(null);
 
-    useEffect(() => {
-        let cancelled = false;
-        void (async () => {
-            const [loadedEvents, loadedProfile] = await Promise.all([
-                data.loadPetNotableEvents().catch(() => [] as PetNotableEvent[]),
-                data.loadPetProfile().catch(() => null),
-            ]);
-            if (cancelled) return;
-            setEvents(loadedEvents);
-            setProfile(loadedProfile);
-            setHydrated(true);
-        })();
-        return () => { cancelled = true; };
-    }, [data]);
-
     const persist = (next: PetNotableEvent[]): void => {
-        setEvents(next);
-        void data.savePetNotableEvents(next).catch(persistenceError("pet notable events"));
+        pets.setNotableEvents(next);
     };
 
     const addEvent = (event: React.FormEvent): void => {
@@ -80,11 +58,11 @@ export const PetTimelineTab: React.FC = () => {
         try {
             const created = createPetNotableEvent(
                 { title: draft.title, notes: draft.notes, timestamp: notableEventTimestamp(draft.date) },
-                new Date(),
-                petUuid(),
+                pets.now(),
+                pets.uuid(),
             );
             persist([...events, created]);
-            setDraft(emptyDraft());
+            setDraft(emptyDraft(pets.now()));
             setError(null);
         } catch (caught) {
             setError(messageFor(caught, "Could not add the event"));
@@ -109,7 +87,7 @@ export const PetTimelineTab: React.FC = () => {
             const corrected = correctNotableEvent(
                 existing,
                 { title: editDraft.title, notes: editDraft.notes, timestamp: notableEventTimestamp(editDraft.date) },
-                new Date(),
+                pets.now(),
             );
             persist(events.map((entry) => (entry.id === editingId ? corrected : entry)));
             setEditingId(null);
@@ -119,7 +97,7 @@ export const PetTimelineTab: React.FC = () => {
         }
     };
 
-    if (!hydrated) {
+    if (!pets.hydrated) {
         return (
             <div className="flex h-full items-center justify-center text-xs text-neutral-500" role="status">
                 Loading…

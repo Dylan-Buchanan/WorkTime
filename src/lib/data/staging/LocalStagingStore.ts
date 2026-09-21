@@ -70,6 +70,7 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         petActivityTombstones: {},
         petProfile: null,
         petProfileUpdatedAt: null,
+        petProfileTombstone: null,
         petScheduleItems: {},
         petScheduleUpdatedAt: {},
         petScheduleTombstones: {},
@@ -203,6 +204,45 @@ function countTodoCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapshot
     return count;
 }
 
+function countVersionedDeltas<T>(
+    current: Record<string, T>, stamps: Record<string, string>,
+    tombstones: Record<string, { id: string; deletedAt: string }>,
+    baseline: Record<string, { value: T; updatedAt: string }>,
+): number {
+    let count = 0;
+    for (const [id, value] of Object.entries(current)) {
+        const row = baseline[id];
+        if (!row || !deepValuesEqual(value, row.value) || (stamps[id] !== undefined && stamps[id] !== row.updatedAt)) count += 1;
+    }
+    for (const id of Object.keys(tombstones)) if (baseline[id]) count += 1;
+    return count;
+}
+
+function countPetDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = countVersionedDeltas(record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
+    count += countVersionedDeltas(record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
+    count += countVersionedDeltas(record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords);
+    count += countVersionedDeltas(record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries);
+    count += countVersionedDeltas(record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills);
+    count += countVersionedDeltas(record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations);
+    count += countVersionedDeltas(record.petNotableEvents, record.petNotableEventUpdatedAt, record.petNotableEventTombstones, base.petNotableEvents);
+    if (record.petProfileTombstone ? base.petProfile.value !== null : versionedChanged(
+        record.petProfileUpdatedAt, base.petProfile.updatedAt, record.petProfile, base.petProfile.value,
+    )) count += 1;
+    return count;
+}
+
+function countUninitializedPetDeltas(record: StagedOwnerRecord): number {
+    return Object.keys(record.petActivityRecords).length + Object.keys(record.petActivityTombstones).length +
+        Object.keys(record.petScheduleItems).length + Object.keys(record.petScheduleTombstones).length +
+        Object.keys(record.petNapRecords).length + Object.keys(record.petNapTombstones).length +
+        Object.keys(record.petWeightEntries).length + Object.keys(record.petWeightTombstones).length +
+        Object.keys(record.petTrainingSkills).length + Object.keys(record.petTrainingSkillTombstones).length +
+        Object.keys(record.petFixations).length + Object.keys(record.petFixationTombstones).length +
+        Object.keys(record.petNotableEvents).length + Object.keys(record.petNotableEventTombstones).length +
+        (record.petProfile || record.petProfileTombstone ? 1 : 0);
+}
+
 /**
  * Entity-based pending work relative to `lastSynced`. Task upserts, task
  * tombstones, new/changed logs, log tombstones, habit upserts, habit
@@ -216,7 +256,10 @@ function countTodoCompletionDeltas(record: StagedOwnerRecord, base: SyncSnapshot
  * as one unsynced item instead of zero.
  */
 function countPending(record: StagedOwnerRecord): number {
-    if (!record.initialized || record.lastSynced === null) return record.unbootstrapped ? 1 : 0;
+    if (!record.initialized || record.lastSynced === null) {
+        const pets = countUninitializedPetDeltas(record);
+        return pets || (record.unbootstrapped ? 1 : 0);
+    }
     const base = record.lastSynced;
 
     if (record.fullWipe) {
@@ -226,6 +269,7 @@ function countPending(record: StagedOwnerRecord): number {
         count += countHabitCompletionDeltas(record, base);
         count += countTodoDeltas(record, base);
         count += countTodoCompletionDeltas(record, base);
+        count += countPetDeltas(record, base);
         return count;
     }
 
@@ -288,6 +332,7 @@ function countPending(record: StagedOwnerRecord): number {
     count += countHabitCompletionDeltas(record, base);
     count += countTodoDeltas(record, base);
     count += countTodoCompletionDeltas(record, base);
+    count += countPetDeltas(record, base);
 
     return count;
 }
@@ -411,33 +456,26 @@ export class LocalStagingStore {
                         Object.entries(baseline.todos).map(([id, row]) => [id, row.value]),
                     ),
                     todoCompletions: { ...baseline.todoCompletions },
-                    // The remote baseline does not carry the pet domain yet
-                    // (Issue G), so preserve the local pet records rather than
-                    // discarding data that could not be restored.
-                    petActivityRecords: { ...current.petActivityRecords },
-                    petActivityUpdatedAt: { ...current.petActivityUpdatedAt },
-                    petActivityTombstones: { ...current.petActivityTombstones },
-                    petProfile: current.petProfile,
-                    petProfileUpdatedAt: current.petProfileUpdatedAt,
-                    petScheduleItems: { ...current.petScheduleItems },
-                    petScheduleUpdatedAt: { ...current.petScheduleUpdatedAt },
-                    petScheduleTombstones: { ...current.petScheduleTombstones },
+                    petActivityRecords: Object.fromEntries(Object.entries(baseline.petActivityRecords).map(([id, row]) => [id, row.value])),
+                    petActivityUpdatedAt: {},
+                    petActivityTombstones: {},
+                    petProfile: baseline.petProfile.value,
+                    petProfileUpdatedAt: null,
+                    petProfileTombstone: null,
+                    petScheduleItems: Object.fromEntries(Object.entries(baseline.petScheduleItems).map(([id, row]) => [id, row.value])),
+                    petScheduleUpdatedAt: {},
+                    petScheduleTombstones: {},
                     petReminderMarks: { ...current.petReminderMarks },
-                    petNapRecords: { ...current.petNapRecords },
-                    petNapUpdatedAt: { ...current.petNapUpdatedAt },
-                    petNapTombstones: { ...current.petNapTombstones },
-                    petWeightEntries: { ...current.petWeightEntries },
-                    petWeightUpdatedAt: { ...current.petWeightUpdatedAt },
-                    petWeightTombstones: { ...current.petWeightTombstones },
-                    petTrainingSkills: { ...current.petTrainingSkills },
-                    petTrainingSkillUpdatedAt: { ...current.petTrainingSkillUpdatedAt },
-                    petTrainingSkillTombstones: { ...current.petTrainingSkillTombstones },
-                    petFixations: { ...current.petFixations },
-                    petFixationUpdatedAt: { ...current.petFixationUpdatedAt },
-                    petFixationTombstones: { ...current.petFixationTombstones },
-                    petNotableEvents: { ...current.petNotableEvents },
-                    petNotableEventUpdatedAt: { ...current.petNotableEventUpdatedAt },
-                    petNotableEventTombstones: { ...current.petNotableEventTombstones },
+                    petNapRecords: Object.fromEntries(Object.entries(baseline.petNapRecords).map(([id, row]) => [id, row.value])),
+                    petNapUpdatedAt: {}, petNapTombstones: {},
+                    petWeightEntries: Object.fromEntries(Object.entries(baseline.petWeightEntries).map(([id, row]) => [id, row.value])),
+                    petWeightUpdatedAt: {}, petWeightTombstones: {},
+                    petTrainingSkills: Object.fromEntries(Object.entries(baseline.petTrainingSkills).map(([id, row]) => [id, row.value])),
+                    petTrainingSkillUpdatedAt: {}, petTrainingSkillTombstones: {},
+                    petFixations: Object.fromEntries(Object.entries(baseline.petFixations).map(([id, row]) => [id, row.value])),
+                    petFixationUpdatedAt: {}, petFixationTombstones: {},
+                    petNotableEvents: Object.fromEntries(Object.entries(baseline.petNotableEvents).map(([id, row]) => [id, row.value])),
+                    petNotableEventUpdatedAt: {}, petNotableEventTombstones: {},
                 };
             const stored = { ...next, revision: current.revision + 1 };
             try {

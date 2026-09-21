@@ -12,7 +12,16 @@ const LOG_ID = "00000000-0000-4000-8000-100000000002";
 const HABIT_ID = "00000000-0000-4000-8000-100000000003";
 const COMPLETION_ID = "00000000-0000-4000-8000-100000000004";
 const TODO_ID = "00000000-0000-4000-8000-100000000006";
+const PET_PROFILE_ID = "00000000-0000-4000-8000-100000000010";
+const PET_ACTIVITY_ID = "00000000-0000-4000-8000-100000000011";
+const PET_SCHEDULE_ID = "00000000-0000-4000-8000-100000000012";
+const PET_NAP_ID = "00000000-0000-4000-8000-100000000013";
+const PET_WEIGHT_ID = "00000000-0000-4000-8000-100000000014";
+const PET_SKILL_ID = "00000000-0000-4000-8000-100000000015";
+const PET_FIXATION_ID = "00000000-0000-4000-8000-100000000016";
+const PET_EVENT_ID = "00000000-0000-4000-8000-100000000017";
 const FOREIGN_OWNER = "ffffffff-ffff-4000-8000-ffffffffffff";
+const EARLIER = "2025-12-01T00:00:00.000Z";
 const T0 = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T00:00:00.000Z";
 
@@ -36,6 +45,10 @@ function emptyPlan(): PushPlan {
         todoTombstones: [],
         todoCompletionUpserts: [],
         todoCompletionTombstones: [],
+        petActivityUpserts: [], petActivityTombstones: [], petProfile: null, petProfileTombstone: null,
+        petScheduleUpserts: [], petScheduleTombstones: [], petNapUpserts: [], petNapTombstones: [],
+        petWeightUpserts: [], petWeightTombstones: [], petTrainingSkillUpserts: [], petTrainingSkillTombstones: [],
+        petFixationUpserts: [], petFixationTombstones: [], petNotableEventUpserts: [], petNotableEventTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -53,6 +66,10 @@ function emptyPlan(): PushPlan {
             todoTombstones: {},
             todoCompletionUpserts: {},
             todoCompletionTombstones: {},
+            petActivityUpserts: {}, petActivityTombstones: {}, petProfile: null, petProfileTombstone: null,
+            petScheduleUpserts: {}, petScheduleTombstones: {}, petNapUpserts: {}, petNapTombstones: {},
+            petWeightUpserts: {}, petWeightTombstones: {}, petTrainingSkillUpserts: {}, petTrainingSkillTombstones: {},
+            petFixationUpserts: {}, petFixationTombstones: {}, petNotableEventUpserts: {}, petNotableEventTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -311,6 +328,136 @@ describe("SupabaseDataAccess transport", () => {
         expect(snapshot.habits[HABIT_ID].value.name).toBe("Survivor habit");
         expect(epoch(snapshot.habits[HABIT_ID].updatedAt)).toBe(epoch(T0));
         expect(snapshot.habitCompletions[COMPLETION_ID].id).toBe(COMPLETION_ID);
+    });
+
+    it("round-trips pet rows, applies LWW tombstones, and preserves pets across a full wipe", async () => {
+        user = await createLocalUser();
+        const remote = new SupabaseDataAccess(user.client);
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            petProfile: {
+                value: { id: PET_PROFILE_ID, name: "Whitney", birthDate: "2026-07-10", createdAt: T0, updatedAt: T0 },
+                updatedAt: T0,
+            },
+            petActivityUpserts: [{
+                value: { id: PET_ACTIVITY_ID, activityType: "potty", timestamp: T0, createdAt: T0 },
+                updatedAt: T0,
+            }],
+            petScheduleUpserts: [{ value: { id: PET_SCHEDULE_ID, activityType: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
+            petNapUpserts: [{ value: { id: PET_NAP_ID, start: T0, end: null, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
+            petWeightUpserts: [{ value: { id: PET_WEIGHT_ID, timestamp: T0, weight: 5.25, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
+            petTrainingSkillUpserts: [{ value: { id: PET_SKILL_ID, label: "Sit", notes: "", status: "progressing", resolvedAt: null, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
+            petFixationUpserts: [{ value: { id: PET_FIXATION_ID, label: "Shoes", notes: "", resolvedAt: null, resolutionNote: "", createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
+            petNotableEventUpserts: [{ value: { id: PET_EVENT_ID, title: "First walk", notes: "", timestamp: T0, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
+        });
+        let snapshot = await remote.pull(user.userId);
+        expect(snapshot.petProfile.value?.name).toBe("Whitney");
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.activityType).toBe("potty");
+        expect(snapshot.petScheduleItems[PET_SCHEDULE_ID].value.label).toBe("Breakfast");
+        expect(snapshot.petNapRecords[PET_NAP_ID].value.end).toBeNull();
+        expect(snapshot.petWeightEntries[PET_WEIGHT_ID].value.weight).toBe(5.25);
+        expect(snapshot.petTrainingSkills[PET_SKILL_ID].value.status).toBe("progressing");
+        expect(snapshot.petFixations[PET_FIXATION_ID].value.label).toBe("Shoes");
+        expect(snapshot.petNotableEvents[PET_EVENT_ID].value.title).toBe("First walk");
+
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            petProfile: {
+                value: { id: PET_PROFILE_ID, name: "Stale profile", birthDate: "2026-07-10", createdAt: T0, updatedAt: T0 },
+                updatedAt: EARLIER,
+            },
+            petActivityUpserts: [{
+                value: { id: PET_ACTIVITY_ID, activityType: "feeding", timestamp: T0, createdAt: T0 },
+                updatedAt: EARLIER,
+            }],
+            petScheduleUpserts: [{ value: { id: PET_SCHEDULE_ID, activityType: "feeding", label: "Stale breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
+            petNapUpserts: [{ value: { id: PET_NAP_ID, start: T0, end: T0, createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
+            petWeightUpserts: [{ value: { id: PET_WEIGHT_ID, timestamp: T0, weight: 99, createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
+            petTrainingSkillUpserts: [{ value: { id: PET_SKILL_ID, label: "Stale skill", notes: "", status: "introduced", resolvedAt: null, createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
+            petFixationUpserts: [{ value: { id: PET_FIXATION_ID, label: "Stale fixation", notes: "", resolvedAt: null, resolutionNote: "", createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
+            petNotableEventUpserts: [{ value: { id: PET_EVENT_ID, title: "Stale event", notes: "", timestamp: T0, createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
+            petProfileTombstone: { id: PET_PROFILE_ID, deletedAt: EARLIER },
+            petActivityTombstones: [{ id: PET_ACTIVITY_ID, deletedAt: EARLIER }],
+            petScheduleTombstones: [{ id: PET_SCHEDULE_ID, deletedAt: EARLIER }],
+            petNapTombstones: [{ id: PET_NAP_ID, deletedAt: EARLIER }],
+            petWeightTombstones: [{ id: PET_WEIGHT_ID, deletedAt: EARLIER }],
+            petTrainingSkillTombstones: [{ id: PET_SKILL_ID, deletedAt: EARLIER }],
+            petFixationTombstones: [{ id: PET_FIXATION_ID, deletedAt: EARLIER }],
+            petNotableEventTombstones: [{ id: PET_EVENT_ID, deletedAt: EARLIER }],
+        });
+        snapshot = await remote.pull(user.userId);
+        expect(snapshot.petProfile.value?.name).toBe("Whitney");
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.activityType).toBe("potty");
+        expect(snapshot.petScheduleItems[PET_SCHEDULE_ID].value.label).toBe("Breakfast");
+        expect(snapshot.petNapRecords[PET_NAP_ID].value.end).toBeNull();
+        expect(snapshot.petWeightEntries[PET_WEIGHT_ID].value.weight).toBe(5.25);
+        expect(snapshot.petTrainingSkills[PET_SKILL_ID].value.label).toBe("Sit");
+        expect(snapshot.petFixations[PET_FIXATION_ID].value.label).toBe("Shoes");
+        expect(snapshot.petNotableEvents[PET_EVENT_ID].value.title).toBe("First walk");
+
+        const defaults = defaultAppState();
+        await remote.push(user.userId, {
+            ...emptyPlan(), fullWipe: true,
+            settings: { value: defaults.settings, updatedAt: LATER },
+            timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: LATER, newGeneration: true },
+        });
+        snapshot = await remote.pull(user.userId);
+        expect(snapshot.petProfile.value?.id).toBe(PET_PROFILE_ID);
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID]).toBeDefined();
+        expect(snapshot.petNotableEvents[PET_EVENT_ID]).toBeDefined();
+
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            // The singleton delete is owner-scoped and LWW-gated even if this
+            // client remembers an older profile id.
+            petProfileTombstone: { id: "00000000-0000-4000-8000-100000000099", deletedAt: LATER },
+            petActivityTombstones: [{ id: PET_ACTIVITY_ID, deletedAt: LATER }],
+            petScheduleTombstones: [{ id: PET_SCHEDULE_ID, deletedAt: LATER }],
+            petNapTombstones: [{ id: PET_NAP_ID, deletedAt: LATER }],
+            petWeightTombstones: [{ id: PET_WEIGHT_ID, deletedAt: LATER }],
+            petTrainingSkillTombstones: [{ id: PET_SKILL_ID, deletedAt: LATER }],
+            petFixationTombstones: [{ id: PET_FIXATION_ID, deletedAt: LATER }],
+            petNotableEventTombstones: [{ id: PET_EVENT_ID, deletedAt: LATER }],
+        });
+        snapshot = await remote.pull(user.userId);
+        expect(snapshot.petProfile).toEqual({ value: null, updatedAt: null });
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID]).toBeUndefined();
+        expect(snapshot.petScheduleItems).toEqual({});
+        expect(snapshot.petNapRecords).toEqual({});
+        expect(snapshot.petWeightEntries).toEqual({});
+        expect(snapshot.petTrainingSkills).toEqual({});
+        expect(snapshot.petFixations).toEqual({});
+        expect(snapshot.petNotableEvents).toEqual({});
+    });
+
+    it("enforces owner RLS and rejects cross-owner pet ids", async () => {
+        user = await createLocalUser();
+        const other = await createLocalUser();
+        try {
+            const remote = new SupabaseDataAccess(user.client);
+            await remote.push(user.userId, {
+                ...emptyPlan(),
+                petActivityUpserts: [{ value: { id: PET_ACTIVITY_ID, activityType: "potty", timestamp: T0, createdAt: T0 }, updatedAt: T0 }],
+            });
+            expect((await other.client.from("pet_activity_records").select("id")).data).toEqual([]);
+            const spoof = await other.client.from("pet_activity_records").insert({
+                id: PET_SCHEDULE_ID,
+                owner_id: user.userId,
+                activity_type: "potty",
+                occurred_at: T0,
+            });
+            expect(spoof.error).not.toBeNull();
+
+            // The definer RPC must not select another owner's row via a global
+            // primary-key conflict. A colliding id fails without modifying it.
+            await expect(new SupabaseDataAccess(other.client).push(other.userId, {
+                ...emptyPlan(),
+                petActivityUpserts: [{ value: { id: PET_ACTIVITY_ID, activityType: "feeding", timestamp: LATER, createdAt: T0 }, updatedAt: LATER }],
+            })).rejects.toThrow();
+            expect((await remote.pull(user.userId)).petActivityRecords[PET_ACTIVITY_ID].value.activityType).toBe("potty");
+        } finally {
+            await other.cleanup();
+        }
     });
 
     it("rolls back the whole transition when a gated write fails", async () => {

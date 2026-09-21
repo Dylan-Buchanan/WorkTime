@@ -99,6 +99,8 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
             completed: false,
         },
         pmState: { value: null, updatedAt: null },
+        petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
+        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -106,7 +108,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const base = snapshot();
     return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -120,6 +122,7 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
         },
         inProgressPomodoros: {},
         pmState: null,
+        petProfileTombstone: null,
         taskUpdatedAt: {},
         settingsUpdatedAt: base.settings.updatedAt,
         timerUpdatedAt: base.timerState.updatedAt,

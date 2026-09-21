@@ -56,6 +56,10 @@ function emptyPlan(): PushPlan {
         todoTombstones: [],
         todoCompletionUpserts: [],
         todoCompletionTombstones: [],
+        petActivityUpserts: [], petActivityTombstones: [], petProfile: null, petProfileTombstone: null,
+        petScheduleUpserts: [], petScheduleTombstones: [], petNapUpserts: [], petNapTombstones: [],
+        petWeightUpserts: [], petWeightTombstones: [], petTrainingSkillUpserts: [], petTrainingSkillTombstones: [],
+        petFixationUpserts: [], petFixationTombstones: [], petNotableEventUpserts: [], petNotableEventTombstones: [],
         settings: null,
         timerState: null,
         pmState: null,
@@ -73,6 +77,10 @@ function emptyPlan(): PushPlan {
             todoTombstones: {},
             todoCompletionUpserts: {},
             todoCompletionTombstones: {},
+            petActivityUpserts: {}, petActivityTombstones: {}, petProfile: null, petProfileTombstone: null,
+            petScheduleUpserts: {}, petScheduleTombstones: {}, petNapUpserts: {}, petNapTombstones: {},
+            petWeightUpserts: {}, petWeightTombstones: {}, petTrainingSkillUpserts: {}, petTrainingSkillTombstones: {},
+            petFixationUpserts: {}, petFixationTombstones: {}, petNotableEventUpserts: {}, petNotableEventTombstones: {},
             settings: null,
             timerState: null,
             pmState: null,
@@ -563,10 +571,10 @@ describe("local-first staged sync transport", () => {
         expect((await data.pull(owner.userId)).todoCompletions[TODO_COMPLETION_A]).toBeDefined();
     });
 
-    it("removes the pre-completion apply_staged_sync signature", async () => {
+    it("removes the pre-pet apply_staged_sync signature", async () => {
         const owner = track(await createLocalUser());
-        // The old 18-argument named-argument call must no longer resolve after
-        // the forward-only migration adds the two completion parameters.
+        // The old 20-argument named-argument call must no longer resolve after
+        // the forward-only migration adds the pet-domain parameters.
         const response = await owner.client.rpc("apply_staged_sync", {
             p_task_upserts: null,
             p_task_tombstones: null,
@@ -578,6 +586,8 @@ describe("local-first staged sync transport", () => {
             p_habit_completion_tombstones: null,
             p_todo_upserts: null,
             p_todo_tombstones: null,
+            p_todo_completion_upserts: null,
+            p_todo_completion_tombstones: null,
             p_settings_data: null,
             p_settings_updated_at: null,
             p_timer_data: null,

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../../state/types";
+import type { ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetProfile, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
 import { LocalStagingStore } from "../staging/LocalStagingStore";
 import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice } from "../staging/types";
 import { buildPushPlan, commitAcknowledgedPush, isLiveTimer, mergePulledSnapshot, MergeError } from "./merge";
+import { isPlanNonEmpty, pushedSnapshotFromPlan } from "./SyncCoordinator";
 import type { Todo, TodoCompletion } from "../../todos";
 
 const NOW = new Date("2026-01-10T00:00:00.000Z");
@@ -72,6 +73,14 @@ function TC(id: string, todoId: string, overrides: Partial<TodoCompletion> = {})
     return { id, todoId, bucket: "2026-01-05", createdAt: T2, updatedAt: T2, ...overrides };
 }
 
+function PA(id: string, timestamp = T1): PetActivityRecord {
+    return { id, activityType: "potty", timestamp, createdAt: T1 };
+}
+
+function PP(name: string, updatedAt = T1): PetProfile {
+    return { id: "profile-1", name, birthDate: "2025-12-01", createdAt: T1, updatedAt };
+}
+
 /**
  * A pulled habit snapshot row: the domain `updatedAt` mirrors the transport
  * `updated_at` value exactly, as `SupabaseDataAccess.validateHabit` produces.
@@ -95,6 +104,8 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         settings: { value: { ...defaultAppState().settings }, updatedAt: T1 },
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T1, completed: false },
         pmState: { value: null, updatedAt: null },
+        petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
+        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -103,7 +114,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -145,6 +156,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         petActivityTombstones: {},
         petProfile: null,
         petProfileUpdatedAt: null,
+        petProfileTombstone: null,
         petScheduleItems: {},
         petScheduleUpdatedAt: {},
         petScheduleTombstones: {},
@@ -170,13 +182,14 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
         state: defaultAppState(),
         inProgressPomodoros: {},
         pmState: null,
+        petProfileTombstone: null,
         taskUpdatedAt: {},
         settingsUpdatedAt: null,
         timerUpdatedAt: null,
@@ -1531,6 +1544,106 @@ describe("to-do staged merge", () => {
         const merged = mergePulledSnapshot(record, snapshot({ todos: { td1: { value: remoteTodo, updatedAt: T3 } } }), NOW);
         expect(merged.record.todos.td1.title).toBe("Remote");
         expect(merged.record.todoUpdatedAt).toEqual({});
+    });
+});
+
+describe("pet staged merge", () => {
+    it("builds, acknowledges, and counts pet-only deltas", async () => {
+        const base = snapshot();
+        const activity = PA("pet-a", T2);
+        const record = recordFromBaseline(base, {
+            petActivityRecords: { [activity.id]: activity },
+            petActivityUpdatedAt: { [activity.id]: T2 },
+            petProfile: PP("Mochi", T2),
+            petProfileUpdatedAt: T2,
+        });
+        const merged = mergePulledSnapshot(record, base, NOW);
+        const plan = buildPushPlan(merged.record);
+
+        expect(merged.pendingCount).toBe(2);
+        expect(plan.petActivityUpserts).toEqual([{ value: activity, updatedAt: T2 }]);
+        expect(plan.petProfile).toEqual({ value: record.petProfile, updatedAt: T2 });
+        expect(isPlanNonEmpty(plan)).toBe(true);
+
+        const pushed = pushedSnapshotFromPlan(merged.record, plan);
+        expect(pushed.petActivityRecords[activity.id]).toEqual({ value: activity, updatedAt: T2 });
+        expect(pushed.petProfile.value?.name).toBe("Mochi");
+        const committed = commitAcknowledgedPush(merged.record, plan, pushed);
+        expect(committed.petActivityUpdatedAt).toEqual({});
+        expect(committed.petProfileUpdatedAt).toBeNull();
+        expect(buildPushPlan(committed).petActivityUpserts).toEqual([]);
+
+        const store = new LocalStagingStore(window.localStorage);
+        await store.update("owner-a", () => merged.record);
+        expect(store.pendingCount("owner-a")).toBe(merged.pendingCount);
+    });
+
+    it("applies whole-row LWW and keeps a tombstone until remote deletion is observed", () => {
+        const baseValue = PA("pet-a", T1);
+        const base = snapshot({ petActivityRecords: { "pet-a": { value: baseValue, updatedAt: T1 } } });
+        const localValue = PA("pet-a", T2);
+        const local = recordFromBaseline(base, {
+            petActivityRecords: { "pet-a": localValue }, petActivityUpdatedAt: { "pet-a": T3 },
+        });
+        const olderRemote = snapshot({ petActivityRecords: { "pet-a": { value: PA("pet-a", T3), updatedAt: T2 } } });
+        const localWins = mergePulledSnapshot(local, olderRemote, NOW);
+        expect(localWins.record.petActivityRecords["pet-a"]).toEqual(localValue);
+        expect(buildPushPlan(localWins.record).petActivityUpserts).toEqual([{ value: localValue, updatedAt: T3 }]);
+
+        const newerRemote = snapshot({ petActivityRecords: { "pet-a": { value: PA("pet-a", T3), updatedAt: T3_LATER } } });
+        const remoteWins = mergePulledSnapshot(local, newerRemote, NOW);
+        expect(remoteWins.record.petActivityRecords["pet-a"].timestamp).toBe(T3);
+        expect(remoteWins.record.petActivityUpdatedAt).toEqual({});
+
+        const deleted = recordFromBaseline(base, {
+            petActivityRecords: {}, petActivityTombstones: { "pet-a": { id: "pet-a", deletedAt: T2 } },
+        });
+        const suppressed = mergePulledSnapshot(deleted, base, NOW);
+        expect(suppressed.record.petActivityRecords).toEqual({});
+        expect(suppressed.record.petActivityTombstones["pet-a"]).toEqual({ id: "pet-a", deletedAt: T2 });
+        expect(buildPushPlan(suppressed.record).petActivityTombstones).toEqual([{ id: "pet-a", deletedAt: T2 }]);
+        expect(mergePulledSnapshot(suppressed.record, snapshot(), NOW).record.petActivityTombstones).toEqual({});
+    });
+
+    it("preserves baseline pets during a full wipe and tolerates an older-shaped plan", () => {
+        const activity = PA("pet-a");
+        const base = snapshot({ petActivityRecords: { "pet-a": { value: activity, updatedAt: T1 } } });
+        const record = recordFromBaseline(base, {
+            petActivityRecords: { "pet-a": activity }, fullWipe: { createdAt: T3 },
+        });
+        const plan = buildPushPlan(record);
+        expect(plan.petActivityUpserts).toEqual([]);
+        expect(pushedSnapshotFromPlan(record, plan).petActivityRecords["pet-a"]).toEqual(base.petActivityRecords["pet-a"]);
+
+        const empty = buildPushPlan(recordFromBaseline(snapshot()));
+        const legacy = {
+            ...empty,
+            petActivityUpserts: undefined,
+            petActivityTombstones: undefined,
+            petProfile: undefined,
+            petProfileTombstone: undefined,
+            petScheduleUpserts: undefined,
+            petScheduleTombstones: undefined,
+            petNapUpserts: undefined,
+            petNapTombstones: undefined,
+            petWeightUpserts: undefined,
+            petWeightTombstones: undefined,
+            petTrainingSkillUpserts: undefined,
+            petTrainingSkillTombstones: undefined,
+            petFixationUpserts: undefined,
+            petFixationTombstones: undefined,
+            petNotableEventUpserts: undefined,
+            petNotableEventTombstones: undefined,
+            acknowledged: {
+                ...empty.acknowledged,
+                petActivityUpserts: undefined,
+                petActivityTombstones: undefined,
+                petProfile: undefined,
+                petProfileTombstone: undefined,
+            },
+        };
+        expect(isPlanNonEmpty(legacy)).toBe(false);
+        expect(() => pushedSnapshotFromPlan(recordFromBaseline(snapshot()), legacy)).not.toThrow();
     });
 });
 

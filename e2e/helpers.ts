@@ -2,7 +2,7 @@ import { Browser, BrowserContext, expect, Page } from "@playwright/test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAuthStorageKey } from "../src/lib/supabaseAuthStorage";
 import { createLocalUser, localSupabaseConfig, type LocalUser } from "../tests/supabase/localSupabase";
-import { AppStateData, Habit, HabitCompletion, Settings } from "../src/state/types";
+import { AppStateData, Habit, HabitCompletion, PetActivityRecord, PetProfile, Settings } from "../src/state/types";
 
 export interface TestApp {
     context: BrowserContext;
@@ -104,6 +104,36 @@ export async function backendHabitState(app: TestApp): Promise<{
             createdAt: completion.created_at,
             updatedAt: completion.updated_at,
         } satisfies HabitCompletion])),
+    };
+}
+
+export async function backendPetState(app: TestApp): Promise<{
+    profile: PetProfile | null;
+    activities: Record<string, PetActivityRecord>;
+}> {
+    const [profile, activities] = await Promise.all([
+        app.client.from("pet_profiles").select("*").maybeSingle(),
+        app.client.from("pet_activity_records").select("*").order("occurred_at").order("id"),
+    ]);
+    if (profile.error) throw profile.error;
+    if (activities.error) throw activities.error;
+
+    const profileRow = profile.data;
+    return {
+        profile: profileRow ? {
+            id: profileRow.id,
+            name: profileRow.name,
+            birthDate: profileRow.birth_date,
+            createdAt: profileRow.created_at,
+            updatedAt: profileRow.updated_at,
+        } satisfies PetProfile : null,
+        activities: Object.fromEntries((activities.data ?? []).map((activity: any) => [activity.id, {
+            id: activity.id,
+            activityType: activity.activity_type,
+            timestamp: activity.occurred_at,
+            ...(activity.duration_minutes === null ? {} : { durationMinutes: activity.duration_minutes }),
+            createdAt: activity.created_at,
+        } satisfies PetActivityRecord])),
     };
 }
 

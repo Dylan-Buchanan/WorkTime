@@ -1,4 +1,8 @@
-import type { ActiveTimer, AppStateData, Habit, HabitCompletion, PomodoroLogEntry, Settings, Task } from "../../../state/types";
+import type {
+    ActiveTimer, AppStateData, Habit, HabitCompletion, PetActivityRecord, PetFixation,
+    PetNapRecord, PetNotableEvent, PetProfile, PetScheduleItem, PetTrainingSkill,
+    PetWeightEntry, PomodoroLogEntry, Settings, Task,
+} from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
 import { defaultAppState, pruneInProgressPomodoros } from "../../engine";
 import { deepValuesEqual } from "../staging/serialization";
@@ -34,6 +38,14 @@ const EMPTY_SNAPSHOT: SyncSnapshot = {
     settings: { value: null, updatedAt: null },
     timerState: { value: null, updatedAt: null, completed: false },
     pmState: { value: null, updatedAt: null },
+    petActivityRecords: {},
+    petProfile: { value: null, updatedAt: null },
+    petScheduleItems: {},
+    petNapRecords: {},
+    petWeightEntries: {},
+    petTrainingSkills: {},
+    petFixations: {},
+    petNotableEvents: {},
 };
 
 const TASK_FIELDS: ReadonlyArray<keyof Task> = [
@@ -717,6 +729,130 @@ function mergeSingletonValue<T>(
     return { value: localValue, stamp: null, changed: false };
 }
 
+interface MergedVersionedCollection<T> {
+    values: Record<string, T>;
+    stamps: Record<string, string>;
+    tombstones: Record<string, { id: string; deletedAt: string }>;
+}
+
+/** Whole-row LWW merge used by the pet collections. */
+function mergeVersionedCollection<T>(
+    label: string,
+    local: Record<string, T>,
+    localStamps: Record<string, string>,
+    localTombstones: Record<string, { id: string; deletedAt: string }>,
+    base: Record<string, { value: T; updatedAt: string }>,
+    remote: Record<string, { value: T; updatedAt: string }>,
+): MergedVersionedCollection<T> {
+    const values: Record<string, T> = {};
+    const stamps: Record<string, string> = {};
+    const tombstones: Record<string, { id: string; deletedAt: string }> = {};
+    const ids = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(localTombstones), ...Object.keys(remote)]);
+    for (const id of ids) {
+        const localValue = local[id];
+        const localStamp = localStamps[id];
+        const tombstone = localTombstones[id];
+        const baseRow = base[id];
+        const remoteRow = remote[id];
+        if (tombstone) {
+            if (remoteRow && timestampMs(remoteRow.updatedAt) > timestampMs(tombstone.deletedAt)) {
+                values[id] = { ...remoteRow.value };
+            } else if (remoteRow) {
+                tombstones[id] = { ...tombstone };
+            }
+            continue;
+        }
+        if (!localValue) {
+            if (remoteRow) values[id] = { ...remoteRow.value };
+            continue;
+        }
+        if (!remoteRow) {
+            if (!baseRow) {
+                if (!localStamp) throw new MergeError(`Locally-created ${label} "${id}" has no updated_at stamp`);
+                values[id] = { ...localValue };
+                stamps[id] = localStamp;
+            } else if (
+                localStamp && timestampMs(localStamp) > timestampMs(baseRow.updatedAt) &&
+                !valuesEqual(localValue, baseRow.value)
+            ) {
+                values[id] = { ...localValue };
+                stamps[id] = localStamp;
+            }
+            continue;
+        }
+        if (localStamp && timestampMs(localStamp) > timestampMs(remoteRow.updatedAt) && !valuesEqual(localValue, remoteRow.value)) {
+            values[id] = { ...localValue };
+            stamps[id] = localStamp;
+        } else {
+            values[id] = { ...remoteRow.value };
+        }
+    }
+    return { values, stamps, tombstones };
+}
+
+function mergePetProfile(record: StagedOwnerRecord, base: SyncSnapshot, remote: SyncSnapshot, now: Date) {
+    const tombstone = record.petProfileTombstone;
+    if (tombstone) {
+        if (remote.petProfile.value && remote.petProfile.updatedAt &&
+            timestampMs(remote.petProfile.updatedAt) > timestampMs(tombstone.deletedAt)) {
+            return { value: remote.petProfile.value, stamp: null, tombstone: null };
+        }
+        if (remote.petProfile.value) return { value: null, stamp: null, tombstone };
+        return { value: null, stamp: null, tombstone: null };
+    }
+    const merged = mergeSingletonValue(record.petProfile, record.petProfileUpdatedAt, remote.petProfile, base.petProfile, now);
+    return { value: merged.value, stamp: merged.stamp, tombstone: null };
+}
+
+function countVersionedDeltas<T>(
+    local: Record<string, T>, stamps: Record<string, string>,
+    tombstones: Record<string, { id: string; deletedAt: string }>,
+    base: Record<string, { value: T; updatedAt: string }>,
+): number {
+    let count = 0;
+    for (const [id, value] of Object.entries(local)) {
+        const baseline = base[id];
+        if (!baseline || !valuesEqual(value, baseline.value) || (stamps[id] !== undefined && stamps[id] !== baseline.updatedAt)) count += 1;
+    }
+    for (const id of Object.keys(tombstones)) if (base[id]) count += 1;
+    return count;
+}
+
+function countPetDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = countVersionedDeltas(record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
+    count += countVersionedDeltas(record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
+    count += countVersionedDeltas(record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords);
+    count += countVersionedDeltas(record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries);
+    count += countVersionedDeltas(record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills);
+    count += countVersionedDeltas(record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations);
+    count += countVersionedDeltas(record.petNotableEvents, record.petNotableEventUpdatedAt, record.petNotableEventTombstones, base.petNotableEvents);
+    if (record.petProfileTombstone ? base.petProfile.value !== null : versionedChanged(
+        record.petProfileUpdatedAt, base.petProfile.updatedAt, record.petProfile, base.petProfile.value,
+    )) count += 1;
+    return count;
+}
+
+function mergePetPatch(record: StagedOwnerRecord, base: SyncSnapshot, remote: SyncSnapshot, now: Date): Partial<StagedOwnerRecord> {
+    const activity = mergeVersionedCollection("pet activity", record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords, remote.petActivityRecords);
+    const schedule = mergeVersionedCollection("pet schedule item", record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems, remote.petScheduleItems);
+    const naps = mergeVersionedCollection("pet nap", record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords, remote.petNapRecords);
+    const weights = mergeVersionedCollection("pet weight entry", record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries, remote.petWeightEntries);
+    const skills = mergeVersionedCollection("pet training skill", record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills, remote.petTrainingSkills);
+    const fixations = mergeVersionedCollection("pet fixation", record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations, remote.petFixations);
+    const events = mergeVersionedCollection("pet notable event", record.petNotableEvents, record.petNotableEventUpdatedAt, record.petNotableEventTombstones, base.petNotableEvents, remote.petNotableEvents);
+    const profile = mergePetProfile(record, base, remote, now);
+    return {
+        petActivityRecords: activity.values as Record<string, PetActivityRecord>, petActivityUpdatedAt: activity.stamps, petActivityTombstones: activity.tombstones,
+        petProfile: profile.value, petProfileUpdatedAt: profile.stamp, petProfileTombstone: profile.tombstone,
+        petScheduleItems: schedule.values as Record<string, PetScheduleItem>, petScheduleUpdatedAt: schedule.stamps, petScheduleTombstones: schedule.tombstones,
+        petNapRecords: naps.values as Record<string, PetNapRecord>, petNapUpdatedAt: naps.stamps, petNapTombstones: naps.tombstones,
+        petWeightEntries: weights.values as Record<string, PetWeightEntry>, petWeightUpdatedAt: weights.stamps, petWeightTombstones: weights.tombstones,
+        petTrainingSkills: skills.values as Record<string, PetTrainingSkill>, petTrainingSkillUpdatedAt: skills.stamps, petTrainingSkillTombstones: skills.tombstones,
+        petFixations: fixations.values as Record<string, PetFixation>, petFixationUpdatedAt: fixations.stamps, petFixationTombstones: fixations.tombstones,
+        petNotableEvents: events.values as Record<string, PetNotableEvent>, petNotableEventUpdatedAt: events.stamps, petNotableEventTombstones: events.tombstones,
+    };
+}
+
 /**
  * Habit deltas relative to the baseline, mirroring the staging store's counter:
  * each current habit that differs from `base.habits` and carries a new/different
@@ -813,6 +949,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
         count += countHabitCompletionDeltas(record, base);
         count += countTodoDeltas(record, base);
         count += countTodoCompletionDeltas(record, base);
+        count += countPetDeltas(record, base);
         return count;
     }
 
@@ -867,6 +1004,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
     count += countHabitCompletionDeltas(record, base);
     count += countTodoDeltas(record, base);
     count += countTodoCompletionDeltas(record, base);
+    count += countPetDeltas(record, base);
 
     return count;
 }
@@ -896,6 +1034,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         );
         const todos = mergeTodos(record.todos, record.todoUpdatedAt, record.todoTombstones, base, remote, now);
         const todoCompletions = mergeTodoCompletions(record.todoCompletions, record.todoCompletionTombstones, remote, todos.todos);
+        const pets = mergePetPatch(record, base, remote, now);
         const merged: StagedOwnerRecord = {
             ...record,
             initialized: true,
@@ -919,6 +1058,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             todoTombstones: todos.tombstones,
             todoCompletions: todoCompletions.todoCompletions,
             todoCompletionTombstones: todoCompletions.tombstones,
+            ...pets,
             unbootstrapped: false,
         };
         return { record: merged, remoteBaseline: remote, pendingCount: countPending(merged, remote) };
@@ -952,6 +1092,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         liveTimer,
     );
     const pm = mergeSingletonValue<SyncedPMState>(record.pmState, record.pmUpdatedAt, remote.pmState, base.pmState, now);
+    const pets = mergePetPatch(record, base, remote, now);
 
     // A null winner (remote row absent) keeps the local UI/domain default value;
     // `state.settings` and the timer slice are never null.
@@ -993,6 +1134,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         todoTombstones: todos.tombstones,
         todoCompletions: todoCompletions.todoCompletions,
         todoCompletionTombstones: todoCompletions.tombstones,
+        ...pets,
         unbootstrapped: false,
     };
 
@@ -1127,6 +1269,81 @@ function todoCompletionDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
     return { upserts, upsertAcks, tombstones, tombstoneAcks };
 }
 
+function versionedCollectionDeltas<T>(
+    label: string,
+    local: Record<string, T>,
+    stamps: Record<string, string>,
+    tombstonesById: Record<string, { id: string; deletedAt: string }>,
+    base: Record<string, { value: T; updatedAt: string }>,
+) {
+    const upserts: Array<{ value: T; updatedAt: string }> = [];
+    const upsertAcks: Record<string, { value: T; updatedAt: string }> = {};
+    for (const [id, value] of Object.entries(local)) {
+        const baseline = base[id];
+        if (baseline && valuesEqual(value, baseline.value)) continue;
+        const updatedAt = stamps[id];
+        if (!updatedAt) throw new MergeError(`${label} "${id}" differs from the baseline but has no updated_at stamp`);
+        upserts.push({ value: { ...value }, updatedAt });
+        upsertAcks[id] = { value: { ...value }, updatedAt };
+    }
+    const tombstones: Array<{ id: string; deletedAt: string }> = [];
+    const tombstoneAcks: Record<string, { deletedAt: string }> = {};
+    for (const [id, tombstone] of Object.entries(tombstonesById)) {
+        if (!base[id]) continue;
+        tombstones.push({ ...tombstone });
+        tombstoneAcks[id] = { deletedAt: tombstone.deletedAt };
+    }
+    return { upserts, upsertAcks, tombstones, tombstoneAcks };
+}
+
+function petDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
+    const activity = versionedCollectionDeltas("Pet activity", record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
+    const schedule = versionedCollectionDeltas("Pet schedule item", record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
+    const naps = versionedCollectionDeltas("Pet nap", record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords);
+    const weights = versionedCollectionDeltas("Pet weight entry", record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries);
+    const skills = versionedCollectionDeltas("Pet training skill", record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills);
+    const fixations = versionedCollectionDeltas("Pet fixation", record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations);
+    const events = versionedCollectionDeltas("Pet notable event", record.petNotableEvents, record.petNotableEventUpdatedAt, record.petNotableEventTombstones, base.petNotableEvents);
+    let profile: { value: PetProfile; updatedAt: string } | null = null;
+    let profileAck: { value: PetProfile; updatedAt: string } | null = null;
+    if (record.petProfile && !valuesEqual(record.petProfile, base.petProfile.value)) {
+        if (!record.petProfileUpdatedAt) throw new MergeError("Pet profile differs from the baseline but has no updated_at stamp");
+        profile = { value: { ...record.petProfile }, updatedAt: record.petProfileUpdatedAt };
+        profileAck = profile;
+    }
+    const profileTombstone = record.petProfileTombstone && base.petProfile.value
+        ? { ...record.petProfileTombstone }
+        : null;
+    const profileTombstoneAck = profileTombstone ? { deletedAt: profileTombstone.deletedAt } : null;
+    return { activity, schedule, naps, weights, skills, fixations, events, profile, profileAck, profileTombstone, profileTombstoneAck };
+}
+
+function petPlanFields(pets: ReturnType<typeof petDeltasOf>) {
+    return {
+        petActivityUpserts: pets.activity.upserts, petActivityTombstones: pets.activity.tombstones,
+        petProfile: pets.profile, petProfileTombstone: pets.profileTombstone,
+        petScheduleUpserts: pets.schedule.upserts, petScheduleTombstones: pets.schedule.tombstones,
+        petNapUpserts: pets.naps.upserts, petNapTombstones: pets.naps.tombstones,
+        petWeightUpserts: pets.weights.upserts, petWeightTombstones: pets.weights.tombstones,
+        petTrainingSkillUpserts: pets.skills.upserts, petTrainingSkillTombstones: pets.skills.tombstones,
+        petFixationUpserts: pets.fixations.upserts, petFixationTombstones: pets.fixations.tombstones,
+        petNotableEventUpserts: pets.events.upserts, petNotableEventTombstones: pets.events.tombstones,
+    };
+}
+
+function petAckFields(pets: ReturnType<typeof petDeltasOf>) {
+    return {
+        petActivityUpserts: pets.activity.upsertAcks, petActivityTombstones: pets.activity.tombstoneAcks,
+        petProfile: pets.profileAck, petProfileTombstone: pets.profileTombstoneAck,
+        petScheduleUpserts: pets.schedule.upsertAcks, petScheduleTombstones: pets.schedule.tombstoneAcks,
+        petNapUpserts: pets.naps.upsertAcks, petNapTombstones: pets.naps.tombstoneAcks,
+        petWeightUpserts: pets.weights.upsertAcks, petWeightTombstones: pets.weights.tombstoneAcks,
+        petTrainingSkillUpserts: pets.skills.upsertAcks, petTrainingSkillTombstones: pets.skills.tombstoneAcks,
+        petFixationUpserts: pets.fixations.upsertAcks, petFixationTombstones: pets.fixations.tombstoneAcks,
+        petNotableEventUpserts: pets.events.upsertAcks, petNotableEventTombstones: pets.events.tombstoneAcks,
+    };
+}
+
 /**
  * Builds the idempotent push delta for the current staging record against its
  * baseline. Throws a bootstrap error before the first successful pull. The
@@ -1161,6 +1378,10 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         todoTombstones: {},
         todoCompletionUpserts: {},
         todoCompletionTombstones: {},
+        petActivityUpserts: {}, petActivityTombstones: {}, petProfile: null, petProfileTombstone: null,
+        petScheduleUpserts: {}, petScheduleTombstones: {}, petNapUpserts: {}, petNapTombstones: {},
+        petWeightUpserts: {}, petWeightTombstones: {}, petTrainingSkillUpserts: {}, petTrainingSkillTombstones: {},
+        petFixationUpserts: {}, petFixationTombstones: {}, petNotableEventUpserts: {}, petNotableEventTombstones: {},
         settings: null,
         timerState: null,
         pmState: null,
@@ -1190,6 +1411,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         const completions = completionDeltasOf(record, base);
         const todos = todoDeltasOf(record, base);
         const todoCompletions = todoCompletionDeltasOf(record, base);
+        const pets = petDeltasOf(record, base);
         return {
             baseRevision: record.revision,
             taskUpserts: [],
@@ -1204,6 +1426,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             todoTombstones: todos.tombstones,
             todoCompletionUpserts: todoCompletions.upserts,
             todoCompletionTombstones: todoCompletions.tombstones,
+            ...petPlanFields(pets),
             settings,
             timerState,
             pmState,
@@ -1218,6 +1441,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
                 todoTombstones: todos.tombstoneAcks,
                 todoCompletionUpserts: todoCompletions.upsertAcks,
                 todoCompletionTombstones: todoCompletions.tombstoneAcks,
+                ...petAckFields(pets),
                 settings,
                 timerState,
                 pmState,
@@ -1314,6 +1538,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
     const completions = completionDeltasOf(record, base);
     const todos = todoDeltasOf(record, base);
     const todoCompletions = todoCompletionDeltasOf(record, base);
+    const pets = petDeltasOf(record, base);
 
     return {
         baseRevision: record.revision,
@@ -1329,6 +1554,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         todoTombstones: todos.tombstones,
         todoCompletionUpserts: todoCompletions.upserts,
         todoCompletionTombstones: todoCompletions.tombstones,
+        ...petPlanFields(pets),
         settings,
         timerState,
         pmState,
@@ -1347,6 +1573,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             todoTombstones: todos.tombstoneAcks,
             todoCompletionUpserts: todoCompletions.upsertAcks,
             todoCompletionTombstones: todoCompletions.tombstoneAcks,
+            ...petAckFields(pets),
         },
     };
 }
@@ -1364,6 +1591,26 @@ function omitTombstone(
     const copy = { ...record };
     delete copy[key];
     return copy;
+}
+
+function clearAcknowledgedCollection<T>(
+    values: Record<string, T>,
+    stamps: Record<string, string>,
+    tombstones: Record<string, { id: string; deletedAt: string }>,
+    upserts: Record<string, { value: T; updatedAt: string }> = {},
+    deleted: Record<string, { deletedAt: string }> = {},
+) {
+    let nextStamps = stamps;
+    let nextTombstones = tombstones;
+    for (const [id, acknowledged] of Object.entries(upserts)) {
+        if (values[id] && valuesEqual(values[id], acknowledged.value) && nextStamps[id] === acknowledged.updatedAt) {
+            nextStamps = omitStamp(nextStamps, id);
+        }
+    }
+    for (const [id, acknowledged] of Object.entries(deleted)) {
+        if (nextTombstones[id]?.deletedAt === acknowledged.deletedAt) nextTombstones = omitTombstone(nextTombstones, id);
+    }
+    return { stamps: nextStamps, tombstones: nextTombstones };
 }
 
 /**
@@ -1454,6 +1701,31 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
         }
     }
     next = { ...next, todoCompletionTombstones };
+
+    const petActivity = clearAcknowledgedCollection(next.petActivityRecords, next.petActivityUpdatedAt, next.petActivityTombstones, ack.petActivityUpserts, ack.petActivityTombstones);
+    const petSchedule = clearAcknowledgedCollection(next.petScheduleItems, next.petScheduleUpdatedAt, next.petScheduleTombstones, ack.petScheduleUpserts, ack.petScheduleTombstones);
+    const petNaps = clearAcknowledgedCollection(next.petNapRecords, next.petNapUpdatedAt, next.petNapTombstones, ack.petNapUpserts, ack.petNapTombstones);
+    const petWeights = clearAcknowledgedCollection(next.petWeightEntries, next.petWeightUpdatedAt, next.petWeightTombstones, ack.petWeightUpserts, ack.petWeightTombstones);
+    const petSkills = clearAcknowledgedCollection(next.petTrainingSkills, next.petTrainingSkillUpdatedAt, next.petTrainingSkillTombstones, ack.petTrainingSkillUpserts, ack.petTrainingSkillTombstones);
+    const petFixations = clearAcknowledgedCollection(next.petFixations, next.petFixationUpdatedAt, next.petFixationTombstones, ack.petFixationUpserts, ack.petFixationTombstones);
+    const petEvents = clearAcknowledgedCollection(next.petNotableEvents, next.petNotableEventUpdatedAt, next.petNotableEventTombstones, ack.petNotableEventUpserts, ack.petNotableEventTombstones);
+    next = {
+        ...next,
+        petActivityUpdatedAt: petActivity.stamps, petActivityTombstones: petActivity.tombstones,
+        petScheduleUpdatedAt: petSchedule.stamps, petScheduleTombstones: petSchedule.tombstones,
+        petNapUpdatedAt: petNaps.stamps, petNapTombstones: petNaps.tombstones,
+        petWeightUpdatedAt: petWeights.stamps, petWeightTombstones: petWeights.tombstones,
+        petTrainingSkillUpdatedAt: petSkills.stamps, petTrainingSkillTombstones: petSkills.tombstones,
+        petFixationUpdatedAt: petFixations.stamps, petFixationTombstones: petFixations.tombstones,
+        petNotableEventUpdatedAt: petEvents.stamps, petNotableEventTombstones: petEvents.tombstones,
+    };
+    if (ack.petProfile && next.petProfile && valuesEqual(next.petProfile, ack.petProfile.value) &&
+        next.petProfileUpdatedAt === ack.petProfile.updatedAt) {
+        next = { ...next, petProfileUpdatedAt: null };
+    }
+    if (ack.petProfileTombstone && next.petProfileTombstone?.deletedAt === ack.petProfileTombstone.deletedAt) {
+        next = { ...next, petProfileTombstone: null };
+    }
 
     // Log upserts and immutable completion upserts have no marker to clear; once
     // `pushed` contains them the entity-based pending detection stops counting

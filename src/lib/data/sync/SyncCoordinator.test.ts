@@ -101,6 +101,8 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         settings: { value: { ...defaultAppState().settings }, updatedAt: T0 },
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T0, completed: false },
         pmState: { value: null, updatedAt: null },
+        petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
+        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }

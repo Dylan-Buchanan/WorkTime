@@ -8,7 +8,7 @@ import {
     stagingOwnerId,
     type StorageLike,
 } from "./LocalStagingStore";
-import { MAX_PENDING_COMPLETIONS, STAGING_SCHEMA_VERSION, StagingStorageError, type StagedOwnerRecord, type SyncSnapshot } from "./types";
+import { isSyncSnapshot, MAX_PENDING_COMPLETIONS, STAGING_SCHEMA_VERSION, StagingStorageError, type StagedOwnerRecord, type SyncSnapshot } from "./types";
 
 const OWNER_A = "owner-a";
 const OWNER_B = "owner-b";
@@ -75,6 +75,8 @@ function makeBaseline(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
             completed: false,
         },
         pmState: { value: null, updatedAt: null },
+        petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
+        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -197,8 +199,13 @@ describe("LocalStagingStore", () => {
             ...record,
             state: makeAppState({ tasks: { t1: BASE_TASK } }),
             inProgressPomodoros: { t1: 600 },
+            petProfile: { id: "local-profile", name: "Local pet", birthDate: "2026-01-01", createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+            petProfileUpdatedAt: "2026-01-02T00:00:00.000Z",
+            petActivityRecords: { localActivity: { id: "localActivity", activityType: "potty", timestamp: "2026-01-02T00:00:00.000Z", createdAt: "2026-01-02T00:00:00.000Z" } },
+            petActivityUpdatedAt: { localActivity: "2026-01-02T00:00:00.000Z" },
+            petReminderMarks: { reminder: { id: "reminder", itemId: "item", dueAt: "2026-01-02T00:00:00.000Z", remindedAt: "2026-01-02T00:00:00.000Z" } },
         }));
-        expect(store.pendingCount(OWNER_A)).toBe(1);
+        expect(store.pendingCount(OWNER_A)).toBe(2);
 
         const restored = await store.discardPendingChanges(OWNER_A);
 
@@ -207,6 +214,9 @@ describe("LocalStagingStore", () => {
         expect(restored.lastSynced).toBeNull();
         expect(restored.state).toEqual(makeAppState());
         expect(restored.inProgressPomodoros).toEqual({ t1: 600 });
+        expect(restored.petProfile).toBeNull();
+        expect(restored.petActivityRecords).toEqual({});
+        expect(restored.petReminderMarks).toEqual({});
         expect(store.pendingCount(OWNER_A)).toBe(0);
     });
 
@@ -250,10 +260,11 @@ describe("LocalStagingStore", () => {
         delete legacy.petActivityRecords;
         delete legacy.petActivityUpdatedAt;
         delete legacy.petActivityTombstones;
+        legacy.schemaVersion = 6;
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.petActivityRecords).toEqual({});
         expect(migrated.petActivityUpdatedAt).toEqual({});
         expect(migrated.petActivityTombstones).toEqual({});
@@ -274,6 +285,58 @@ describe("LocalStagingStore", () => {
         const roundTripped = store.read(OWNER_A);
         expect(roundTripped.petActivityRecords.pa1.activityType).toBe("potty");
         expect(roundTripped.petActivityUpdatedAt.pa1).toBe("2026-01-01T10:00:00.000Z");
+    });
+
+    it("migrates a representative pet-free v6 record and snapshot to v7", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        await seedInitialized(store, OWNER_A);
+        const key = stagingKey(OWNER_A);
+        const legacy = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
+        legacy.schemaVersion = 6;
+        const stagedPetFields = [
+            "petActivityRecords", "petActivityUpdatedAt", "petActivityTombstones", "petProfile", "petProfileUpdatedAt", "petProfileTombstone",
+            "petScheduleItems", "petScheduleUpdatedAt", "petScheduleTombstones", "petReminderMarks",
+            "petNapRecords", "petNapUpdatedAt", "petNapTombstones", "petWeightEntries", "petWeightUpdatedAt", "petWeightTombstones",
+            "petTrainingSkills", "petTrainingSkillUpdatedAt", "petTrainingSkillTombstones", "petFixations", "petFixationUpdatedAt", "petFixationTombstones",
+            "petNotableEvents", "petNotableEventUpdatedAt", "petNotableEventTombstones",
+        ];
+        for (const field of stagedPetFields) delete legacy[field];
+        const lastSynced = legacy.lastSynced as Record<string, unknown>;
+        for (const field of ["petActivityRecords", "petProfile", "petScheduleItems", "petNapRecords", "petWeightEntries", "petTrainingSkills", "petFixations", "petNotableEvents"]) delete lastSynced[field];
+        window.localStorage.setItem(key, JSON.stringify(legacy));
+
+        const migrated = store.read(OWNER_A);
+        expect(migrated.schemaVersion).toBe(7);
+        expect(migrated.petProfile).toBeNull();
+        expect(migrated.petProfileUpdatedAt).toBeNull();
+        expect(migrated.petProfileTombstone).toBeNull();
+        expect(migrated.petReminderMarks).toEqual({});
+        expect(migrated.lastSynced?.petProfile).toEqual({ value: null, updatedAt: null });
+        for (const field of ["petActivityRecords", "petScheduleItems", "petNapRecords", "petWeightEntries", "petTrainingSkills", "petFixations", "petNotableEvents"] as const) {
+            expect(migrated[field]).toEqual({});
+            expect(migrated.lastSynced?.[field]).toEqual({});
+        }
+        for (const field of [
+            "petActivityUpdatedAt", "petActivityTombstones", "petScheduleUpdatedAt", "petScheduleTombstones",
+            "petNapUpdatedAt", "petNapTombstones", "petWeightUpdatedAt", "petWeightTombstones",
+            "petTrainingSkillUpdatedAt", "petTrainingSkillTombstones", "petFixationUpdatedAt", "petFixationTombstones",
+            "petNotableEventUpdatedAt", "petNotableEventTombstones",
+        ] as const) {
+            expect(migrated[field]).toEqual({});
+        }
+    });
+
+    it("rejects a v6 record with a missing lastSynced field as a staging error", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        await seedInitialized(store, OWNER_A);
+        const key = stagingKey(OWNER_A);
+        const legacy = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
+        legacy.schemaVersion = 6;
+        delete legacy.lastSynced;
+        window.localStorage.setItem(key, JSON.stringify(legacy));
+
+        expect(() => store.read(OWNER_A)).toThrow(StagingStorageError);
+        expect(() => store.read(OWNER_A)).toThrow(/invalid lastSynced shape/);
     });
 
     it("defaults the pet profile/schedule/nap/weight groups on fresh and legacy records", async () => {
@@ -307,10 +370,11 @@ describe("LocalStagingStore", () => {
         delete legacy.petWeightEntries;
         delete legacy.petWeightUpdatedAt;
         delete legacy.petWeightTombstones;
+        legacy.schemaVersion = 6;
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petScheduleItems).toEqual({});
@@ -379,10 +443,11 @@ describe("LocalStagingStore", () => {
         delete legacy.petFixations;
         delete legacy.petFixationUpdatedAt;
         delete legacy.petFixationTombstones;
+        legacy.schemaVersion = 6;
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.petTrainingSkills).toEqual({});
         expect(migrated.petFixations).toEqual({});
 
@@ -434,10 +499,11 @@ describe("LocalStagingStore", () => {
         delete legacy.petNotableEvents;
         delete legacy.petNotableEventUpdatedAt;
         delete legacy.petNotableEventTombstones;
+        legacy.schemaVersion = 6;
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.petNotableEvents).toEqual({});
         expect(migrated.petNotableEventUpdatedAt).toEqual({});
         expect(migrated.petNotableEventTombstones).toEqual({});
@@ -462,12 +528,23 @@ describe("LocalStagingStore", () => {
         expect(roundTripped.petNotableEventUpdatedAt.e1).toBe("2026-09-17T10:00:00.000Z");
     });
 
-    it("preserves the local pet domain when discarding pending changes", async () => {
+    it("restores the pet domain from the remote baseline when discarding pending changes", async () => {
         const store = new LocalStagingStore(window.localStorage);
+        const stamp = "2026-01-01T09:00:00.000Z";
+        const baseline = makeBaseline({
+            petProfile: { value: { id: "remote-profile", name: "Remote pet", birthDate: "2025-12-01", createdAt: stamp, updatedAt: stamp }, updatedAt: stamp },
+            petActivityRecords: { remoteActivity: { value: { id: "remoteActivity", activityType: "feeding", timestamp: stamp, createdAt: stamp }, updatedAt: stamp } },
+            petScheduleItems: { remoteSchedule: { value: { id: "remoteSchedule", activityType: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: stamp, updatedAt: stamp }, updatedAt: stamp } },
+            petNapRecords: { remoteNap: { value: { id: "remoteNap", start: stamp, end: null, createdAt: stamp, updatedAt: stamp }, updatedAt: stamp } },
+            petWeightEntries: { remoteWeight: { value: { id: "remoteWeight", timestamp: stamp, weight: 5, createdAt: stamp, updatedAt: stamp }, updatedAt: stamp } },
+            petTrainingSkills: { remoteSkill: { value: { id: "remoteSkill", label: "Stay", notes: "", status: "progressing", resolvedAt: null, createdAt: stamp, updatedAt: stamp }, updatedAt: stamp } },
+            petFixations: { remoteFixation: { value: { id: "remoteFixation", label: "Socks", notes: "", resolvedAt: null, resolutionNote: "", createdAt: stamp, updatedAt: stamp }, updatedAt: stamp } },
+            petNotableEvents: { remoteEvent: { value: { id: "remoteEvent", title: "First walk", notes: "", timestamp: stamp, createdAt: stamp, updatedAt: stamp }, updatedAt: stamp } },
+        });
         await store.update(OWNER_A, (r) => ({
             ...r,
             initialized: true,
-            lastSynced: makeBaseline(),
+            lastSynced: baseline,
             petProfile: { id: "p1", name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
             petProfileUpdatedAt: "2026-01-01T10:00:00.000Z",
             petScheduleItems: {
@@ -535,16 +612,17 @@ describe("LocalStagingStore", () => {
         }));
 
         const restored = await store.discardPendingChanges(OWNER_A);
-        expect(restored.petProfile?.name).toBe("Whitney");
-        expect(restored.petProfileUpdatedAt).toBe("2026-01-01T10:00:00.000Z");
-        expect(Object.keys(restored.petScheduleItems)).toEqual(["s1"]);
+        expect(restored.petProfile?.id).toBe("remote-profile");
+        expect(restored.petProfileUpdatedAt).toBeNull();
+        expect(Object.keys(restored.petScheduleItems)).toEqual(["remoteSchedule"]);
         expect(Object.keys(restored.petReminderMarks)).toEqual(["s1:2026-01-01T11:00:00.000Z"]);
-        expect(Object.keys(restored.petNapRecords)).toEqual(["n1"]);
-        expect(Object.keys(restored.petWeightEntries)).toEqual(["w1"]);
-        expect(Object.keys(restored.petActivityRecords)).toEqual(["pa1"]);
-        expect(Object.keys(restored.petTrainingSkills)).toEqual(["k1"]);
-        expect(Object.keys(restored.petFixations)).toEqual(["f1"]);
-        expect(Object.keys(restored.petNotableEvents)).toEqual(["e1"]);
+        expect(Object.keys(restored.petNapRecords)).toEqual(["remoteNap"]);
+        expect(Object.keys(restored.petWeightEntries)).toEqual(["remoteWeight"]);
+        expect(Object.keys(restored.petActivityRecords)).toEqual(["remoteActivity"]);
+        expect(Object.keys(restored.petTrainingSkills)).toEqual(["remoteSkill"]);
+        expect(Object.keys(restored.petFixations)).toEqual(["remoteFixation"]);
+        expect(Object.keys(restored.petNotableEvents)).toEqual(["remoteEvent"]);
+        expect(restored.lastSynced).toEqual(baseline);
     });
 
     it("increments revision on every update and re-reads the latest record", async () => {
@@ -601,8 +679,8 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, "{not json");
         expect(() => store.read(OWNER_A)).toThrow(/not valid JSON/);
 
-        // Only numeric literal versions 1 through 6 are accepted.
-        for (const version of [0, 7, 999]) {
+        // Only numeric literal versions 1 through 7 are accepted.
+        for (const version of [0, 8, 999]) {
             window.localStorage.setItem(key, JSON.stringify({ schemaVersion: version, ownerId: OWNER_A }));
             expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
         }
@@ -817,7 +895,7 @@ describe("LocalStagingStore", () => {
         expect(store.pendingCount(OWNER_A)).toBe(2);
     });
 
-    it("round-trips a populated v6 record losslessly through serialize then parse", async () => {
+    it("round-trips a populated v7 record losslessly through serialize then parse", async () => {
         const store = new LocalStagingStore(window.localStorage);
         const baseline = makeBaseline({
             habits: { h1: { value: H("h1"), updatedAt: "2026-01-01T00:00:00.000Z" } },
@@ -835,7 +913,7 @@ describe("LocalStagingStore", () => {
         }));
 
         const record = store.read(OWNER_A);
-        expect(record.schemaVersion).toBe(6);
+        expect(record.schemaVersion).toBe(7);
         expect(record.inProgressPomodoros).toEqual({ t1: 600 });
         expect(record.habits.h1.name).toBe("Saved");
         expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
@@ -847,7 +925,22 @@ describe("LocalStagingStore", () => {
         expect(store.read(OWNER_A)).toEqual(record);
     });
 
-    it("migrates v5 records to v6 with an empty local progress map", async () => {
+    it("validates every pet mirror in a sync snapshot", () => {
+        const valid = makeBaseline({
+            petProfile: {
+                value: { id: "profile", name: "Mochi", birthDate: "2026-03-14", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+                updatedAt: "2026-01-02T00:00:00.000Z",
+            },
+        });
+        expect(isSyncSnapshot(valid)).toBe(true);
+        const missing = JSON.parse(JSON.stringify(valid)) as Record<string, unknown>;
+        delete missing.petNapRecords;
+        expect(isSyncSnapshot(missing)).toBe(false);
+        expect(isSyncSnapshot({ ...valid, petWeightEntries: { bad: { value: { id: "bad" }, updatedAt: "now" } } })).toBe(false);
+        expect(isSyncSnapshot({ ...valid, petProfile: { value: valid.petProfile.value, updatedAt: null } })).toBe(false);
+    });
+
+    it("migrates v5 records to v7 with an empty local progress map", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await seedInitialized(store, OWNER_A);
         const key = stagingKey(OWNER_A);
@@ -857,7 +950,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.inProgressPomodoros).toEqual({});
         expect(migrated.state.tasks.t1).toEqual(BASE_TASK);
         expect(stagingKey(OWNER_A)).toBe(key);
@@ -887,7 +980,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.inProgressPomodoros).toEqual({});
         expect(migrated.state.settings.end_of_day).toBe("22:00");
         expect(migrated.lastSynced?.settings.value?.end_of_day).toBe("22:00");
@@ -907,7 +1000,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(v2));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.inProgressPomodoros).toEqual({});
         expect(migrated.todos).toEqual({});
         expect(migrated.todoUpdatedAt).toEqual({});
@@ -918,7 +1011,7 @@ describe("LocalStagingStore", () => {
         expect(migrated.state.tasks.t1).toBeDefined();
     });
 
-    it("migrates a complete v1 record through v6 in memory without changing the storage key", async () => {
+    it("migrates a complete v1 record through v7 in memory without changing the storage key", async () => {
         const store = new LocalStagingStore(window.localStorage);
         // Persist a fully-populated record, then degrade it to the legacy v1
         // shape by stripping the five new top-level fields and both snapshot
@@ -954,7 +1047,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(degraded));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(6);
+        expect(migrated.schemaVersion).toBe(7);
         expect(migrated.inProgressPomodoros).toEqual({});
         // Every legacy value survives the in-memory migration.
         expect(migrated.state.tasks.t1.name).toBe("Legacy task");
@@ -979,10 +1072,10 @@ describe("LocalStagingStore", () => {
         expect(migrated.todoTombstones).toEqual({});
         expect(migrated.lastSynced?.todos).toEqual({});
 
-        // One safe staged update stays on schema 6 at the same v1-prefixed key and
+        // One safe staged update stays on schema 7 at the same v1-prefixed key and
         // never creates a worktime:staging:v2:* key.
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "t1" } }));
-        expect(store.read(OWNER_A).schemaVersion).toBe(6);
+        expect(store.read(OWNER_A).schemaVersion).toBe(7);
         const keys: string[] = [];
         for (let i = 0; i < window.localStorage.length; i += 1) keys.push(window.localStorage.key(i) as string);
         expect(keys.filter((candidate) => candidate.startsWith("worktime:staging:"))).toEqual([key]);

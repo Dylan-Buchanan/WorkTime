@@ -131,7 +131,7 @@ export interface DataAccess {
     loadPetProfile(): Promise<PetProfile | null>;
     savePetScheduleItems(items: PetScheduleItem[]): Promise<void>;
     loadPetScheduleItems(): Promise<PetScheduleItem[]>;
-    /** Owner-local reminder dedup state; Issue G will add remote transport. */
+    /** Intentionally owner-local reminder dedup state; remote transport is deferred. */
     savePetReminderMarks(marks: PetReminderMark[]): Promise<void>;
     loadPetReminderMarks(): Promise<PetReminderMark[]>;
     savePetNapRecords(naps: PetNapRecord[]): Promise<void>;

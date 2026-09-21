@@ -60,6 +60,14 @@ export interface SyncSnapshot {
     settings: VersionedValue<Settings>;
     timerState: VersionedValue<TimerStateSlice> & { completed: boolean };
     pmState: VersionedValue<SyncedPMState>;
+    petActivityRecords: Record<string, { value: PetActivityRecord; updatedAt: string }>;
+    petProfile: VersionedValue<PetProfile>;
+    petScheduleItems: Record<string, { value: PetScheduleItem; updatedAt: string }>;
+    petNapRecords: Record<string, { value: PetNapRecord; updatedAt: string }>;
+    petWeightEntries: Record<string, { value: PetWeightEntry; updatedAt: string }>;
+    petTrainingSkills: Record<string, { value: PetTrainingSkill; updatedAt: string }>;
+    petFixations: Record<string, { value: PetFixation; updatedAt: string }>;
+    petNotableEvents: Record<string, { value: PetNotableEvent; updatedAt: string }>;
 }
 
 /**
@@ -102,7 +110,7 @@ export interface TodoCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 6;
+    schemaVersion: 7;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -147,27 +155,20 @@ export interface StagedOwnerRecord {
     todoTombstones: Record<string, { id: string; deletedAt: string }>;
     todoCompletions: Record<string, TodoCompletion>;
     todoCompletionTombstones: Record<string, TodoCompletionTombstone>;
-    /**
-     * Current locally-staged pet activity records, keyed by record id. Added
-     * additively to the v6 shape; Issue G threads the full pet domain (including
-     * this group) into `SyncSnapshot` and the sync RPC.
-     */
+    /** Current locally-staged pet activity records, keyed by record id. */
     petActivityRecords: Record<string, PetActivityRecord>;
     /** `updated_at` LWW transport stamps per locally-changed activity record. */
     petActivityUpdatedAt: Record<string, string>;
     petActivityTombstones: Record<string, { id: string; deletedAt: string }>;
-    /**
-     * Current locally-staged pet profile, or null before the first setup. Added
-     * additively to the v6 shape alongside the schedule/nap/weight groups; Issue
-     * G threads the full pet domain into `SyncSnapshot` and the sync RPC.
-     */
+    /** Current locally-staged pet profile, or null before the first setup. */
     petProfile: PetProfile | null;
     petProfileUpdatedAt: string | null;
+    petProfileTombstone: { id: string; deletedAt: string } | null;
     /** Current locally-staged pet schedule items, keyed by item id. */
     petScheduleItems: Record<string, PetScheduleItem>;
     petScheduleUpdatedAt: Record<string, string>;
     petScheduleTombstones: Record<string, { id: string; deletedAt: string }>;
-    /** Owner-local reminder dedup state until Issue G adds sync transport. */
+    /** Owner-local reminder dedup state; remote transport is a separate follow-up. */
     petReminderMarks: Record<string, PetReminderMark>;
     /** Current locally-staged pet nap records, keyed by nap id. */
     petNapRecords: Record<string, PetNapRecord>;
@@ -185,17 +186,13 @@ export interface StagedOwnerRecord {
     petFixations: Record<string, PetFixation>;
     petFixationUpdatedAt: Record<string, string>;
     petFixationTombstones: Record<string, { id: string; deletedAt: string }>;
-    /**
-     * Current locally-staged notable timeline events, keyed by event id. Added
-     * additively to the v6 shape; Issue G threads the full pet domain (including
-     * this group) into `SyncSnapshot` and the sync RPC.
-     */
+    /** Current locally-staged notable timeline events, keyed by event id. */
     petNotableEvents: Record<string, PetNotableEvent>;
     petNotableEventUpdatedAt: Record<string, string>;
     petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 6 as const;
+export const STAGING_SCHEMA_VERSION = 7 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -515,7 +512,20 @@ function isVersionedValue(value: unknown, valueCheck: (candidate: unknown) => bo
     );
 }
 
-function isSyncSnapshot(value: unknown): boolean {
+function isVersionedEntityMap(value: unknown, valueCheck: (candidate: unknown) => boolean): boolean {
+    return isObject(value) && Object.values(value).every(
+        (row) => isObject(row) && valueCheck(row.value) && typeof row.updatedAt === "string",
+    );
+}
+
+function isPetProfileSnapshot(value: unknown): boolean {
+    return isObject(value) && (
+        (value.value === null && value.updatedAt === null) ||
+        (isPetProfile(value.value) && typeof value.updatedAt === "string")
+    );
+}
+
+export function isSyncSnapshot(value: unknown): value is SyncSnapshot {
     if (!isObject(value) || !isObject(value.timerState)) return false;
     const timerState = value.timerState;
     return (
@@ -540,7 +550,15 @@ function isSyncSnapshot(value: unknown): boolean {
         isVersionedValue(value.settings, isSettings) &&
         isVersionedValue(timerState, isTimerSlice) &&
         typeof timerState.completed === "boolean" &&
-        isVersionedValue(value.pmState, isObject)
+        isVersionedValue(value.pmState, isObject) &&
+        isVersionedEntityMap(value.petActivityRecords, isPetActivityRecord) &&
+        isPetProfileSnapshot(value.petProfile) &&
+        isVersionedEntityMap(value.petScheduleItems, isPetScheduleItem) &&
+        isVersionedEntityMap(value.petNapRecords, isPetNapRecord) &&
+        isVersionedEntityMap(value.petWeightEntries, isPetWeightEntry) &&
+        isVersionedEntityMap(value.petTrainingSkills, isPetTrainingSkill) &&
+        isVersionedEntityMap(value.petFixations, isPetFixation) &&
+        isVersionedEntityMap(value.petNotableEvents, isPetNotableEvent)
     );
 }
 
@@ -595,6 +613,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["petActivityTombstones", isTombstoneMap],
     ["petProfile", (v): boolean => v === null || isPetProfile(v)],
     ["petProfileUpdatedAt", (v): boolean => v === null || typeof v === "string"],
+    ["petProfileTombstone", (v): boolean => v === null || isTombstone(v)],
     ["petScheduleItems", (v): boolean => isObject(v) && Object.values(v).every(isPetScheduleItem)],
     ["petScheduleUpdatedAt", isStringMap],
     ["petScheduleTombstones", isTombstoneMap],
@@ -618,16 +637,14 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `6` are accepted; records at the unchanged v1 key migrate in memory
+ * through `7` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
  * local data is never silently overwritten or read under the wrong owner.
  * `unbootstrapped` predates this schema revision and defaults to false when
- * absent so previously stored records keep loading. Pet activity maps were
- * added additively to v6 and also default to empty when absent; the pet
- * profile/schedule/nap/weight, training/fixation, and notable-event groups
- * follow the same additive rule.
+ * absent so previously stored records keep loading. The v6 -> v7 migration
+ * installs the pet domain and its remote mirrors atomically.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -645,7 +662,8 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         parsed.schemaVersion !== 3 &&
         parsed.schemaVersion !== 4 &&
         parsed.schemaVersion !== 5 &&
-        parsed.schemaVersion !== 6
+        parsed.schemaVersion !== 6 &&
+        parsed.schemaVersion !== 7
     ) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
@@ -720,47 +738,31 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
     if (record.schemaVersion === 5) {
         record = { ...record, schemaVersion: 6, inProgressPomodoros: {} };
     }
-    // Pet activity records were added additively to the v6 shape (Issue C). A
-    // record written before them simply receives empty maps; the embedded
-    // schema version is not bumped here because Issue G owns the v7 migration
-    // that threads the full pet domain through the sync pipeline. The pet
-    // profile/schedule/nap/weight groups (Issue B), the training/fixation
-    // groups (Issue D), and the notable-event group (Issue E) follow the same
-    // additive rule with empty maps, and the profile additionally defaults to
-    // null.
-    if (
-        record.petActivityRecords === undefined ||
-        record.petActivityUpdatedAt === undefined ||
-        record.petActivityTombstones === undefined ||
-        record.petProfile === undefined ||
-        record.petProfileUpdatedAt === undefined ||
-        record.petScheduleItems === undefined ||
-        record.petScheduleUpdatedAt === undefined ||
-        record.petScheduleTombstones === undefined ||
-        record.petReminderMarks === undefined ||
-        record.petNapRecords === undefined ||
-        record.petNapUpdatedAt === undefined ||
-        record.petNapTombstones === undefined ||
-        record.petWeightEntries === undefined ||
-        record.petWeightUpdatedAt === undefined ||
-        record.petWeightTombstones === undefined ||
-        record.petTrainingSkills === undefined ||
-        record.petTrainingSkillUpdatedAt === undefined ||
-        record.petTrainingSkillTombstones === undefined ||
-        record.petFixations === undefined ||
-        record.petFixationUpdatedAt === undefined ||
-        record.petFixationTombstones === undefined ||
-        record.petNotableEvents === undefined ||
-        record.petNotableEventUpdatedAt === undefined ||
-        record.petNotableEventTombstones === undefined
-    ) {
+    if (record.schemaVersion === 6) {
+        if (record.lastSynced !== null && !isObject(record.lastSynced)) {
+            throw new StagingStorageError(`Staging record for owner "${ownerId}" has an invalid lastSynced shape`);
+        }
+        const priorSnapshot = record.lastSynced;
+        const lastSynced = priorSnapshot === null ? null : {
+            ...priorSnapshot,
+            petActivityRecords: priorSnapshot.petActivityRecords ?? {},
+            petProfile: priorSnapshot.petProfile ?? { value: null, updatedAt: null },
+            petScheduleItems: priorSnapshot.petScheduleItems ?? {},
+            petNapRecords: priorSnapshot.petNapRecords ?? {},
+            petWeightEntries: priorSnapshot.petWeightEntries ?? {},
+            petTrainingSkills: priorSnapshot.petTrainingSkills ?? {},
+            petFixations: priorSnapshot.petFixations ?? {},
+            petNotableEvents: priorSnapshot.petNotableEvents ?? {},
+        };
         record = {
             ...record,
+            schemaVersion: 7,
             petActivityRecords: record.petActivityRecords ?? {},
             petActivityUpdatedAt: record.petActivityUpdatedAt ?? {},
             petActivityTombstones: record.petActivityTombstones ?? {},
             petProfile: record.petProfile ?? null,
             petProfileUpdatedAt: record.petProfileUpdatedAt ?? null,
+            petProfileTombstone: record.petProfileTombstone ?? null,
             petScheduleItems: record.petScheduleItems ?? {},
             petScheduleUpdatedAt: record.petScheduleUpdatedAt ?? {},
             petScheduleTombstones: record.petScheduleTombstones ?? {},
@@ -780,6 +782,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             petNotableEvents: record.petNotableEvents ?? {},
             petNotableEventUpdatedAt: record.petNotableEventUpdatedAt ?? {},
             petNotableEventTombstones: record.petNotableEventTombstones ?? {},
+            lastSynced,
         };
     }
     if (record.ownerId !== ownerId) {

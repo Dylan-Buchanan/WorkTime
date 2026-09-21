@@ -13,9 +13,9 @@ import {
     proposeNapReflow,
 } from "../../lib/pets";
 import type { NewPetScheduleItemInput, PetNapReflowProposal, PetScheduleEntry } from "../../lib/pets";
-import type { PetNapRecord, PetProfile, PetScheduleItem, PetWeightEntry } from "../../state/types";
-import { useData } from "../../state/DataContext";
+import type { PetNapRecord, PetProfile } from "../../state/types";
 import { usePetActivity } from "../../state/PetActivityContext";
+import { usePets } from "../../state/PetContext";
 import { PetHeroStatus } from "./PetHeroStatus";
 import { PetNapToggle } from "./PetNapToggle";
 import { PetFirstItems, PetProfileSetup } from "./PetOnboarding";
@@ -25,55 +25,30 @@ import { PetProfileCard } from "./PetProfileCard";
 import { PetReflowPanel } from "./PetReflowPanel";
 import { PetScheduleDeck } from "./PetScheduleDeck";
 import { PetScheduleItemForm } from "./PetScheduleItemForm";
-import { petUuid } from "./petShared";
-
-function persistenceError(context: string): (error: unknown) => void {
-    return (error) => console.warn(`[PetPage] failed to persist ${context}`, error);
-}
 
 /**
  * The Today tab: profile card, hero status, conditional overdue banner, nap
  * toggle with wake-confirmation reflow, today's card deck, and the persistent
  * potty bar. Profile/schedule/nap/weight records stage through the data
- * access layer; every activity log write goes through the single
+ * provider; every activity log write goes through the single
  * `logActivity` path in `PetActivityContext`, so the potty bar and the inline
- * checks can never diverge. A dedicated PetProvider lands with Issue G.
+ * checks can never diverge.
  */
 export const PetTodayTab: React.FC = () => {
-    const data = useData();
+    const pets = usePets();
     const activity = usePetActivity();
-    const [profile, setProfile] = useState<PetProfile | null>(null);
-    const [scheduleItems, setScheduleItems] = useState<PetScheduleItem[]>([]);
-    const [naps, setNaps] = useState<PetNapRecord[]>([]);
-    const [weights, setWeights] = useState<PetWeightEntry[]>([]);
-    const [hydrated, setHydrated] = useState(false);
-    const [now, setNow] = useState(() => new Date());
+    const profile = pets.state.profile;
+    const scheduleItems = Object.values(pets.state.scheduleItems);
+    const naps = Object.values(pets.state.naps);
+    const weights = Object.values(pets.state.weights);
+    const [now, setNow] = useState(() => pets.now());
     const [deckExpanded, setDeckExpanded] = useState(false);
     const [reflowProposal, setReflowProposal] = useState<PetNapReflowProposal | null>(null);
 
     useEffect(() => {
-        const id = setInterval(() => setNow(new Date()), 1000);
+        const id = setInterval(() => setNow(pets.now()), 1000);
         return () => clearInterval(id);
     }, []);
-
-    useEffect(() => {
-        let cancelled = false;
-        void (async () => {
-            const [loadedProfile, loadedItems, loadedNaps, loadedWeights] = await Promise.all([
-                data.loadPetProfile().catch(() => null),
-                data.loadPetScheduleItems().catch(() => [] as PetScheduleItem[]),
-                data.loadPetNapRecords().catch(() => [] as PetNapRecord[]),
-                data.loadPetWeightEntries().catch(() => [] as PetWeightEntry[]),
-            ]);
-            if (cancelled) return;
-            setProfile(loadedProfile);
-            setScheduleItems(loadedItems);
-            setNaps(loadedNaps);
-            setWeights(loadedWeights);
-            setHydrated(true);
-        })();
-        return () => { cancelled = true; };
-    }, [data]);
 
     const activityRecords = useMemo(() => Object.values(activity.state.records), [activity.state.records]);
 
@@ -106,9 +81,8 @@ export const PetTodayTab: React.FC = () => {
                       birthDate: petBirthDateKey(birthDate),
                       updatedAt: now.toISOString(),
                   }
-                : createPetProfile({ name, birthDate }, now, petUuid());
-            setProfile(next);
-            void data.savePetProfile(next).catch(persistenceError("pet profile"));
+                : createPetProfile({ name, birthDate }, now, pets.uuid());
+            pets.setProfile(next);
             return null;
         } catch (error) {
             return error instanceof RangeError ? error.message : "Could not save the profile";
@@ -117,10 +91,9 @@ export const PetTodayTab: React.FC = () => {
 
     const addWeight = (weight: number): string | null => {
         try {
-            const entry = createPetWeightEntry({ timestamp: now, weight }, now, petUuid());
+            const entry = createPetWeightEntry({ timestamp: now, weight }, now, pets.uuid());
             const next = [...weights, entry];
-            setWeights(next);
-            void data.savePetWeightEntries(next).catch(persistenceError("pet weight entries"));
+            pets.setWeights(next);
             return null;
         } catch (error) {
             return error instanceof RangeError ? error.message : "Could not log the weight";
@@ -129,10 +102,9 @@ export const PetTodayTab: React.FC = () => {
 
     const addScheduleItem = (input: NewPetScheduleItemInput): string | null => {
         try {
-            const item = createPetScheduleItem(input, now, petUuid());
+            const item = createPetScheduleItem(input, now, pets.uuid());
             const next = [...scheduleItems, item];
-            setScheduleItems(next);
-            void data.savePetScheduleItems(next).catch(persistenceError("pet schedule items"));
+            pets.setScheduleItems(next);
             return null;
         } catch (error) {
             return error instanceof RangeError ? error.message : "Could not add the schedule item";
@@ -146,10 +118,9 @@ export const PetTodayTab: React.FC = () => {
 
     const startNap = (): void => {
         if (schedule.activeNap) return;
-        const nap = createPetNapRecord({ start: now }, now, petUuid());
+        const nap = createPetNapRecord({ start: now }, now, pets.uuid());
         const next = [...naps, nap];
-        setNaps(next);
-        void data.savePetNapRecords(next).catch(persistenceError("pet nap records"));
+        pets.setNaps(next);
     };
 
     const endNap = (): void => {
@@ -157,8 +128,7 @@ export const PetTodayTab: React.FC = () => {
         if (!activeNap) return;
         const ended: PetNapRecord = { ...activeNap, end: now.toISOString(), updatedAt: now.toISOString() };
         const next = naps.map((nap) => (nap.id === ended.id ? ended : nap));
-        setNaps(next);
-        void data.savePetNapRecords(next).catch(persistenceError("pet nap records"));
+        pets.setNaps(next);
         const proposal = proposeNapReflow({
             nap: ended,
             now,
@@ -172,8 +142,7 @@ export const PetTodayTab: React.FC = () => {
     const confirmReflow = (): void => {
         if (!reflowProposal) return;
         const next = applyNapReflow(scheduleItems, reflowProposal, now);
-        setScheduleItems(next);
-        void data.savePetScheduleItems(next).catch(persistenceError("pet schedule items"));
+        pets.setScheduleItems(next);
         setReflowProposal(null);
     };
 
@@ -181,7 +150,7 @@ export const PetTodayTab: React.FC = () => {
         setReflowProposal(null);
     };
 
-    if (!hydrated || !activity.hydrated) {
+    if (!pets.hydrated || !activity.hydrated) {
         return (
             <div className="flex h-full items-center justify-center text-xs text-neutral-500" role="status">
                 Loading…

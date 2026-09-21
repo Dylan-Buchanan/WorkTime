@@ -56,7 +56,7 @@ function mockClient(): { client: SupabaseClient; rpc: ReturnType<typeof vi.fn> }
     return { client, rpc };
 }
 
-function pullClient(settingsData: unknown): SupabaseClient {
+function pullClient(settingsData: unknown, tableRows: Record<string, unknown[]> = {}): SupabaseClient {
     const from = vi.fn((table: string) => {
         if (table === "settings" || table === "timer_state" || table === "pm_state") {
             const data = table === "settings"
@@ -72,7 +72,7 @@ function pullClient(settingsData: unknown): SupabaseClient {
         const query: Record<string, unknown> = {};
         query.eq = () => query;
         query.order = () => query;
-        query.range = async () => ({ data: [], error: null });
+        query.range = async () => ({ data: tableRows[table] ?? [], error: null });
         return { select: () => query };
     });
     return {
@@ -240,5 +240,89 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         expect(args.p_todo_completion_tombstones).toEqual([{
             id: "completion-2", deleted_at: "2026-01-04T00:00:00.000Z", todo_id: "todo-2",
         }]);
+    });
+
+    it("pulls and validates all eight pet mirrors", async () => {
+        const t = "2026-01-01T00:00:00.000Z";
+        const rows = {
+            pet_profiles: [{ id: "profile", name: "Mochi", birth_date: "2025-12-01", created_at: t, updated_at: t }],
+            pet_activity_records: [{ id: "activity", activity_type: "potty", occurred_at: t, duration_minutes: null, created_at: t, updated_at: t }],
+            pet_schedule_items: [{ id: "schedule", activity_type: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, is_active: true, created_at: t, updated_at: t }],
+            pet_nap_records: [{ id: "nap", started_at: t, ended_at: null, created_at: t, updated_at: t }],
+            pet_weight_entries: [{ id: "weight", measured_at: t, weight: 5.25, created_at: t, updated_at: t }],
+            pet_training_skills: [{ id: "skill", label: "Sit", notes: "", status: "progressing", resolved_at: null, created_at: t, updated_at: t }],
+            pet_fixations: [{ id: "fixation", label: "Shoes", notes: "", resolved_at: null, resolution_note: "", created_at: t, updated_at: t }],
+            pet_notable_events: [{ id: "event", title: "First walk", notes: "", occurred_at: t, created_at: t, updated_at: t }],
+        };
+        const legacySettings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+        const client = pullClient(legacySettings, rows);
+        const snapshot = await new SupabaseDataAccess(client).pull(OWNER);
+
+        expect(snapshot.petProfile.value).toMatchObject({ id: "profile", name: "Mochi" });
+        expect(snapshot.petActivityRecords.activity.value.activityType).toBe("potty");
+        expect(snapshot.petScheduleItems.schedule.value.recurrence).toMatchObject({ mode: "fixed-time", startMinutes: 480 });
+        expect(snapshot.petNapRecords.nap.value.end).toBeNull();
+        expect(snapshot.petWeightEntries.weight.value.weight).toBe(5.25);
+        expect(snapshot.petTrainingSkills.skill.value.status).toBe("progressing");
+        expect(snapshot.petFixations.fixation.value.label).toBe("Shoes");
+        expect(snapshot.petNotableEvents.event.value.title).toBe("First walk");
+        expect((client.from as ReturnType<typeof vi.fn>).mock.calls.map(([table]) => table)).toEqual(expect.arrayContaining(Object.keys(rows)));
+    });
+
+    it("rejects malformed rows from every pet table", async () => {
+        const settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+        const t = "2026-01-01T00:00:00.000Z";
+        for (const table of [
+            "pet_profiles", "pet_activity_records", "pet_schedule_items", "pet_nap_records",
+            "pet_weight_entries", "pet_training_skills", "pet_fixations", "pet_notable_events",
+        ]) {
+            await expect(new SupabaseDataAccess(pullClient(settings, {
+                [table]: [{ id: "bad", created_at: t, updated_at: t }],
+            })).pull(OWNER)).rejects.toThrow(new RegExp(table));
+        }
+    });
+
+    it("maps every pet delta to its apply_staged_sync argument", async () => {
+        const { client, rpc } = mockClient();
+        const data = new SupabaseDataAccess(client);
+        const t = "2026-01-03T00:00:00.000Z";
+        await data.push(OWNER, {
+            ...emptyPlan(),
+            petProfile: { value: { id: "profile", name: "Mochi", birthDate: "2025-12-01", createdAt: t, updatedAt: t }, updatedAt: t },
+            petProfileTombstone: { id: "old-profile", deletedAt: t },
+            petActivityUpserts: [{ value: { id: "activity", activityType: "training", timestamp: t, durationMinutes: 10, createdAt: t }, updatedAt: t }],
+            petActivityTombstones: [{ id: "old-activity", deletedAt: t }],
+            petScheduleUpserts: [{ value: { id: "schedule", activityType: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: t, updatedAt: t }, updatedAt: t }],
+            petScheduleTombstones: [{ id: "old-schedule", deletedAt: t }],
+            petNapUpserts: [{ value: { id: "nap", start: t, end: null, createdAt: t, updatedAt: t }, updatedAt: t }],
+            petNapTombstones: [{ id: "old-nap", deletedAt: t }],
+            petWeightUpserts: [{ value: { id: "weight", timestamp: t, weight: 5.25, createdAt: t, updatedAt: t }, updatedAt: t }],
+            petWeightTombstones: [{ id: "old-weight", deletedAt: t }],
+            petTrainingSkillUpserts: [{ value: { id: "skill", label: "Sit", notes: "", status: "introduced", resolvedAt: null, createdAt: t, updatedAt: t }, updatedAt: t }],
+            petTrainingSkillTombstones: [{ id: "old-skill", deletedAt: t }],
+            petFixationUpserts: [{ value: { id: "fixation", label: "Shoes", notes: "", resolvedAt: null, resolutionNote: "", createdAt: t, updatedAt: t }, updatedAt: t }],
+            petFixationTombstones: [{ id: "old-fixation", deletedAt: t }],
+            petNotableEventUpserts: [{ value: { id: "event", title: "First walk", notes: "", timestamp: t, createdAt: t, updatedAt: t }, updatedAt: t }],
+            petNotableEventTombstones: [{ id: "old-event", deletedAt: t }],
+        });
+        const args = rpc.mock.calls[0][1];
+        expect(args.p_pet_profile_upsert).toMatchObject({ id: "profile", birth_date: "2025-12-01", updated_at: t });
+        expect(args.p_pet_profile_tombstone).toEqual({ id: "old-profile", deleted_at: t });
+        expect(args.p_pet_activity_upserts[0]).toMatchObject({ id: "activity", activity_type: "training", duration_minutes: 10 });
+        expect(args.p_pet_schedule_upserts[0]).toMatchObject({ id: "schedule", activity_type: "feeding", is_active: true });
+        expect(args.p_pet_nap_upserts[0]).toMatchObject({ id: "nap", started_at: t, ended_at: null });
+        expect(args.p_pet_weight_upserts[0]).toMatchObject({ id: "weight", measured_at: t, weight: 5.25 });
+        expect(args.p_pet_training_skill_upserts[0]).toMatchObject({ id: "skill", status: "introduced", resolved_at: null });
+        expect(args.p_pet_fixation_upserts[0]).toMatchObject({ id: "fixation", resolution_note: "" });
+        expect(args.p_pet_notable_event_upserts[0]).toMatchObject({ id: "event", occurred_at: t });
+        for (const key of ["activity", "schedule", "nap", "weight", "training_skill", "fixation", "notable_event"]) {
+            expect(args[`p_pet_${key}_tombstones`]).toEqual([{ id: `old-${key === "training_skill" ? "skill" : key === "notable_event" ? "event" : key}`, deleted_at: t }]);
+        }
+
+        await data.push(OWNER, emptyPlan());
+        const emptyArgs = rpc.mock.calls[1][1];
+        expect(emptyArgs.p_pet_profile_upsert).toBeNull();
+        expect(emptyArgs.p_pet_activity_upserts).toBeNull();
+        expect(emptyArgs.p_pet_notable_event_tombstones).toBeNull();
     });
 });

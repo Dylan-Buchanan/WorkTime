@@ -7,6 +7,7 @@ import { resetNotifyForTesting } from "./AppStateContext";
 import { DataProvider } from "./DataContext";
 import { PetActivityProvider, usePetActivity } from "./PetActivityContext";
 import { PetReminderProvider } from "./PetReminderContext";
+import { PetProvider } from "./PetContext";
 import { SyncProvider } from "./SyncContext";
 import { TauriCloseProvider } from "./TauriCloseContext";
 import { ToastProvider } from "./ToastContext";
@@ -71,9 +72,9 @@ function wrap(data: InMemoryDataAccess) {
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId={OWNER}>
                     <ToastProvider>
-                        <PetActivityProvider>
+                        <PetProvider><PetActivityProvider>
                             <PetReminderProvider><Probe /></PetReminderProvider>
-                        </PetActivityProvider>
+                        </PetActivityProvider></PetProvider>
                     </ToastProvider>
                 </SyncProvider>
             </DataProvider>

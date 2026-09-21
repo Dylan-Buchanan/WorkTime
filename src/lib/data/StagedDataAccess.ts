@@ -579,19 +579,30 @@ export class StagedDataAccess implements DataAccess {
     /**
      * Replaces the locally staged pet profile in one store write. The input is
      * the full desired value: an equal profile keeps its existing LWW stamp, a
-     * changed profile receives a fresh one, and `null` clears it. Pure local
-     * persistence; never touches the network.
+     * changed profile receives a fresh one, and `null` records an LWW deletion
+     * tombstone. Pure local persistence; never touches the network.
      */
     async savePetProfile(profile: PetProfile | null): Promise<void> {
         const stamp = this.now().toISOString();
         await this.store.update(this.ownerId, (current) => {
             const petProfile = profile ? clone(profile) : null;
-            const petProfileUpdatedAt = equal(current.petProfile, petProfile)
-                ? current.petProfileUpdatedAt
-                : profile
-                  ? stamp
-                  : null;
-            return { ...current, petProfile, petProfileUpdatedAt };
+            if (equal(current.petProfile, petProfile)) return current;
+            if (petProfile) {
+                return {
+                    ...current,
+                    petProfile,
+                    petProfileUpdatedAt: stamp,
+                    petProfileTombstone: null,
+                };
+            }
+            return {
+                ...current,
+                petProfile: null,
+                petProfileUpdatedAt: null,
+                petProfileTombstone: current.petProfile
+                    ? { id: current.petProfile.id, deletedAt: stamp }
+                    : current.petProfileTombstone,
+            };
         });
     }
 

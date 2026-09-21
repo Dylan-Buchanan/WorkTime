@@ -208,6 +208,8 @@ function makeBaseline(timer: ActiveTimer | null, overrides: Partial<SyncSnapshot
             completed: false,
         },
         pmState: { value: null, updatedAt: null },
+        petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
+        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -686,12 +688,19 @@ describe("StagedDataAccess", () => {
         expect(record.petProfile?.name).toBe("Whitney II");
         expect(record.petProfileUpdatedAt).toBe("2026-01-02T01:00:00.000Z");
 
-        // Clearing the profile clears its stamp too.
+        // Clearing the profile records an LWW tombstone; re-adding clears it.
+        current = new Date("2026-01-02T02:00:00.000Z");
         await data.savePetProfile(null);
         record = store.read(OWNER_A);
         expect(record.petProfile).toBeNull();
         expect(record.petProfileUpdatedAt).toBeNull();
+        expect(record.petProfileTombstone).toEqual({ id: "p1", deletedAt: "2026-01-02T02:00:00.000Z" });
         expect(await data.loadPetProfile()).toBeNull();
+        current = new Date("2026-01-02T03:00:00.000Z");
+        await data.savePetProfile(PP("p1", { name: "Whitney III" }));
+        record = store.read(OWNER_A);
+        expect(record.petProfileTombstone).toBeNull();
+        expect(record.petProfileUpdatedAt).toBe("2026-01-02T03:00:00.000Z");
     });
 
     it("stages pet schedule/nap/weight collections with stamps and tombstones", async () => {
@@ -723,6 +732,16 @@ describe("StagedDataAccess", () => {
         await data.savePetScheduleItems([PSI("s1"), PSI("s2")]);
         record = store.read(OWNER_A);
         expect(record.petScheduleTombstones.s2).toBeUndefined();
+        await data.savePetNapRecords([]);
+        await data.savePetWeightEntries([]);
+        record = store.read(OWNER_A);
+        expect(record.petNapTombstones.n1).toEqual({ id: "n1", deletedAt: "2026-01-02T00:00:00.000Z" });
+        expect(record.petWeightTombstones.w1).toEqual({ id: "w1", deletedAt: "2026-01-02T00:00:00.000Z" });
+        await data.savePetNapRecords([PN("n1")]);
+        await data.savePetWeightEntries([PW("w1")]);
+        record = store.read(OWNER_A);
+        expect(record.petNapTombstones.n1).toBeUndefined();
+        expect(record.petWeightTombstones.w1).toBeUndefined();
 
         // loadPet* returns fresh clones.
         const items = await data.loadPetScheduleItems();

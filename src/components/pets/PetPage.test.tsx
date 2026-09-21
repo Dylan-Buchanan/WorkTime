@@ -6,6 +6,7 @@ import { SyncProvider } from "../../state/SyncContext";
 import { TauriCloseProvider } from "../../state/TauriCloseContext";
 import { ToastProvider } from "../../state/ToastContext";
 import { PetActivityProvider } from "../../state/PetActivityContext";
+import { PetProvider } from "../../state/PetContext";
 import { InMemoryDataAccess } from "../../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../../test/mockTauri";
 import type {
@@ -87,9 +88,7 @@ function wrap(data: InMemoryDataAccess) {
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId={OWNER}>
                     <ToastProvider>
-                        <PetActivityProvider>
-                            <PetPage />
-                        </PetActivityProvider>
+                        <PetProvider><PetActivityProvider><PetPage /></PetActivityProvider></PetProvider>
                     </ToastProvider>
                 </SyncProvider>
             </DataProvider>
@@ -109,6 +108,7 @@ async function seedNapFlowData(data: InMemoryDataAccess) {
 }
 
 beforeEach(() => {
+    localStorage.clear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(NOW);
 });
