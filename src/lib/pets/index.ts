@@ -76,7 +76,10 @@ export {
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
     petTrainingStatusLabel,
+    previousPetTrainingStatus,
+    reopenPetTrainingSkill,
     resolvePetTrainingSkill,
+    reversePetTrainingSkill,
     PET_TRAINING_STATUSES,
 } from "./training";
 export type { ResolvedIntervalWindow } from "./schedule";

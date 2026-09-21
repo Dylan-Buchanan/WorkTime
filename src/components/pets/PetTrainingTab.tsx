@@ -5,7 +5,10 @@ import {
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
     petTrainingStatusLabel,
+    previousPetTrainingStatus,
+    reopenPetTrainingSkill,
     resolvePetTrainingSkill,
+    reversePetTrainingSkill,
 } from "../../lib/pets";
 import type { PetTrainingSkill, PetTrainingStatus } from "../../state/types";
 import { usePets } from "../../state/PetContext";
@@ -82,6 +85,30 @@ export const PetTrainingTab: React.FC = () => {
             setError(null);
         } catch (caught) {
             setError(messageFor(caught, "Could not resolve the skill"));
+        }
+    };
+
+    const reverse = (id: string): void => {
+        const skill = skills.find((entry) => entry.id === id);
+        if (!skill) return;
+        try {
+            const updated = reversePetTrainingSkill(skill, pets.now());
+            persist(skills.map((entry) => (entry.id === id ? updated : entry)));
+            setError(null);
+        } catch (caught) {
+            setError(messageFor(caught, "Could not step the skill back"));
+        }
+    };
+
+    const reopen = (id: string): void => {
+        const skill = skills.find((entry) => entry.id === id);
+        if (!skill) return;
+        try {
+            const updated = reopenPetTrainingSkill(skill, pets.now());
+            persist(skills.map((entry) => (entry.id === id ? updated : entry)));
+            setError(null);
+        } catch (caught) {
+            setError(messageFor(caught, "Could not reopen the skill"));
         }
     };
 
@@ -217,6 +244,16 @@ export const PetTrainingTab: React.FC = () => {
                                             <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_TONES[skill.status]}`}>
                                                 {petTrainingStatusLabel(skill.status)}
                                             </span>
+                                            {previousPetTrainingStatus(skill.status) !== null && (
+                                                <button
+                                                    type="button"
+                                                    aria-label={`Step back ${skill.label}`}
+                                                    onClick={() => reverse(skill.id)}
+                                                    className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                                                >
+                                                    Step back
+                                                </button>
+                                            )}
                                             {nextPetTrainingStatus(skill.status) !== null && (
                                                 <button
                                                     type="button"
@@ -279,6 +316,14 @@ export const PetTrainingTab: React.FC = () => {
                                         <span className="shrink-0 text-[11px] text-neutral-500">
                                             {skill.resolvedAt ? `done ${formatResolvedAt(skill.resolvedAt)}` : "done"}
                                         </span>
+                                        <button
+                                            type="button"
+                                            aria-label={`Reopen ${skill.label}`}
+                                            onClick={() => reopen(skill.id)}
+                                            className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                                        >
+                                            Reopen
+                                        </button>
                                     </li>
                                 ))}
                             </ul>

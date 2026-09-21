@@ -417,6 +417,37 @@ describe("PetPage", () => {
         expect(screen.getByText("Sit")).toBeInTheDocument();
     });
 
+    it("steps a training skill back and reopens a resolved one", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+        await waitFor(() => expect(screen.getByText("Sit")).toBeInTheDocument());
+
+        // Introduced is the first status: no reverse control.
+        expect(screen.queryByRole("button", { name: "Step back Sit" })).toBeNull();
+
+        fireEvent.click(screen.getByRole("button", { name: "Advance Sit" }));
+        await waitFor(() => expect(screen.getByText("Progressing")).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: "Step back Sit" }));
+        await waitFor(() => expect(screen.getByText("Introduced")).toBeInTheDocument());
+        expect((await data.loadPetTrainingSkills())[0].status).toBe("introduced");
+
+        fireEvent.click(screen.getByRole("button", { name: "Mark done Sit" }));
+        await waitFor(() => expect(screen.getByText("No skills in progress yet.")).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: "Show resolved skills (1)" }));
+        fireEvent.click(screen.getByRole("button", { name: "Reopen Sit" }));
+        await waitFor(() => expect(screen.getByText("Introduced")).toBeInTheDocument());
+        expect(await data.loadPetTrainingSkills()).toMatchObject([
+            { label: "Sit", status: "introduced", resolvedAt: null },
+        ]);
+    });
+
     it("edits a training skill without disturbing its status and rejects a blank label", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data));
