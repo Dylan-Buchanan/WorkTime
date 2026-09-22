@@ -219,7 +219,28 @@ export class StagedDataAccess implements DataAccess {
         }
 
         const timer = record.state.timer;
-        if (timer && !timer.paused && new Date(timer.ends_at).getTime() <= this.now().getTime() && !record.timerCompleted) {
+        if (timer && !timer.paused && new Date(timer.ends_at).getTime() <= this.now().getTime()) {
+            const generationKey = timerGenerationKey(timer);
+            // A completed generation may be restored by a stale sync snapshot.
+            // Its guard or journal proves that replaying the engine would count
+            // the same pomodoro twice. Clear only that stale timer, under the
+            // store lock, so the caller can advance to the next timer.
+            if (record.timerCompleted || record.pendingCompletions.some((entry) => entry.generationKey === generationKey)) {
+                let repaired = false;
+                record = await this.store.update(this.ownerId, (current) => {
+                    const currentTimer = current.state.timer;
+                    if (!currentTimer || !equal(currentTimer, timer) ||
+                        (!current.timerCompleted && !current.pendingCompletions.some((entry) => entry.generationKey === generationKey))) return current;
+                    repaired = true;
+                    const state = { ...current.state, timer: null };
+                    return stampStagedChanges({ ...current, state, timerCompleted: true }, current.state, state, this.now());
+                });
+                return {
+                    state: cloneAppState(record.state),
+                    value: cloneAppState(record.state),
+                    reconciledTimer: repaired ? { kind: timer.kind, taskId: timer.task_id, applied: false } : null,
+                };
+            }
             const completion = await this.completeTimer(timer);
             return {
                 state: cloneAppState(completion.state),

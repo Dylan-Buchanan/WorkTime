@@ -102,6 +102,28 @@ async function renderWithTasks(tasks: Record<string, PMTask>) {
 beforeEach(() => localStorage.clear());
 
 describe("TimerPanel task details", () => {
+    it("offers a retry when an expired timer cannot transition", async () => {
+        const task = makeAppTask("stuck-task", "Stuck task");
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { [task.id]: task },
+            active_task: task.id,
+            timer: makeActiveTimer({ task_id: task.id, ends_at: new Date(Date.now() - 1000).toISOString() }),
+        }));
+        vi.spyOn(data, "fetchState").mockImplementation(async () => ({
+            state: data.store.state,
+            value: data.store.state,
+            reconciledTimer: null,
+        }));
+        const complete = vi.spyOn(data, "completeTimer").mockRejectedValue(new Error("completion unavailable"));
+        render(wrap(data));
+
+        const retry = await screen.findByRole("button", { name: "Retry Transition" });
+        await waitFor(() => expect(screen.getByText("completion unavailable")).toBeInTheDocument());
+        const attempts = complete.mock.calls.length;
+        fireEvent.click(retry);
+        await waitFor(() => expect(complete.mock.calls.length).toBeGreaterThan(attempts));
+    });
+
     it("replaces a persisted Projects selection with the active timer task and follows timer task changes", async () => {
         localStorage.setItem("pm_state_v1", JSON.stringify({ ui: { selectedTaskId: "projects-task" } }));
         const appTaskOne = makeAppTask("app-active-one", "Active application task one");

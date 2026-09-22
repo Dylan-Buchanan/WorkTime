@@ -601,7 +601,14 @@ export const TimerPanel: React.FC = () => {
                                 Resume
                             </button>
                         )}
-                        {timer && ms === 0 && <span className="text-emerald-400 text-xs font-medium">Transitioning...</span>}
+                        {timer && !isPaused && ms === 0 && (
+                            <button
+                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                onClick={() => { void app.completeTimer(); play("pressSide"); }}
+                            >
+                                Retry Transition
+                            </button>
+                        )}
                         {timer && !isPaused && timer.kind === "Work" && ms > 0 && (
                             <button
                                 className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-500/30 transition-colors"

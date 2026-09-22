@@ -125,6 +125,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (progressing.current) return;
         progressing.current = true;
         try {
+            setError(null);
             let applied = true;
             let after: AppStateData;
             if (reconciliation) {
@@ -154,12 +155,12 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                     try {
                         const started = await data.startBreakTimer();
                         setState(started.state);
-                    } catch (err) { console.warn("Failed to auto-start break timer", err); }
+                    } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start break timer"); }
                 } else if (after.active_task) {
                     try {
                         const started = await data.startWorkTimer();
                         setState(started.state);
-                    } catch (err) { console.warn("Failed to auto-start work timer", err); }
+                    } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start work timer"); }
                 }
             }
             // A storage/sync revision arriving mid-progression may have left
@@ -180,7 +181,6 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const refresh = useCallback(async (): Promise<AppStateData> => {
         try {
-            setError(null);
             const result = await fetchAndSetState();
             if (result.reconciledTimer) await runProgression(undefined, { timer: result.reconciledTimer, state: result.state });
             return result.state;

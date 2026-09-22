@@ -342,6 +342,74 @@ describe("StagedDataAccess", () => {
         expect(sync).not.toHaveBeenCalled();
     });
 
+    it("completes the final estimated pomodoro and starts its break through staged data", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const timer = await seedExpiredTimer(store, OWNER_A);
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            state: { ...current.state, tasks: { t1: { ...TASK_T1, target_pomodoros: 1 } } },
+        }));
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T01:00:00.000Z"),
+            createLogId: () => "log-final-estimate",
+        });
+
+        const completed = await data.completeTimer(timer);
+        expect(completed.applied).toBe(true);
+        expect(completed.state.tasks.t1.completed_pomodoros).toBe(1);
+        expect(completed.state.active_task).toBe("t1");
+        const breakResult = await data.startBreakTimer();
+        expect(breakResult.state.timer?.kind).toBe("ShortBreak");
+        expect(store.read(OWNER_A).pendingCompletions).toHaveLength(1);
+    });
+
+    it("clears an already completed expired generation without counting it again", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const timer = await seedExpiredTimer(store, OWNER_A);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T01:00:00.000Z"),
+            createLogId: () => "log-once",
+        });
+        await data.completeTimer(timer);
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            state: { ...current.state, timer },
+        }));
+
+        const repaired = await data.fetchState();
+        expect(repaired.reconciledTimer).toEqual({ kind: "Work", taskId: "t1", applied: false });
+        expect(repaired.state.timer).toBeNull();
+        expect(repaired.state.tasks.t1.completed_pomodoros).toBe(1);
+        expect(repaired.state.logs).toHaveLength(1);
+        expect(store.read(OWNER_A).pendingCompletions).toHaveLength(1);
+        expect((await data.fetchState()).reconciledTimer).toBeNull();
+    });
+
+    it("uses the completion journal when a stale timer also resets the completion guard", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const timer = await seedExpiredTimer(store, OWNER_A);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T01:00:00.000Z"),
+            createLogId: () => "log-once",
+        });
+        await data.completeTimer(timer);
+        await store.update(OWNER_A, (current) => ({
+            ...current,
+            timerCompleted: false,
+            state: { ...current.state, timer },
+        }));
+
+        const repaired = await data.fetchState();
+        expect(repaired.reconciledTimer?.applied).toBe(false);
+        expect(repaired.state.timer).toBeNull();
+        expect(repaired.state.tasks.t1.completed_pomodoros).toBe(1);
+        expect(repaired.state.logs).toHaveLength(1);
+        expect(store.read(OWNER_A).timerCompleted).toBe(true);
+    });
+
     it("returns applied=false for a completion race loser without adding a second log", async () => {
         const { executor } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);

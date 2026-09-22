@@ -46,11 +46,11 @@ test.describe("Timer workflows", () => {
         } finally { await app.cleanup(); }
     });
 
-    test("auto-progresses an expired work timer into a break", async ({ browser }) => {
+    for (const target of [1, 4]) test(`auto-progresses an expired work timer into a break at target ${target}`, async ({ browser }) => {
         const seed = baseState({
             active_task: "t1",
             tasks: {
-                t1: taskFixture("t1", "Quick task"),
+                t1: taskFixture("t1", "Quick task", { target_pomodoros: target }),
             },
             timer: {
                 task_id: "t1",
@@ -71,6 +71,7 @@ test.describe("Timer workflows", () => {
 
         // When the seeded timer ends, the app auto-completes it and starts a break.
         await expect(page.getByText("SHORTBREAK")).toBeVisible({ timeout: 15000 });
+        await expect(page.getByRole("button", { name: "Retry Transition" })).toHaveCount(0);
 
         await syncData(page);
 
@@ -78,6 +79,9 @@ test.describe("Timer workflows", () => {
         expect(state.logs.some((l: any) => !l.was_break)).toBe(true);
         expect(state.timer?.kind).toBe("ShortBreak");
         expect(state.current_cycle_pomodoros).toBe(1);
+        const task = Object.values(state.tasks)[0];
+        expect(task.target_pomodoros).toBe(target);
+        expect(task.completed_pomodoros).toBe(1);
         } finally { await app.cleanup(); }
     });
 });

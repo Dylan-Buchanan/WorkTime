@@ -1094,10 +1094,10 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
     const pm = mergeSingletonValue<SyncedPMState>(record.pmState, record.pmUpdatedAt, remote.pmState, base.pmState, now);
     const pets = mergePetPatch(record, base, remote, now);
 
-    // A null winner (remote row absent) keeps the local UI/domain default value;
-    // `state.settings` and the timer slice are never null.
+    // An absent remote timer row represents the default empty timer slice. Do
+    // not pair a retained local timer with the remote completion guard.
     const settingsValue = settings.value ?? record.state.settings;
-    const timerValue = timer.value ?? timerSliceOf(record.state);
+    const timerValue = timer.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     const timerCompleted = timer.changed ? record.timerCompleted : remote.timerState.completed;
 
     const mergedState: AppStateData = {

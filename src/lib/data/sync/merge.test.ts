@@ -1231,6 +1231,19 @@ describe("live-timer protection", () => {
         expect(merged.pendingCount).toBe(0);
     });
 
+    it("does not retain an expired timer when the remote timer row was removed", () => {
+        const expiredTimer = { ...runningTimer, ends_at: "2026-01-09T00:25:00.000Z" };
+        const base = snapshot({ timerState: { value: timerSlice(expiredTimer), updatedAt: T1, completed: false } });
+        const record = recordFromBaseline(base);
+        const remote = snapshot({
+            timerState: { value: null, updatedAt: null, completed: true },
+        });
+
+        const merged = mergePulledSnapshot(record, remote, NOW);
+        expect(merged.record.state.timer).toBeNull();
+        expect(merged.record.timerCompleted).toBe(true);
+    });
+
     it("keeps a newer local timer row when no remote change exists", () => {
         const { record } = baseWithTimer();
         const remote = snapshot({

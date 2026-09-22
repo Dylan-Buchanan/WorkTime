@@ -141,6 +141,20 @@ describe("AppStateContext", () => {
         expect(startBreakSpy).toHaveBeenCalledTimes(1);
     });
 
+    it("surfaces an automatic break start failure after clearing the expired timer", async () => {
+        const data = new ContextFakeDataAccess(makeAppState({
+            active_task: "t1",
+            tasks: { t1: { id: "t1", name: "Task", target_pomodoros: 1, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } },
+            timer: makeActiveTimer({ task_id: "t1", ends_at: new Date(Date.now() - 1000).toISOString() }),
+        }));
+        vi.spyOn(data, "startBreakTimer").mockRejectedValue(new Error("break storage failed"));
+
+        render(wrap(data, <Probe />));
+        await waitFor(() => expect(screen.getByTestId("timer-kind")).toHaveTextContent("none"));
+        await waitFor(() => expect(screen.getByTestId("error")).toHaveTextContent("break storage failed"));
+        expect(data.store.state.logs).toHaveLength(1);
+    });
+
     it("creates a task and adopts its result with no follow-up fetch", async () => {
         const data = new ContextFakeDataAccess(makeAppState(), { createTaskId: () => "new-id" });
         const fetchSpy = vi.spyOn(data, "fetchState");
