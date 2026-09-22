@@ -1,7 +1,31 @@
 import type { PetTrainingSkill, PetTrainingStatus } from "../../state/types";
+import { derivePetAge } from "./age";
 
 /** Forward-only progression order for a training skill. */
 export const PET_TRAINING_STATUSES: readonly PetTrainingStatus[] = ["introduced", "progressing", "reliable"];
+
+/** Display unit for a derived training-elapsed window. */
+export type PetTrainingElapsedUnit = "days" | "weeks" | "months";
+
+/** Derived time a skill has spent (or spent in total) in training; never stored. */
+export interface PetTrainingElapsed {
+    /** Local-noon-normalized start of the training window. */
+    start: Date;
+    /** Resolution time when resolved, otherwise the supplied reference. */
+    end: Date;
+    /** Whole local calendar days in the window; never negative. */
+    totalDays: number;
+    /** Whole completed weeks in the window. */
+    weeks: number;
+    /** Whole completed calendar months in the window. */
+    months: number;
+    /** False once the skill carries a resolution timestamp. */
+    active: boolean;
+    /** Display unit: days then weeks until the six-month mark, then months. */
+    unit: PetTrainingElapsedUnit;
+    /** Display quantity in `unit`. */
+    value: number;
+}
 
 const PET_TRAINING_STATUS_LABELS: Record<PetTrainingStatus, string> = {
     introduced: "Introduced",
@@ -73,4 +97,33 @@ export function resolvePetTrainingSkill(skill: PetTrainingSkill, now: Date): Pet
 export function reopenPetTrainingSkill(skill: PetTrainingSkill, now: Date): PetTrainingSkill {
     if (skill.resolvedAt === null) throw new RangeError("A training skill is not resolved");
     return { ...skill, resolvedAt: null, updatedAt: now.toISOString() };
+}
+
+/**
+ * Derives how long a skill has been (or was) in training. The window starts at
+ * `createdAt` and ends at `resolvedAt` for a resolved skill, otherwise at `now`
+ * — elapsed time is never stored. Units follow the pet age convention
+ * (`derivePetAge`): whole weeks until the six-month mark, then whole months,
+ * with a whole-days lead-in for the first week so short skills stay readable.
+ */
+export function derivePetTrainingElapsed(skill: PetTrainingSkill, now: Date): PetTrainingElapsed {
+    const age = derivePetAge(new Date(skill.createdAt), skill.resolvedAt ? new Date(skill.resolvedAt) : now);
+    const unit: PetTrainingElapsedUnit = age.unit === "weeks" && age.totalDays < 7 ? "days" : age.unit;
+    return {
+        start: age.birthDate,
+        end: age.reference,
+        totalDays: age.totalDays,
+        weeks: age.weeks,
+        months: age.months,
+        active: skill.resolvedAt === null,
+        unit,
+        value: unit === "days" ? age.totalDays : age.value,
+    };
+}
+
+/** Renders a derived training-elapsed window, e.g. "3 days", "1 week", "6 months". */
+export function formatPetTrainingElapsed(elapsed: PetTrainingElapsed): string {
+    const singular = elapsed.value === 1;
+    const noun = singular ? elapsed.unit.slice(0, -1) : elapsed.unit;
+    return `${elapsed.value} ${noun}`;
 }

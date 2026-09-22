@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     advancePetTrainingSkill,
     countTrainingSessionsBySkill,
     createPetTrainingSkill,
+    derivePetTrainingElapsed,
+    formatPetTrainingElapsed,
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
     PET_TRAINING_STATUSES,
@@ -100,19 +102,30 @@ function sessionCountLabel(count: number): string {
     return count === 1 ? "1 session" : `${count} sessions`;
 }
 
+function trainingElapsedLabel(skill: PetTrainingSkill, now: Date): string {
+    return formatPetTrainingElapsed(derivePetTrainingElapsed(skill, now));
+}
+
 const SessionCountBadge: React.FC<{ count: number }> = ({ count }) => (
     <span className="shrink-0 rounded-full border border-neutral-700 px-2 py-0.5 text-[11px] tabular-nums text-neutral-300">
         {sessionCountLabel(count)}
     </span>
 );
 
+const ElapsedBadge: React.FC<{ elapsed: string }> = ({ elapsed }) => (
+    <span className="shrink-0 rounded-full border border-neutral-700 px-2 py-0.5 text-[11px] tabular-nums text-neutral-300">
+        {elapsed} in training
+    </span>
+);
+
 interface SkillStampProps {
     skill: PetTrainingSkill;
     sessionCount: number;
+    elapsed: string;
     onReopen: (id: string) => void;
 }
 
-const SkillStamp: React.FC<SkillStampProps> = ({ skill, sessionCount, onReopen }) => (
+const SkillStamp: React.FC<SkillStampProps> = ({ skill, sessionCount, elapsed, onReopen }) => (
     <li
         className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-emerald-700/50 bg-emerald-950/20 p-3 text-center"
     >
@@ -124,6 +137,7 @@ const SkillStamp: React.FC<SkillStampProps> = ({ skill, sessionCount, onReopen }
             {skill.resolvedAt ? `done ${formatResolvedAt(skill.resolvedAt)}` : "done"}
         </p>
         <p className="text-[11px] tabular-nums text-neutral-400">{sessionCountLabel(sessionCount)}</p>
+        <p className="text-[11px] tabular-nums text-neutral-400">{elapsed} in training</p>
         <button
             type="button"
             aria-label={`Reopen ${skill.label}`}
@@ -171,6 +185,12 @@ export const PetTrainingTab: React.FC = () => {
     const [durationDraft, setDurationDraft] = useState("");
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editingSessionSkillIds, setEditingSessionSkillIds] = useState<string[]>([]);
+    const [now, setNow] = useState(() => pets.now());
+
+    useEffect(() => {
+        const id = setInterval(() => setNow(pets.now()), 60_000);
+        return () => clearInterval(id);
+    }, []);
 
     const persist = (next: PetTrainingSkill[]): void => {
         pets.setTrainingSkills(next);
@@ -462,6 +482,7 @@ export const PetTrainingTab: React.FC = () => {
                                                     <span>{petTrainingStatusLabel(skill.status)}</span>
                                                 </span>
                                                 <SessionCountBadge count={sessionCountBySkill[skill.id] ?? 0} />
+                                                <ElapsedBadge elapsed={trainingElapsedLabel(skill, now)} />
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <TrainingProgressMeter skill={skill} />
@@ -530,6 +551,7 @@ export const PetTrainingTab: React.FC = () => {
                                     key={skill.id}
                                     skill={skill}
                                     sessionCount={sessionCountBySkill[skill.id] ?? 0}
+                                    elapsed={trainingElapsedLabel(skill, now)}
                                     onReopen={reopen}
                                 />
                             ))}

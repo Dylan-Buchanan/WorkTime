@@ -3,6 +3,8 @@ import type { PetTrainingSkill } from "../../state/types";
 import {
     PET_TRAINING_STATUSES,
     advancePetTrainingSkill,
+    derivePetTrainingElapsed,
+    formatPetTrainingElapsed,
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
     petTrainingStatusLabel,
@@ -11,6 +13,10 @@ import {
     resolvePetTrainingSkill,
     reversePetTrainingSkill,
 } from "./training";
+
+function day(year: number, month: number, date: number): Date {
+    return new Date(year, month - 1, date, 12, 0, 0, 0);
+}
 
 const now = new Date(2026, 8, 17, 12, 0, 0, 0);
 const later = new Date(2026, 8, 18, 9, 30, 0, 0);
@@ -101,5 +107,85 @@ describe("pet training progression", () => {
             "Progressing",
             "Reliable",
         ]);
+    });
+});
+
+describe("pet training elapsed time", () => {
+    it("counts whole days for the first week and phrases the singular", () => {
+        const elapsed = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 10).toISOString() }),
+            day(2026, 1, 13),
+        );
+        expect(elapsed.active).toBe(true);
+        expect(elapsed.unit).toBe("days");
+        expect(elapsed.totalDays).toBe(3);
+        expect(formatPetTrainingElapsed(elapsed)).toBe("3 days");
+
+        const oneDay = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 10).toISOString() }),
+            day(2026, 1, 11),
+        );
+        expect(formatPetTrainingElapsed(oneDay)).toBe("1 day");
+    });
+
+    it("reports zero days for a skill started today", () => {
+        const elapsed = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 10).toISOString() }),
+            day(2026, 1, 10),
+        );
+        expect(elapsed.unit).toBe("days");
+        expect(formatPetTrainingElapsed(elapsed)).toBe("0 days");
+    });
+
+    it("switches to weeks at seven days and keeps weeks until the six-month mark", () => {
+        const started = skill({ createdAt: day(2026, 1, 10).toISOString() });
+
+        const oneWeek = derivePetTrainingElapsed(started, day(2026, 1, 17));
+        expect(oneWeek.totalDays).toBe(7);
+        expect(oneWeek.weeks).toBe(1);
+        expect(formatPetTrainingElapsed(oneWeek)).toBe("1 week");
+
+        const weeks = derivePetTrainingElapsed(started, day(2026, 3, 10));
+        expect(weeks.unit).toBe("weeks");
+        expect(weeks.weeks).toBe(8);
+        expect(formatPetTrainingElapsed(weeks)).toBe("8 weeks");
+    });
+
+    it("switches to whole months on the six-month mark", () => {
+        const elapsed = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 10).toISOString() }),
+            day(2026, 7, 10),
+        );
+        expect(elapsed.unit).toBe("months");
+        expect(elapsed.months).toBe(6);
+        expect(formatPetTrainingElapsed(elapsed)).toBe("6 months");
+    });
+
+    it("freezes the window at resolvedAt for a completed skill", () => {
+        const elapsed = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 10).toISOString(), resolvedAt: day(2026, 1, 20).toISOString() }),
+            day(2026, 12, 1),
+        );
+        expect(elapsed.active).toBe(false);
+        expect(elapsed.end.getTime()).toBe(day(2026, 1, 20).getTime());
+        expect(formatPetTrainingElapsed(elapsed)).toBe("1 week");
+    });
+
+    it("clamps a reversed or same-day completed window to zero days", () => {
+        const sameDay = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 10).toISOString(), resolvedAt: day(2026, 1, 10).toISOString() }),
+            day(2026, 2, 1),
+        );
+        expect(formatPetTrainingElapsed(sameDay)).toBe("0 days");
+
+        const reversed = derivePetTrainingElapsed(
+            skill({ createdAt: day(2026, 1, 20).toISOString(), resolvedAt: day(2026, 1, 10).toISOString() }),
+            day(2026, 2, 1),
+        );
+        expect(formatPetTrainingElapsed(reversed)).toBe("0 days");
+    });
+
+    it("rejects an unparseable creation timestamp", () => {
+        expect(() => derivePetTrainingElapsed(skill({ createdAt: "not-a-date" }), day(2026, 1, 10))).toThrow(RangeError);
     });
 });

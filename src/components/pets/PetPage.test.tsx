@@ -548,6 +548,27 @@ describe("PetPage", () => {
         expect(within(settleStamp).getByText("1 session")).toBeInTheDocument();
     });
 
+    it("shows how long each skill has been in training on cards and stamps", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const started = new Date(2026, 8, 10, 9, 0);
+        const finished = new Date(2026, 8, 14, 9, 0);
+        await data.savePetTrainingSkills([
+            { id: "sit", label: "Sit", notes: "", status: "progressing", resolvedAt: null, createdAt: started.toISOString(), updatedAt: started.toISOString() },
+            { id: "stay", label: "Stay", notes: "", status: "reliable", resolvedAt: finished.toISOString(), createdAt: started.toISOString(), updatedAt: finished.toISOString() },
+        ]);
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+
+        const sitCard = screen.getByRole("progressbar", { name: "Sit training progress" }).closest("li") as HTMLElement;
+        expect(within(sitCard).getByText("1 week in training")).toBeInTheDocument();
+
+        // A completed stamp freezes elapsed time at its resolution date.
+        const stayStamp = screen.getByRole("button", { name: "Reopen Stay" }).closest("li") as HTMLElement;
+        expect(within(stayStamp).getByText("4 days in training")).toBeInTheDocument();
+    });
+
     it("steps a training skill back and reopens a resolved one", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data));

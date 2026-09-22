@@ -75,6 +75,8 @@ export {
 } from "./timeline";
 export {
     advancePetTrainingSkill,
+    derivePetTrainingElapsed,
+    formatPetTrainingElapsed,
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
     petTrainingStatusLabel,
@@ -84,6 +86,7 @@ export {
     reversePetTrainingSkill,
     PET_TRAINING_STATUSES,
 } from "./training";
+export type { PetTrainingElapsed, PetTrainingElapsedUnit } from "./training";
 export { PET_SKILL_STAMP_FALLBACK_EMOJI, petSkillStampEmoji } from "./stamps";
 export type { ResolvedIntervalWindow } from "./schedule";
 export {
