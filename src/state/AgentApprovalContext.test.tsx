@@ -17,7 +17,7 @@ import { setAgentApiKey } from "../lib/agent/apiKey";
 import type { StartOfDayWorkflowInput, StartOfDayWorkflowResult } from "../lib/agent/startOfDayWorkflow";
 import type { EndOfDayWorkflowInput, EndOfDayWorkflowResult } from "../lib/agent/endOfDayWorkflow";
 import type { ChatWorkflowInput } from "../lib/agent/chatWorkflow";
-import type { GoogleCalendarDataAccess } from "../lib/data/GoogleCalendarDataAccess";
+import { GoogleCalendarIntegrationError, type GoogleCalendarDataAccess } from "../lib/data/GoogleCalendarDataAccess";
 
 const OWNER = "agent-owner";
 const guardrails = {
@@ -247,6 +247,32 @@ describe("AgentApprovalProvider", () => {
         expect(localStorage.getItem("worktime:agent:startOfDayPlan:v1")).not.toContain("One improvement");
         fireEvent.click(screen.getByRole("button", { name: "Clear activity" }));
         expect(screen.queryByLabelText("Agent activity")).not.toBeInTheDocument();
+    });
+
+    it("offers an in-place reconnect when Calendar busy-time refresh reports an invalid token", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const settings = {
+            scopeLevel: "schedule" as const, selectedCalendarIds: ["primary"], worktimeCalendarId: "worktime",
+            connectedAt: "2026-08-07T12:00:00.000Z", updatedAt: "2026-08-07T12:00:00.000Z",
+        };
+        const googleCalendarDataAccess = {
+            loadSettings: vi.fn().mockResolvedValue(settings),
+            fetchBusyIntervals: vi.fn().mockRejectedValue(new GoogleCalendarIntegrationError("GOOGLE_TOKEN_INVALID", "Google Calendar must be reconnected")),
+            beginAuthorization: vi.fn().mockResolvedValue("https://accounts.google.com/o/oauth2/v2/auth?state=safe"),
+        } as unknown as GoogleCalendarDataAccess;
+        const navigateTo = vi.fn();
+
+        render(wrap(data, <MemoryRouter><AgentPanel googleCalendarDataAccess={googleCalendarDataAccess} navigateTo={navigateTo} /></MemoryRouter>));
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Refresh calendar" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Google Calendar must be reconnected");
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        await waitFor(() => expect(googleCalendarDataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule" })));
+        expect(navigateTo).toHaveBeenCalledOnce();
     });
 
     it("launches End-of-Day, previews tomorrow, and applies the approved priority order", async () => {

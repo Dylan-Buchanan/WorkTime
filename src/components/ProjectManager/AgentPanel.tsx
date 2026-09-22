@@ -24,7 +24,7 @@ import { usePM } from "../../state/ProjectManagerContext";
 import { useHabits } from "../../state/HabitContext";
 import type { TaskChange } from "../../lib/engine/diffEngine";
 import { AgentApprovalCard } from "./AgentApprovalCard";
-import type { GoogleCalendarDataAccess, GoogleCalendarInterval } from "../../lib/data/GoogleCalendarDataAccess";
+import { GoogleCalendarIntegrationError, type GoogleCalendarDataAccess, type GoogleCalendarInterval } from "../../lib/data/GoogleCalendarDataAccess";
 import { resolvePlannerWorkUntil } from "../../lib/engine/plannerContext";
 
 const MODES: { id: AgentMode; label: string; description: string }[] = [
@@ -179,7 +179,8 @@ export const AgentPanel: React.FC<{
     runEndOfDay?: typeof runEndOfDayWorkflow;
     runChat?: typeof runChatWorkflow;
     googleCalendarDataAccess?: GoogleCalendarDataAccess;
-}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow, runChat = runChatWorkflow, googleCalendarDataAccess }) => {
+    navigateTo?: (url: string) => void;
+}> = ({ runStartOfDay = runStartOfDayWorkflow, runEndOfDay = runEndOfDayWorkflow, runChat = runChatWorkflow, googleCalendarDataAccess, navigateTo = (url) => window.location.assign(url) }) => {
     const agent = useAgentApproval();
     const pm = usePM();
     const app = useAppState();
@@ -192,7 +193,9 @@ export const AgentPanel: React.FC<{
     const [workUntil, setWorkUntil] = useState(initialWorkUntil);
     const [generating, setGenerating] = useState(false);
     const [generationError, setGenerationError] = useState<string | null>(null);
+    const [generationErrorCode, setGenerationErrorCode] = useState<string | null>(null);
     const [calendarRefreshing, setCalendarRefreshing] = useState(false);
+    const [calendarReconnecting, setCalendarReconnecting] = useState(false);
     const [calendarFeedback, setCalendarFeedback] = useState<string | null>(null);
     const [progressEvents, setProgressEvents] = useState<StartOfDayProgressEvent[]>([]);
     const [planPreview, setPlanPreview] = useState<StartOfDayWorkflowResult | null>(null);
@@ -220,6 +223,14 @@ export const AgentPanel: React.FC<{
         setProgressEvents((current) => [...current, event].slice(-PROGRESS_EVENT_LIMIT));
     }, []);
     const clearProgress = useCallback(() => setProgressEvents([]), []);
+    const clearGenerationError = () => {
+        setGenerationError(null);
+        setGenerationErrorCode(null);
+    };
+    const showGenerationError = (value: string, reason?: unknown) => {
+        setGenerationError(value);
+        setGenerationErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+    };
     useEffect(() => subscribeToAgentApiKey((key) => setHasKey(Boolean(key))), []);
     useEffect(() => { if (agent.status === "reviewing" || agent.status === "replanning") setOpen(true); }, [agent.status]);
 
@@ -264,26 +275,40 @@ export const AgentPanel: React.FC<{
         if (calendarRefreshing || !workUntil) return;
         setCalendarRefreshing(true);
         setCalendarFeedback(null);
-        setGenerationError(null);
+        clearGenerationError();
         try { await fetchCalendarBusy(new Date(), workUntil, true); }
-        catch (error) { setGenerationError(error instanceof Error ? error.message : "Calendar refresh failed."); }
+        catch (error) { showGenerationError(error instanceof Error ? error.message : "Calendar refresh failed.", error); }
         finally { setCalendarRefreshing(false); }
+    };
+
+    const reconnectGoogleCalendar = async () => {
+        if (!googleCalendarDataAccess || calendarReconnecting) return;
+        setCalendarReconnecting(true);
+        clearGenerationError();
+        try {
+            const settings = await googleCalendarDataAccess.loadSettings();
+            const returnTo = `${window.location.origin}${window.location.pathname}`;
+            navigateTo(await googleCalendarDataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", returnTo }));
+        } catch (error) {
+            showGenerationError(error instanceof Error ? error.message : "Unable to begin Google authorization.", error);
+            setCalendarReconnecting(false);
+        }
     };
 
     const handleStartOfDay = async () => {
         if (generationInFlightRef.current) return;
         const projectId = pm.state.ui.selectedProjectIds[0];
         if (!projectId) {
-            setGenerationError("Select a project before planning the day.");
+            showGenerationError("Select a project before planning the day.");
             return;
         }
         if (!app.state) {
-            setGenerationError("Timer data is still loading. Try again in a moment.");
+            showGenerationError("Timer data is still loading. Try again in a moment.");
             return;
         }
         generationInFlightRef.current = true;
         setGenerating(true);
-        setGenerationError(null);
+        clearGenerationError();
         setProgressEvents([]);
         setPlanPreview(null);
         const logs = app.state.logs;
@@ -354,10 +379,10 @@ export const AgentPanel: React.FC<{
             if (!started) {
                 latestWorkflow.current = previousWorkflow;
                 setPlanPreview(previousWorkflow);
-                setGenerationError("The review could not start. Select an existing project and finish any active review before trying again.");
+                showGenerationError("The review could not start. Select an existing project and finish any active review before trying again.");
             }
         } catch (error) {
-            setGenerationError(error instanceof Error ? error.message : "The Start-of-Day plan could not be generated.");
+            showGenerationError(error instanceof Error ? error.message : "The Start-of-Day plan could not be generated.", error);
         } finally {
             generationInFlightRef.current = false;
             setGenerating(false);
@@ -368,12 +393,12 @@ export const AgentPanel: React.FC<{
         if (generationInFlightRef.current) return;
         const projectId = pm.state.ui.selectedProjectIds[0];
         if (!projectId) {
-            setGenerationError("Select a project before wrapping up the day.");
+            showGenerationError("Select a project before wrapping up the day.");
             return;
         }
         generationInFlightRef.current = true;
         setGenerating(true);
-        setGenerationError(null);
+        clearGenerationError();
         setProgressEvents([]);
         setEndOfDayPreview(null);
         try {
@@ -409,10 +434,10 @@ export const AgentPanel: React.FC<{
             if (!started) {
                 latestEndOfDayWorkflow.current = previousWorkflow;
                 setEndOfDayPreview(previousWorkflow);
-                setGenerationError("The review could not start. Select an existing project and finish any active review before trying again.");
+                showGenerationError("The review could not start. Select an existing project and finish any active review before trying again.");
             }
         } catch (error) {
-            setGenerationError(error instanceof Error ? error.message : "The End-of-Day review could not be generated.");
+            showGenerationError(error instanceof Error ? error.message : "The End-of-Day review could not be generated.", error);
         } finally {
             generationInFlightRef.current = false;
             setGenerating(false);
@@ -425,7 +450,7 @@ export const AgentPanel: React.FC<{
         if (!message) return;
         const projectId = pm.state.ui.selectedProjectIds[0];
         if (!projectId) {
-            setGenerationError("Select a project before chatting with the agent.");
+            showGenerationError("Select a project before chatting with the agent.");
             return;
         }
         const nextMessages: AgentChatMessage[] = [...chatMessagesRef.current, { role: "user", content: message }];
@@ -434,7 +459,7 @@ export const AgentPanel: React.FC<{
         chatMessagesRef.current = nextMessages;
         generationInFlightRef.current = true;
         setGenerating(true);
-        setGenerationError(null);
+        clearGenerationError();
         try {
             const result = await runChat({
                 projectId,
@@ -474,10 +499,10 @@ export const AgentPanel: React.FC<{
                         return replanned.changes;
                     },
                 });
-                if (!started) setGenerationError("The review could not start. Finish any active review before sending another proposal.");
+                if (!started) showGenerationError("The review could not start. Finish any active review before sending another proposal.");
             }
         } catch (error) {
-            setGenerationError(error instanceof Error ? error.message : "The chat response could not be generated.");
+            showGenerationError(error instanceof Error ? error.message : "The chat response could not be generated.", error);
         } finally {
             generationInFlightRef.current = false;
             setGenerating(false);
@@ -492,6 +517,10 @@ export const AgentPanel: React.FC<{
         : undefined, [agent.currentChange, pm.state.tasks]);
     const approveCurrent = useCallback(() => { void approveCurrentRef.current(); }, []);
     const rejectCurrent = useCallback(() => { void rejectCurrentRef.current(); }, []);
+    const generationErrorAlert = generationError && <div className="mt-2 text-[11px] text-red-300">
+        <p role="alert">{generationError}</p>
+        {generationErrorCode === "GOOGLE_TOKEN_INVALID" && googleCalendarDataAccess && <button type="button" onClick={() => void reconnectGoogleCalendar()} disabled={calendarReconnecting} className="mt-1 underline underline-offset-2 disabled:opacity-50">{calendarReconnecting ? "Opening Google…" : "Reconnect"}</button>}
+    </div>;
 
     if (!open) {
         return <button type="button" onClick={() => setOpen(true)} className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-600 px-4 py-3 font-medium text-white shadow-2xl hover:bg-violet-500" aria-label="Open planning agent"><Sparkles size={16} />Plan with agent</button>;
@@ -535,20 +564,20 @@ export const AgentPanel: React.FC<{
                                 <label htmlFor="agent-work-until" className="block text-[11px] font-medium text-neutral-200">Work until</label>
                                 <p className="mt-0.5 text-[10px] text-neutral-500">The plan will fit whole pomodoros into this window.</p>
                                 <div className="mt-2 flex gap-2">
-                                    <input id="agent-work-until" aria-label="Work until" type="time" value={workUntil} onChange={(event) => { setWorkUntil(event.target.value); setGenerationError(null); }} className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100" />
+                                    <input id="agent-work-until" aria-label="Work until" type="time" value={workUntil} onChange={(event) => { setWorkUntil(event.target.value); clearGenerationError(); }} className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100" />
                                     {googleCalendarDataAccess && <button type="button" disabled={generating || calendarRefreshing || !workUntil} onClick={() => void handleCalendarRefresh()} className="rounded-lg border border-neutral-700 px-2 py-1.5 text-[10px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-50">{calendarRefreshing ? "Refreshing…" : "Refresh calendar"}</button>}
                                     <button type="button" disabled={generating || !workUntil} onClick={() => void handleStartOfDay()} className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-500 disabled:opacity-50">{generating ? "Planning…" : "Generate plan"}</button>
                                 </div>
                                 {calendarFeedback && <p role="status" className="mt-2 text-[10px] text-sky-300">{calendarFeedback}</p>}
                                 {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Building and validating your day plan…</p>}
-                                {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
+                                {generationErrorAlert}
                             </div>
                         ) : agent.mode === "end-of-day" ? (
                             <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-900 p-3">
                                 <p className="text-[11px] text-neutral-300">Compare today&apos;s saved plan with completed work and prepare the priority order for tomorrow.</p>
                                 <button type="button" disabled={generating} onClick={() => void handleEndOfDay()} className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-1.5 font-medium text-white hover:bg-emerald-500 disabled:opacity-50">{generating ? "Wrapping up…" : "Wrap up day"}</button>
                                 {generating && <p role="status" className="mt-2 text-[11px] text-emerald-300">Comparing progress and preparing tomorrow…</p>}
-                                {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
+                                {generationErrorAlert}
                             </div>
                         ) : agent.mode === "chat" ? (
                             <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-900 p-3">
@@ -562,11 +591,11 @@ export const AgentPanel: React.FC<{
                                 </div>
                                 <label htmlFor="agent-chat-message" className="sr-only">Message the planning agent</label>
                                 <div className="mt-3 flex items-end gap-2">
-                                    <textarea id="agent-chat-message" aria-label="Message the planning agent" rows={2} value={chatDraft} onChange={(event) => { setChatDraft(event.target.value); setGenerationError(null); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void handleChat(); } }} placeholder="Ask or propose a change…" className="min-w-0 flex-1 resize-none rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-2 text-[11px] text-neutral-100 placeholder:text-neutral-600" />
+                                    <textarea id="agent-chat-message" aria-label="Message the planning agent" rows={2} value={chatDraft} onChange={(event) => { setChatDraft(event.target.value); clearGenerationError(); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void handleChat(); } }} placeholder="Ask or propose a change…" className="min-w-0 flex-1 resize-none rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-2 text-[11px] text-neutral-100 placeholder:text-neutral-600" />
                                     <button type="button" aria-label="Send message" disabled={generating || !chatDraft.trim()} onClick={() => void handleChat()} className="rounded-lg bg-violet-600 p-2 text-white hover:bg-violet-500 disabled:opacity-50"><Send size={15} /></button>
                                 </div>
                                 {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Thinking with your project and habit context…</p>}
-                                {generationError && <p role="alert" className="mt-2 text-[11px] text-red-300">{generationError}</p>}
+                                {generationErrorAlert}
                             </div>
                         ) : null}
                     </>

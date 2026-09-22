@@ -59,6 +59,23 @@ describe("GoogleCalendarTaskSection", () => {
         expect(pushTask.mock.calls[1][0]).toMatchObject({ allowConflict: true, title: "Write launch brief" });
     });
 
+    it("offers an in-place reconnect after an invalid-token task operation", async () => {
+        const dataAccess = access("schedule", {
+            pushTask: vi.fn().mockRejectedValue(new GoogleCalendarIntegrationError("GOOGLE_TOKEN_INVALID", "Google Calendar must be reconnected")),
+        });
+        const navigateTo = vi.fn();
+        render(<MemoryRouter><GoogleCalendarTaskSection task={task} workMinutes={25} dataAccess={dataAccess} navigateTo={navigateTo} /></MemoryRouter>);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Push to Google" }));
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Google Calendar must be reconnected");
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+        await waitFor(() => expect(dataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule" })));
+        expect(dataAccess.disconnect).not.toHaveBeenCalled();
+        expect(navigateTo).toHaveBeenCalledOnce();
+    });
+
     it("surfaces estimate drift and resyncs only on request", async () => {
         const dataAccess = access("schedule", { loadTaskLink: vi.fn().mockResolvedValue({ ...linked, estimatePomos: 1 }) });
         render(<MemoryRouter><GoogleCalendarTaskSection task={task} workMinutes={25} dataAccess={dataAccess} /></MemoryRouter>);

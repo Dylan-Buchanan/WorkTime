@@ -62,6 +62,7 @@ export const GoogleCalendarTaskSection = ({
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [errorCode, setErrorCode] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [conflict, setConflict] = useState<{ action: "push" | "resync"; input: GoogleCalendarPushInput; intervals: Array<{ start: string; end: string }> } | null>(null);
     const resumedRef = useRef<string | null>(null);
@@ -72,6 +73,7 @@ export const GoogleCalendarTaskSection = ({
         setTimeDraft(localTime(value));
         setConflict(null);
         setError(null);
+        setErrorCode(null);
         setNotice(null);
     }, [task.id]);
 
@@ -103,12 +105,14 @@ export const GoogleCalendarTaskSection = ({
         }).catch((reason) => {
             if (!active) return;
             setError(errorMessage(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
             setLoading(false);
         });
         return () => { active = false; };
     }, [dataAccess, task.id]);
 
     function buildInput(scheduledStart?: string): GoogleCalendarPushInput | null {
+        setErrorCode(null);
         const estimate = Number(task.estimatePomos);
         const start = scheduledStart ? new Date(scheduledStart) : new Date(`${dateDraft}T${timeDraft}:00`);
         if (!task.title.trim()) { setError("Give the task a title before scheduling it."); return null; }
@@ -121,6 +125,7 @@ export const GoogleCalendarTaskSection = ({
     async function write(action: "push" | "resync", input: GoogleCalendarPushInput, allowConflict = false) {
         setBusy(true);
         setError(null);
+        setErrorCode(null);
         setNotice(null);
         setConflict(null);
         try {
@@ -132,7 +137,10 @@ export const GoogleCalendarTaskSection = ({
         } catch (reason) {
             if (reason instanceof GoogleCalendarIntegrationError && reason.code === "CALENDAR_CONFLICT") {
                 setConflict({ action, input, intervals: reason.conflicts });
-            } else setError(errorMessage(reason));
+            } else {
+                setError(errorMessage(reason));
+                setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+            }
             throw reason;
         } finally { setBusy(false); }
     }
@@ -141,6 +149,7 @@ export const GoogleCalendarTaskSection = ({
         const input = buildInput();
         if (!input) return;
         setError(null);
+        setErrorCode(null);
         if (settings?.scopeLevel === "readonly") {
             setBusy(true);
             try {
@@ -151,7 +160,11 @@ export const GoogleCalendarTaskSection = ({
                     pendingTaskId: task.id,
                     pendingScheduledStart: input.scheduledStart,
                 }));
-            } catch (reason) { setError(errorMessage(reason)); setBusy(false); }
+            } catch (reason) {
+                setError(errorMessage(reason));
+                setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+                setBusy(false);
+            }
             return;
         }
         try { await write("push", input); } catch { /* feedback is already rendered */ }
@@ -166,12 +179,30 @@ export const GoogleCalendarTaskSection = ({
     async function unpush() {
         setBusy(true);
         setError(null);
+        setErrorCode(null);
         try {
             await dataAccess.unpushTask(task.id);
             setLink(null);
             setNotice("Task removed from Google Calendar.");
-        } catch (reason) { setError(errorMessage(reason)); }
+        } catch (reason) {
+            setError(errorMessage(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+        }
         finally { setBusy(false); }
+    }
+
+    async function reconnect() {
+        setBusy(true);
+        setError(null);
+        setErrorCode(null);
+        try {
+            const returnTo = `${window.location.origin}${window.location.pathname}`;
+            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", returnTo }));
+        } catch (reason) {
+            setError(errorMessage(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+            setBusy(false);
+        }
     }
 
     useEffect(() => {
@@ -187,7 +218,10 @@ export const GoogleCalendarTaskSection = ({
                 if (!input) throw new Error("The pending task can no longer be scheduled.");
                 await write("push", input);
             } catch (reason) {
-                if (!(reason instanceof GoogleCalendarIntegrationError && reason.code === "CALENDAR_CONFLICT")) setError(errorMessage(reason));
+                if (!(reason instanceof GoogleCalendarIntegrationError && reason.code === "CALENDAR_CONFLICT")) {
+                    setError(errorMessage(reason));
+                    setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+                }
             } finally { onResumeConsumed(); }
         })();
     // The callback object is intentionally consumed once by its stable values.
@@ -223,7 +257,10 @@ export const GoogleCalendarTaskSection = ({
                 <button type="button" disabled={busy} onClick={() => void write(conflict.action, conflict.input, true).catch(() => undefined)} className="mt-1 rounded bg-amber-800 px-2 py-1 text-[9px] text-white">{conflict.action === "push" ? "Push anyway" : "Resync anyway"}</button>
             </div>}
             {notice && <p role="status" className="text-[9px] text-emerald-300">{notice}</p>}
-            {error && <p role="alert" className="text-[9px] text-red-300">{error}</p>}
+            {error && <div className="text-[9px] text-red-300">
+                <p role="alert">{error}</p>
+                {errorCode === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void reconnect()} disabled={busy} className="mt-1 underline underline-offset-2 disabled:opacity-50">{busy ? "Opening Googleâ€¦" : "Reconnect"}</button>}
+            </div>}
         </div>
     );
 };

@@ -6,6 +6,7 @@ import type {
     GoogleCalendarEvent,
     GoogleCalendarSettings,
 } from "../lib/data/GoogleCalendarDataAccess";
+import { GoogleCalendarIntegrationError } from "../lib/data/GoogleCalendarDataAccess";
 import { consumeGoogleCalendarOAuthReturn } from "../lib/integrations";
 
 export interface GoogleCalendarIntegrationCardProps {
@@ -63,6 +64,7 @@ export const GoogleCalendarIntegrationCard = ({
     const [busy, setBusy] = useState(false);
     const [open, setOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [errorCode, setErrorCode] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const rootRef = useRef<HTMLDivElement>(null);
     const now = new Date();
@@ -73,16 +75,25 @@ export const GoogleCalendarIntegrationCard = ({
         const timeMax = new Date(days[6]);
         timeMax.setDate(timeMax.getDate() + 1);
         setEventsLoading(true);
+        setError(null);
+        setErrorCode(null);
         try { setEvents(await dataAccess.fetchEvents({ timeMin: days[0].toISOString(), timeMax: timeMax.toISOString() })); }
-        catch (reason) { setError(message(reason)); }
+        catch (reason) {
+            setError(message(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+        }
         finally { setEventsLoading(false); }
     }, [dataAccess]);
 
     const loadCalendars = useCallback(async () => {
         setBusy(true);
         setError(null);
+        setErrorCode(null);
         try { setCalendars(await dataAccess.listCalendars()); }
-        catch (reason) { setError(message(reason)); }
+        catch (reason) {
+            setError(message(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+        }
         finally { setBusy(false); }
     }, [dataAccess]);
 
@@ -103,6 +114,7 @@ export const GoogleCalendarIntegrationCard = ({
         }).catch((reason) => {
             if (!active) return;
             setError(message(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
             setLoading(false);
         });
         return () => { active = false; };
@@ -127,11 +139,13 @@ export const GoogleCalendarIntegrationCard = ({
     async function connect() {
         setBusy(true);
         setError(null);
+        setErrorCode(null);
         try {
             const returnTo = `${window.location.origin}${window.location.pathname}`;
-            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: "readonly", returnTo }));
+            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", returnTo }));
         } catch (reason) {
             setError(message(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
             setBusy(false);
         }
     }
@@ -139,6 +153,7 @@ export const GoogleCalendarIntegrationCard = ({
     async function saveSelection() {
         setBusy(true);
         setError(null);
+        setErrorCode(null);
         setNotice(null);
         try {
             await dataAccess.updateSelectedCalendars(selected);
@@ -148,7 +163,10 @@ export const GoogleCalendarIntegrationCard = ({
             setNotice("Calendar selection saved.");
             setOpen(false);
             await loadEvents();
-        } catch (reason) { setError(message(reason)); }
+        } catch (reason) {
+            setError(message(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+        }
         finally { setBusy(false); }
     }
 
@@ -156,6 +174,7 @@ export const GoogleCalendarIntegrationCard = ({
         if (!window.confirm("Disconnect Google Calendar? Existing WorkTime calendar events will remain in Google.")) return;
         setBusy(true);
         setError(null);
+        setErrorCode(null);
         try {
             await dataAccess.disconnect();
             setSettings(null);
@@ -163,7 +182,10 @@ export const GoogleCalendarIntegrationCard = ({
             setEvents([]);
             setSelected([]);
             setNotice("Google Calendar disconnected. Existing Google events were left in place.");
-        } catch (reason) { setError(message(reason)); }
+        } catch (reason) {
+            setError(message(reason));
+            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+        }
         finally { setBusy(false); }
     }
 
@@ -273,7 +295,10 @@ export const GoogleCalendarIntegrationCard = ({
                 </div>
             )}
             {notice && <p role="status" className="mt-3 text-[10px] text-emerald-300">{notice}</p>}
-            {error && <p role="alert" className="mt-3 text-[10px] text-red-300">{error}</p>}
+            {error && <div className="mt-3 text-[10px] text-red-300">
+                <p role="alert">{error}</p>
+                {errorCode === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void connect()} disabled={busy} className="mt-1 underline underline-offset-2 disabled:opacity-50">{busy ? "Opening Googleâ€¦" : "Reconnect"}</button>}
+            </div>}
         </article>
     );
 };

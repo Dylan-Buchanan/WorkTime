@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GoogleCalendarDataAccess } from "../lib/data/GoogleCalendarDataAccess";
+import { GoogleCalendarIntegrationError } from "../lib/data/GoogleCalendarDataAccess";
 import { GoogleCalendarIntegrationCard } from "./GoogleCalendarIntegrationCard";
 
 function access(overrides: Partial<GoogleCalendarDataAccess> = {}): GoogleCalendarDataAccess {
@@ -27,6 +28,27 @@ describe("GoogleCalendarIntegrationCard", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Connect read only" }));
         await waitFor(() => expect(dataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "readonly" })));
         expect(navigateTo).toHaveBeenCalledWith(expect.stringContaining("accounts.google.com"));
+    });
+
+    it("reconnects an invalid schedule-tier connection without downgrading its scope", async () => {
+        const settings = {
+            scopeLevel: "schedule" as const, selectedCalendarIds: ["primary"], worktimeCalendarId: "worktime",
+            connectedAt: "2026-08-29T12:00:00.000Z", updatedAt: "2026-08-29T12:00:00.000Z",
+        };
+        const dataAccess = access({
+            loadSettings: vi.fn().mockResolvedValue(settings),
+            fetchEvents: vi.fn().mockRejectedValue(new GoogleCalendarIntegrationError("GOOGLE_TOKEN_INVALID", "Google Calendar must be reconnected")),
+        });
+        const navigateTo = vi.fn();
+
+        render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} navigateTo={navigateTo} />);
+
+        const alert = await screen.findByRole("alert");
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        expect(alert).toHaveTextContent("Google Calendar must be reconnected");
+        await waitFor(() => expect(dataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule" })));
+        expect(dataAccess.disconnect).not.toHaveBeenCalled();
+        expect(navigateTo).toHaveBeenCalledOnce();
     });
 
     it("shows the connection tier and saves selected calendars from the picker dropdown", async () => {
