@@ -33,9 +33,10 @@ export function isSameLocalDay(left: Date, right: Date): boolean {
 }
 
 /**
- * Appends one minimal `{ activityType, timestamp, durationMinutes? }` record.
+ * Appends one minimal `{ activityType, timestamp, durationMinutes?, skillIds? }` record.
  * `durationMinutes` is only accepted for training and playtime; potty and
- * feeding always stay one-tap records with no duration.
+ * feeding always stay one-tap records with no duration. Skill tags are kept
+ * only for training records.
  */
 export function logActivity(
     records: readonly PetActivityRecord[],
@@ -53,6 +54,42 @@ export function logActivity(
 /** Undo deletes the record entirely; the log recomputes as if it never happened. */
 export function removeActivityRecord(records: readonly PetActivityRecord[], id: string): PetActivityRecord[] {
     return records.filter((record) => record.id !== id);
+}
+
+/** Replaces the historical skill tags on one training record. */
+export function setActivitySkillIds(
+    records: readonly PetActivityRecord[],
+    id: string,
+    skillIds: readonly string[],
+): PetActivityRecord[] {
+    const index = records.findIndex((record) => record.id === id);
+    if (index === -1) throw new RangeError("Activity record not found");
+    if (records[index].activityType !== "training") {
+        throw new RangeError("Skill tags are only meaningful for training activities");
+    }
+    const next = records.slice();
+    const uniqueSkillIds = [...new Set(skillIds)];
+    const { skillIds: _previousSkillIds, ...unchanged } = records[index];
+    next[index] = uniqueSkillIds.length > 0 ? { ...unchanged, skillIds: uniqueSkillIds } : unchanged;
+    return next;
+}
+
+/**
+ * Counts how many logged training sessions have included each skill id. Only
+ * training records carry skill tags, and a record counts at most once per skill
+ * even if the id repeats. Derived only; never stored.
+ */
+export function countTrainingSessionsBySkill(
+    records: readonly PetActivityRecord[],
+): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const record of records) {
+        if (record.activityType !== "training" || !record.skillIds) continue;
+        for (const skillId of new Set(record.skillIds)) {
+            counts[skillId] = (counts[skillId] ?? 0) + 1;
+        }
+    }
+    return counts;
 }
 
 /** Today's records stay correctable; yesterday-and-older records are frozen. */

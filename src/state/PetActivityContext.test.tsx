@@ -47,6 +47,7 @@ function Probe() {
         hydrated,
         logActivity,
         undoActivity,
+        setActivitySkillIds,
         correctActivityTimestamp,
         canCorrectActivity,
         todayCounts,
@@ -60,8 +61,12 @@ function Probe() {
         <span data-testid="today-potty">{todayCounts().potty}</span>
         <span data-testid="can-correct">{first ? String(canCorrectActivity(first.id)) : ""}</span>
         <span data-testid="error">{error}</span>
+        <span data-testid="skill-ids">{JSON.stringify(first?.skillIds)}</span>
         <button onClick={() => logActivity({ activityType: "potty", timestamp: new Date() })}>log-potty</button>
         <button onClick={() => logActivity({ activityType: "training", timestamp: new Date(), durationMinutes: 10 })}>log-training</button>
+        <button onClick={() => logActivity({ activityType: "training", timestamp: new Date(), skillIds: ["sit", "stay", "sit"] })}>log-tagged-training</button>
+        <button onClick={() => first && setActivitySkillIds(first.id, ["down", "down"])}>set-tags</button>
+        <button onClick={() => first && setActivitySkillIds(first.id, [])}>clear-tags</button>
         <button onClick={() => first && undoActivity(first.id)}>undo</button>
         <button onClick={() => {
             try {
@@ -114,6 +119,15 @@ describe("PetActivityContext", () => {
         await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
     });
 
+    it("hydrates unknown skill ids without pruning them", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetActivityRecords([{ ...record("a1", "training", at(9)), skillIds: ["missing-skill"] }]);
+
+        await renderHydrated(data);
+        await waitFor(() => expect(screen.getByTestId("skill-ids")).toHaveTextContent('["missing-skill"]'));
+        expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["missing-skill"]);
+    });
+
     it("logs through the single write path, stages locally, and offers undo", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const save = vi.spyOn(data, "savePetActivityRecords");
@@ -157,6 +171,25 @@ describe("PetActivityContext", () => {
             expect(records[1]).toMatchObject({ activityType: "potty" });
             expect(records[1].durationMinutes).toBeUndefined();
         });
+    });
+
+    it("persists tags on create and on tag-only replacement or clearing", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const save = vi.spyOn(data, "savePetActivityRecords");
+        await renderHydrated(data);
+        save.mockClear();
+
+        fireEvent.click(screen.getByText("log-tagged-training"));
+        await waitFor(async () => expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["sit", "stay"]));
+        expect(save).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(screen.getByText("set-tags"));
+        await waitFor(async () => expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["down"]));
+        expect(save).toHaveBeenCalledTimes(2);
+
+        fireEvent.click(screen.getByText("clear-tags"));
+        await waitFor(async () => expect((await data.loadPetActivityRecords())[0]).not.toHaveProperty("skillIds"));
+        expect(save).toHaveBeenCalledTimes(3);
     });
 
     it("corrects today's timestamp in place", async () => {

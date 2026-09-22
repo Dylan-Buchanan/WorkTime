@@ -7,6 +7,9 @@
         "dev": "vite",
         "app": "npm run tauri dev",
         "build": "tsc && vite build",
+        "lint": "npm run lint:app && npm run lint:supabase",
+        "lint:app": "tsc --noEmit",
+        "lint:supabase": "deno check supabase/functions/*/*.ts && npx supabase db lint --local --fail-on error",
         "preview": "vite preview",
         "tauri": "tauri",
         "sync-version": "node scripts/sync-version.mjs",
@@ -24,7 +27,8 @@
         "supabase:reset": "npx supabase db reset",
         "supabase:status": "npx supabase status",
         "supabase:serve": "npx supabase functions serve --env-file supabase/.env.local",
-        "supabase:fullstart": "npm run supabase:start && npm run supabase:serve"
+        "supabase:fullstart": "npm run supabase:start && npm run supabase:serve",
+        "branch:check": "pnpm supabase:reset && pnpm lint && pnpm build && pnpm test:all"
     },
     "dependencies": {
         "@dnd-kit/core": "^6.3.1",

@@ -246,7 +246,10 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         const t = "2026-01-01T00:00:00.000Z";
         const rows = {
             pet_profiles: [{ id: "profile", name: "Mochi", birth_date: "2025-12-01", created_at: t, updated_at: t }],
-            pet_activity_records: [{ id: "activity", activity_type: "potty", occurred_at: t, duration_minutes: null, created_at: t, updated_at: t }],
+            pet_activity_records: [
+                { id: "activity", activity_type: "training", occurred_at: t, duration_minutes: null, skill_ids: ["sit", "unknown"], created_at: t, updated_at: t },
+                { id: "legacy-activity", activity_type: "training", occurred_at: t, duration_minutes: null, created_at: t, updated_at: t },
+            ],
             pet_schedule_items: [{ id: "schedule", activity_type: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, is_active: true, created_at: t, updated_at: t }],
             pet_nap_records: [{ id: "nap", started_at: t, ended_at: null, created_at: t, updated_at: t }],
             pet_weight_entries: [{ id: "weight", measured_at: t, weight: 5.25, created_at: t, updated_at: t }],
@@ -259,7 +262,8 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         const snapshot = await new SupabaseDataAccess(client).pull(OWNER);
 
         expect(snapshot.petProfile.value).toMatchObject({ id: "profile", name: "Mochi" });
-        expect(snapshot.petActivityRecords.activity.value.activityType).toBe("potty");
+        expect(snapshot.petActivityRecords.activity.value).toMatchObject({ activityType: "training", skillIds: ["sit", "unknown"] });
+        expect(snapshot.petActivityRecords["legacy-activity"].value).not.toHaveProperty("skillIds");
         expect(snapshot.petScheduleItems.schedule.value.recurrence).toMatchObject({ mode: "fixed-time", startMinutes: 480 });
         expect(snapshot.petNapRecords.nap.value.end).toBeNull();
         expect(snapshot.petWeightEntries.weight.value.weight).toBe(5.25);
@@ -282,6 +286,22 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         }
     });
 
+    it("rejects malformed skill_ids from pet activity rows", async () => {
+        const t = "2026-01-01T00:00:00.000Z";
+        const settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+        await expect(new SupabaseDataAccess(pullClient(settings, {
+            pet_activity_records: [{
+                id: "bad-tags",
+                activity_type: "training",
+                occurred_at: t,
+                duration_minutes: null,
+                skill_ids: ["sit", 1],
+                created_at: t,
+                updated_at: t,
+            }],
+        })).pull(OWNER)).rejects.toThrow(/pet_activity_records/);
+    });
+
     it("maps every pet delta to its apply_staged_sync argument", async () => {
         const { client, rpc } = mockClient();
         const data = new SupabaseDataAccess(client);
@@ -290,7 +310,11 @@ describe("SupabaseDataAccess habit transport mapping", () => {
             ...emptyPlan(),
             petProfile: { value: { id: "profile", name: "Mochi", birthDate: "2025-12-01", createdAt: t, updatedAt: t }, updatedAt: t },
             petProfileTombstone: { id: "old-profile", deletedAt: t },
-            petActivityUpserts: [{ value: { id: "activity", activityType: "training", timestamp: t, durationMinutes: 10, createdAt: t }, updatedAt: t }],
+            petActivityUpserts: [
+                { value: { id: "activity", activityType: "training", timestamp: t, durationMinutes: 10, skillIds: ["sit"], createdAt: t }, updatedAt: t },
+                { value: { id: "untagged-activity", activityType: "training", timestamp: t, createdAt: t }, updatedAt: t },
+                { value: { id: "empty-tags-activity", activityType: "training", timestamp: t, skillIds: [], createdAt: t }, updatedAt: t },
+            ],
             petActivityTombstones: [{ id: "old-activity", deletedAt: t }],
             petScheduleUpserts: [{ value: { id: "schedule", activityType: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: t, updatedAt: t }, updatedAt: t }],
             petScheduleTombstones: [{ id: "old-schedule", deletedAt: t }],
@@ -308,7 +332,9 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         const args = rpc.mock.calls[0][1];
         expect(args.p_pet_profile_upsert).toMatchObject({ id: "profile", birth_date: "2025-12-01", updated_at: t });
         expect(args.p_pet_profile_tombstone).toEqual({ id: "old-profile", deleted_at: t });
-        expect(args.p_pet_activity_upserts[0]).toMatchObject({ id: "activity", activity_type: "training", duration_minutes: 10 });
+        expect(args.p_pet_activity_upserts[0]).toMatchObject({ id: "activity", activity_type: "training", duration_minutes: 10, skill_ids: ["sit"] });
+        expect(args.p_pet_activity_upserts[1]).not.toHaveProperty("skill_ids");
+        expect(args.p_pet_activity_upserts[2]).not.toHaveProperty("skill_ids");
         expect(args.p_pet_schedule_upserts[0]).toMatchObject({ id: "schedule", activity_type: "feeding", is_active: true });
         expect(args.p_pet_nap_upserts[0]).toMatchObject({ id: "nap", started_at: t, ended_at: null });
         expect(args.p_pet_weight_upserts[0]).toMatchObject({ id: "weight", measured_at: t, weight: 5.25 });

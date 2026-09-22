@@ -108,7 +108,7 @@ docs/research/
 Use this filename pattern when possible:
 
 ```text
-docs/research/<issue-number>-<short-slug>.md
+docs/research/issue-<issue-number>-research.md
 ```
 
 If there is no issue number, use:

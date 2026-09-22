@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
     advancePetTrainingSkill,
+    countTrainingSessionsBySkill,
     createPetTrainingSkill,
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
@@ -13,7 +14,9 @@ import {
     reversePetTrainingSkill,
 } from "../../lib/pets";
 import type { PetTrainingSkill, PetTrainingStatus } from "../../state/types";
+import { usePetActivity } from "../../state/PetActivityContext";
 import { usePets } from "../../state/PetContext";
+import { PetSkillMultiSelect, PetSkillTags } from "./PetSkillTags";
 
 interface StatusStyle {
     /** Card shell tint so the whole card reads at a glance. */
@@ -93,12 +96,23 @@ function formatResolvedAt(value: string): string {
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
 }
 
+function sessionCountLabel(count: number): string {
+    return count === 1 ? "1 session" : `${count} sessions`;
+}
+
+const SessionCountBadge: React.FC<{ count: number }> = ({ count }) => (
+    <span className="shrink-0 rounded-full border border-neutral-700 px-2 py-0.5 text-[11px] tabular-nums text-neutral-300">
+        {sessionCountLabel(count)}
+    </span>
+);
+
 interface SkillStampProps {
     skill: PetTrainingSkill;
+    sessionCount: number;
     onReopen: (id: string) => void;
 }
 
-const SkillStamp: React.FC<SkillStampProps> = ({ skill, onReopen }) => (
+const SkillStamp: React.FC<SkillStampProps> = ({ skill, sessionCount, onReopen }) => (
     <li
         className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-emerald-700/50 bg-emerald-950/20 p-3 text-center"
     >
@@ -109,6 +123,7 @@ const SkillStamp: React.FC<SkillStampProps> = ({ skill, onReopen }) => (
         <p className="text-[11px] text-neutral-500">
             {skill.resolvedAt ? `done ${formatResolvedAt(skill.resolvedAt)}` : "done"}
         </p>
+        <p className="text-[11px] tabular-nums text-neutral-400">{sessionCountLabel(sessionCount)}</p>
         <button
             type="button"
             aria-label={`Reopen ${skill.label}`}
@@ -133,12 +148,29 @@ interface EditDraft {
  */
 export const PetTrainingTab: React.FC = () => {
     const pets = usePets();
-    const skills = Object.values(pets.state.trainingSkills);
+    const activity = usePetActivity();
+    const skills = useMemo(() => Object.values(pets.state.trainingSkills), [pets.state.trainingSkills]);
+    const recentSessions = useMemo(
+        () => Object.values(activity.state.records)
+            .filter((record) => record.activityType === "training")
+            .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime())
+            .slice(0, 10),
+        [activity.state.records],
+    );
+    const sessionCountBySkill = useMemo(
+        () => countTrainingSessionsBySkill(Object.values(activity.state.records)),
+        [activity.state.records],
+    );
     const [draft, setDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [error, setError] = useState<string | null>(null);
     const [flash, setFlash] = useState<{ id: string; direction: StepDirection } | null>(null);
+    const [sessionSkillIds, setSessionSkillIds] = useState<string[]>([]);
+    const [sessionFormVersion, setSessionFormVersion] = useState(0);
+    const [durationDraft, setDurationDraft] = useState("");
+    const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editingSessionSkillIds, setEditingSessionSkillIds] = useState<string[]>([]);
 
     const persist = (next: PetTrainingSkill[]): void => {
         pets.setTrainingSkills(next);
@@ -229,7 +261,51 @@ export const PetTrainingTab: React.FC = () => {
         setError(null);
     };
 
-    if (!pets.hydrated) {
+    const logTrainingSession = (event: React.FormEvent): void => {
+        event.preventDefault();
+        const trimmedDuration = durationDraft.trim();
+        const durationMinutes = trimmedDuration === "" ? undefined : Number(trimmedDuration);
+        if (durationMinutes !== undefined && (!Number.isFinite(durationMinutes) || durationMinutes < 0)) {
+            setError("Training duration must be a non-negative number");
+            return;
+        }
+        try {
+            activity.logActivity({
+                activityType: "training",
+                timestamp: pets.now(),
+                ...(durationMinutes === undefined ? {} : { durationMinutes }),
+                ...(sessionSkillIds.length === 0 ? {} : { skillIds: sessionSkillIds }),
+            });
+            setDurationDraft("");
+            setSessionSkillIds([]);
+            setSessionFormVersion((version) => version + 1);
+            setError(null);
+        } catch (caught) {
+            setError(messageFor(caught, "Could not log the training session"));
+        }
+    };
+
+    const startSessionEdit = (id: string): void => {
+        const record = activity.state.records[id];
+        if (!record) return;
+        setEditingSessionId(id);
+        setEditingSessionSkillIds([...(record.skillIds ?? [])]);
+        setError(null);
+    };
+
+    const saveSessionEdit = (): void => {
+        if (!editingSessionId) return;
+        try {
+            activity.setActivitySkillIds(editingSessionId, editingSessionSkillIds);
+            setEditingSessionId(null);
+            setEditingSessionSkillIds([]);
+            setError(null);
+        } catch (caught) {
+            setError(messageFor(caught, "Could not update session tags"));
+        }
+    };
+
+    if (!pets.hydrated || !activity.hydrated) {
         return (
             <div className="flex h-full items-center justify-center text-xs text-neutral-500" role="status">
                 Loading…
@@ -239,10 +315,41 @@ export const PetTrainingTab: React.FC = () => {
 
     const active = skills.filter((skill) => !isPetTrainingSkillResolved(skill));
     const archived = skills.filter(isPetTrainingSkillResolved);
-
     return (
         <div className="app-scrollbar h-full overflow-y-auto px-4 py-4 sm:px-6">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+                <section aria-label="Log training session" className="flex flex-col gap-2 rounded-2xl border border-neutral-800 bg-neutral-900/40 p-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-neutral-100">Log training session</h2>
+                        <p className="text-[11px] text-neutral-500">Record what you practiced. Skill tags are optional.</p>
+                    </div>
+                    <form onSubmit={logTrainingSession} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                        <label className="flex flex-col gap-1 text-[11px] text-neutral-400">
+                            Duration (minutes)
+                            <input
+                                aria-label="Training duration (minutes)"
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={durationDraft}
+                                placeholder="optional"
+                                onChange={(event) => setDurationDraft(event.target.value)}
+                                className="w-36 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-100"
+                            />
+                        </label>
+                        <PetSkillMultiSelect
+                            key={sessionFormVersion}
+                            label="Skills practiced"
+                            skills={skills}
+                            value={sessionSkillIds}
+                            onChange={setSessionSkillIds}
+                        />
+                        <button type="submit" className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white">
+                            Log training session
+                        </button>
+                    </form>
+                </section>
+
                 <section className="flex flex-col gap-3">
                     <div>
                         <h2 className="text-sm font-semibold text-neutral-100">Training</h2>
@@ -354,6 +461,7 @@ export const PetTrainingTab: React.FC = () => {
                                                     <span aria-hidden="true">{STATUS_STYLES[skill.status].icon}</span>
                                                     <span>{petTrainingStatusLabel(skill.status)}</span>
                                                 </span>
+                                                <SessionCountBadge count={sessionCountBySkill[skill.id] ?? 0} />
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <TrainingProgressMeter skill={skill} />
@@ -418,11 +526,69 @@ export const PetTrainingTab: React.FC = () => {
                         </div>
                         <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                             {archived.map((skill) => (
-                                <SkillStamp key={skill.id} skill={skill} onReopen={reopen} />
+                                <SkillStamp
+                                    key={skill.id}
+                                    skill={skill}
+                                    sessionCount={sessionCountBySkill[skill.id] ?? 0}
+                                    onReopen={reopen}
+                                />
                             ))}
                         </ul>
                     </section>
                 )}
+
+                <section aria-label="Recent training sessions" className="flex flex-col gap-2">
+                    <div>
+                        <h2 className="text-sm font-semibold text-neutral-100">Recent training sessions</h2>
+                        <p className="text-[11px] text-neutral-500">Review or edit the skills covered in a session.</p>
+                    </div>
+                    {recentSessions.length === 0 ? (
+                        <p className="text-[11px] text-neutral-500">No training sessions logged yet.</p>
+                    ) : (
+                        <ul className="flex flex-col gap-2">
+                            {recentSessions.map((record) => (
+                                <li key={record.id} className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div>
+                                            <p className="text-xs text-neutral-100">{new Date(record.timestamp).toLocaleString()}</p>
+                                            {record.durationMinutes !== undefined && (
+                                                <p className="text-[11px] text-neutral-500">{record.durationMinutes} minutes</p>
+                                            )}
+                                        </div>
+                                        {editingSessionId !== record.id && (
+                                            <button
+                                                type="button"
+                                                aria-label={`Edit tags for ${new Date(record.timestamp).toLocaleString()}`}
+                                                onClick={() => startSessionEdit(record.id)}
+                                                className="rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                                            >
+                                                Edit tags
+                                            </button>
+                                        )}
+                                    </div>
+                                    {editingSessionId === record.id ? (
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <PetSkillMultiSelect
+                                                label="Edit session skills"
+                                                skills={skills}
+                                                value={editingSessionSkillIds}
+                                                onChange={setEditingSessionSkillIds}
+                                            />
+                                            <button type="button" onClick={saveSessionEdit} className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white">
+                                                Save tags
+                                            </button>
+                                            <button type="button" onClick={() => setEditingSessionId(null)} className="rounded-lg bg-neutral-800 px-3 py-1.5 text-[11px] text-neutral-300 hover:bg-neutral-700">
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <PetSkillTags skillIds={record.skillIds} skills={skills} />
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
             </div>
         </div>
     );

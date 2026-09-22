@@ -55,6 +55,7 @@ export interface NewPetActivityRecordInput {
     activityType: PetActivityType;
     timestamp: string | Date;
     durationMinutes?: number;
+    skillIds?: string[];
 }
 
 export interface NewPetNapRecordInput {

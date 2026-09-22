@@ -332,6 +332,7 @@ function isPetActivityRecord(value: unknown): boolean {
         isPetActivityType(value.activityType) &&
         typeof value.timestamp === "string" &&
         (value.durationMinutes === undefined || (isFiniteNumber(value.durationMinutes) && value.durationMinutes >= 0)) &&
+        (value.skillIds === undefined || (Array.isArray(value.skillIds) && value.skillIds.every((id) => typeof id === "string"))) &&
         typeof value.createdAt === "string"
     );
 }

@@ -755,6 +755,22 @@ describe("StagedDataAccess", () => {
         expect((await data.loadPetWeightEntries())[0].weight).not.toBe(99);
     });
 
+    it("round-trips skill tags and restages a tag-only change", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        let current = new Date("2026-01-02T00:00:00.000Z");
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => current });
+
+        await data.savePetActivityRecords([PA("pa1", "training", { skillIds: ["sit", "unknown"] })]);
+        expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["sit", "unknown"]);
+        expect(store.read(OWNER_A).petActivityUpdatedAt.pa1).toBe(current.toISOString());
+
+        current = new Date("2026-01-03T00:00:00.000Z");
+        await data.savePetActivityRecords([PA("pa1", "training", { skillIds: ["stay"] })]);
+        expect(store.read(OWNER_A).petActivityRecords.pa1.skillIds).toEqual(["stay"]);
+        expect(store.read(OWNER_A).petActivityUpdatedAt.pa1).toBe(current.toISOString());
+    });
+
     it("persists owner-local pet reminder marks without syncing", async () => {
         const { executor, sync } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PetPage } from "./PetPage";
 import { DataProvider } from "../../state/DataContext";
 import { SyncProvider } from "../../state/SyncContext";
@@ -17,6 +17,7 @@ import type {
     PetNotableEvent,
     PetProfile,
     PetScheduleItem,
+    PetTrainingSkill,
     PetWeightEntry,
 } from "../../state/types";
 
@@ -72,6 +73,18 @@ function intervalItem(id: string, activityType: PetActivityType, label: string, 
 
 function activityRow(id: string, activityType: PetActivityType, timestamp: Date): PetActivityRecord {
     return { id, activityType, timestamp: timestamp.toISOString(), createdAt: T0 };
+}
+
+function skillRow(id: string, label: string, resolved = false): PetTrainingSkill {
+    return {
+        id,
+        label,
+        notes: "",
+        status: resolved ? "reliable" : "introduced",
+        resolvedAt: resolved ? T0 : null,
+        createdAt: T0,
+        updatedAt: T0,
+    };
 }
 
 function napRow(id: string, start: Date, end: Date | null): PetNapRecord {
@@ -143,7 +156,9 @@ describe("PetPage", () => {
         fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Evening meal" } });
         fireEvent.change(screen.getByLabelText("Activity"), { target: { value: "feeding" } });
         fireEvent.change(screen.getByLabelText("Flexibility"), { target: { value: "fixed" } });
-        fireEvent.change(screen.getByLabelText("Time"), { target: { value: "18:00" } });
+        fireEvent.click(screen.getByRole("combobox", { name: "Time hour" }));
+        fireEvent.click(screen.getByRole("option", { name: "6" }));
+        fireEvent.click(screen.getByRole("button", { name: "PM" }));
         fireEvent.click(screen.getByRole("button", { name: "Add schedule item" }));
 
         await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
@@ -215,6 +230,43 @@ describe("PetPage", () => {
         const records = await data.loadPetActivityRecords();
         expect(records).toHaveLength(2);
         expect(records.some((record) => record.timestamp === NOW.toISOString())).toBe(true);
+    });
+
+    it("offers optional skill tagging after a one-tap training log while keeping Undo", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([fixedItem("train", "training", "Training", "15:00")]);
+        await data.savePetTrainingSkills([skillRow("sit", "Sit"), skillRow("stay", "Stay", true)]);
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: /Log training/ }));
+        const prompt = await waitFor(() => screen.getByRole("dialog", { name: "Tag training session" }));
+        expect(screen.getByTestId("toast-message")).toHaveTextContent("Logged training");
+        expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+        await waitFor(() => expect(prompt).not.toBeInTheDocument());
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([]));
+
+        fireEvent.click(screen.getByRole("button", { name: /Log training/ }));
+        const skipPrompt = await waitFor(() => screen.getByRole("dialog", { name: "Tag training session" }));
+
+        expect(screen.getByRole("checkbox", { name: "Stay" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+        await waitFor(() => expect(skipPrompt).not.toBeInTheDocument());
+        expect((await data.loadPetActivityRecords())[0]).not.toHaveProperty("skillIds");
+
+        fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([]));
+        fireEvent.click(screen.getByRole("button", { name: /Log training/ }));
+        await waitFor(() => expect(screen.getByRole("dialog", { name: "Tag training session" })).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("checkbox", { name: "Sit" }));
+        fireEvent.click(screen.getByRole("button", { name: "Save tags" }));
+        await waitFor(async () => expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["sit"]));
+
+        fireEvent.click(screen.getByRole("button", { name: /Potty/ }));
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tag training session" })).toBeNull());
     });
 
     it("shows the overdue banner with its inline fix action", async () => {
@@ -417,6 +469,83 @@ describe("PetPage", () => {
         expect(screen.getByText("Skill Stamps")).toBeInTheDocument();
         expect(screen.getByText("1 skill collected.")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Reopen Sit" })).toBeInTheDocument();
+    });
+
+    it("logs and edits tagged training sessions, including resolved and unknown skills", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetTrainingSkills([skillRow("sit", "Sit"), skillRow("stay", "Stay", true)]);
+        await data.savePetActivityRecords([{
+            ...activityRow("session-1", "training", at(14)),
+            skillIds: ["missing-skill", "other-missing"],
+        }]);
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("Recent training sessions")).toBeInTheDocument());
+        expect(screen.getByText("Unknown skill (missing-skill)")).toBeInTheDocument();
+        expect(screen.getByText("Unknown skill (other-missing)")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: /^Edit tags for/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Edit session skills" }));
+        expect(screen.getByRole("checkbox", { name: "Stay" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("checkbox", { name: "Sit" }));
+        fireEvent.click(screen.getByRole("button", { name: "Save tags" }));
+        await waitFor(async () => expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["missing-skill", "other-missing", "sit"]));
+
+        fireEvent.change(screen.getByLabelText("Training duration (minutes)"), { target: { value: "15" } });
+        fireEvent.click(screen.getByRole("button", { name: "Skills practiced" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "Stay" }));
+        fireEvent.click(screen.getByRole("button", { name: "Log training session" }));
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toHaveLength(2));
+        expect((await data.loadPetActivityRecords()).find((record) => record.id !== "session-1"))
+            .toMatchObject({ activityType: "training", durationMinutes: 15, skillIds: ["stay"] });
+
+        fireEvent.click(screen.getByRole("button", { name: "Log training session" }));
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toHaveLength(3));
+        const records = await data.loadPetActivityRecords();
+        expect(records.filter((record) => record.id !== "session-1").some((record) => record.skillIds === undefined)).toBe(true);
+
+        const originalEditButton = screen.getAllByRole("button", { name: /^Edit tags for/ })
+            .find((button) => button.getAttribute("aria-label")?.includes(new Date(at(14)).toLocaleString()));
+        expect(originalEditButton).toBeDefined();
+        fireEvent.click(originalEditButton as HTMLElement);
+        fireEvent.click(screen.getByRole("button", { name: "Edit session skills" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "Unknown skill (missing-skill)" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "Unknown skill (other-missing)" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "Sit" }));
+        fireEvent.click(screen.getByRole("button", { name: "Save tags" }));
+        await waitFor(async () => expect((await data.loadPetActivityRecords()).find((record) => record.id === "session-1"))
+            .not.toHaveProperty("skillIds"));
+    });
+
+    it("shows how many training sessions have included each skill", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetTrainingSkills([
+            skillRow("sit", "Sit"),
+            skillRow("stay", "Stay"),
+            skillRow("settle", "Settle", true),
+        ]);
+        await data.savePetActivityRecords([
+            { ...activityRow("s1", "training", at(10)), skillIds: ["sit", "stay"] },
+            { ...activityRow("s2", "training", at(11)), skillIds: ["sit"] },
+            { ...activityRow("s3", "training", at(12)), skillIds: ["settle"] },
+            { ...activityRow("s4", "training", at(13)) },
+            { ...activityRow("p1", "potty", at(9)), skillIds: ["sit"] },
+        ]);
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+
+        const sitCard = screen.getByRole("progressbar", { name: "Sit training progress" }).closest("li") as HTMLElement;
+        expect(within(sitCard).getByText("2 sessions")).toBeInTheDocument();
+
+        const stayCard = screen.getByRole("progressbar", { name: "Stay training progress" }).closest("li") as HTMLElement;
+        expect(within(stayCard).getByText("1 session")).toBeInTheDocument();
+
+        // Resolved skills keep their count on the stamp.
+        const settleStamp = screen.getByRole("button", { name: "Reopen Settle" }).closest("li") as HTMLElement;
+        expect(within(settleStamp).getByText("1 session")).toBeInTheDocument();
     });
 
     it("steps a training skill back and reopens a resolved one", async () => {

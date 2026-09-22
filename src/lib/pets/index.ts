@@ -47,9 +47,11 @@ export {
     canCorrectActivityRecord,
     correctActivityTimestamp,
     countActivitiesToday,
+    countTrainingSessionsBySkill,
     isSameLocalDay,
     logActivity,
     removeActivityRecord,
+    setActivitySkillIds,
 } from "./activityLog";
 export { formatClock, formatDeltaMinutes, formatMinuteOfDay } from "./format";
 export {

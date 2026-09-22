@@ -25,6 +25,7 @@ import { PetProfileCard } from "./PetProfileCard";
 import { PetReflowPanel } from "./PetReflowPanel";
 import { PetScheduleDeck } from "./PetScheduleDeck";
 import { PetScheduleItemForm } from "./PetScheduleItemForm";
+import { PetTrainingTagDialog } from "./PetTrainingTagDialog";
 
 /**
  * The Today tab: profile card, hero status, conditional overdue banner, nap
@@ -41,9 +42,11 @@ export const PetTodayTab: React.FC = () => {
     const scheduleItems = Object.values(pets.state.scheduleItems);
     const naps = Object.values(pets.state.naps);
     const weights = Object.values(pets.state.weights);
+    const trainingSkills = useMemo(() => Object.values(pets.state.trainingSkills), [pets.state.trainingSkills]);
     const [now, setNow] = useState(() => pets.now());
     const [deckExpanded, setDeckExpanded] = useState(false);
     const [reflowProposal, setReflowProposal] = useState<PetNapReflowProposal | null>(null);
+    const [trainingTagPrompt, setTrainingTagPrompt] = useState<{ recordId: string; skillIds: string[] } | null>(null);
 
     useEffect(() => {
         const id = setInterval(() => setNow(pets.now()), 1000);
@@ -51,6 +54,9 @@ export const PetTodayTab: React.FC = () => {
     }, []);
 
     const activityRecords = useMemo(() => Object.values(activity.state.records), [activity.state.records]);
+    const visibleTrainingTagPrompt = trainingTagPrompt && activity.state.records[trainingTagPrompt.recordId]?.activityType === "training"
+        ? trainingTagPrompt
+        : null;
 
     const schedule = useMemo(
         () => buildPetSchedule({ now, scheduleItems, activityRecords, naps }),
@@ -113,7 +119,14 @@ export const PetTodayTab: React.FC = () => {
 
     /** The single write path for every log action on this page. */
     const logCareActivity = (activityType: PetScheduleEntry["activityType"]): void => {
-        activity.logActivity({ activityType, timestamp: now });
+        const record = activity.logActivity({ activityType, timestamp: now });
+        if (activityType === "training") setTrainingTagPrompt({ recordId: record.id, skillIds: [] });
+    };
+
+    const saveTrainingTags = (): void => {
+        if (!visibleTrainingTagPrompt) return;
+        activity.setActivitySkillIds(visibleTrainingTagPrompt.recordId, visibleTrainingTagPrompt.skillIds);
+        setTrainingTagPrompt(null);
     };
 
     const startNap = (): void => {
@@ -210,6 +223,15 @@ export const PetTodayTab: React.FC = () => {
                 </div>
             </div>
             <PetPottyBar onPotty={() => logCareActivity("potty")} />
+            {visibleTrainingTagPrompt && (
+                <PetTrainingTagDialog
+                    skills={trainingSkills}
+                    value={visibleTrainingTagPrompt.skillIds}
+                    onChange={(skillIds) => setTrainingTagPrompt((current) => current ? { ...current, skillIds } : null)}
+                    onSave={saveTrainingTags}
+                    onSkip={() => setTrainingTagPrompt(null)}
+                />
+            )}
             {reflowProposal && (
                 <PetReflowPanel proposal={reflowProposal} onConfirm={confirmReflow} onAdjust={adjustReflow} />
             )}

@@ -73,8 +73,8 @@ function TC(id: string, todoId: string, overrides: Partial<TodoCompletion> = {})
     return { id, todoId, bucket: "2026-01-05", createdAt: T2, updatedAt: T2, ...overrides };
 }
 
-function PA(id: string, timestamp = T1): PetActivityRecord {
-    return { id, activityType: "potty", timestamp, createdAt: T1 };
+function PA(id: string, timestamp = T1, overrides: Partial<PetActivityRecord> = {}): PetActivityRecord {
+    return { id, activityType: "potty", timestamp, createdAt: T1, ...overrides };
 }
 
 function PP(name: string, updatedAt = T1): PetProfile {
@@ -1579,20 +1579,22 @@ describe("pet staged merge", () => {
     });
 
     it("applies whole-row LWW and keeps a tombstone until remote deletion is observed", () => {
-        const baseValue = PA("pet-a", T1);
+        const baseValue = PA("pet-a", T1, { activityType: "training", skillIds: ["sit"] });
         const base = snapshot({ petActivityRecords: { "pet-a": { value: baseValue, updatedAt: T1 } } });
-        const localValue = PA("pet-a", T2);
+        const localValue = PA("pet-a", T2, { activityType: "training", skillIds: ["stay", "unknown"] });
         const local = recordFromBaseline(base, {
             petActivityRecords: { "pet-a": localValue }, petActivityUpdatedAt: { "pet-a": T3 },
         });
         const olderRemote = snapshot({ petActivityRecords: { "pet-a": { value: PA("pet-a", T3), updatedAt: T2 } } });
         const localWins = mergePulledSnapshot(local, olderRemote, NOW);
         expect(localWins.record.petActivityRecords["pet-a"]).toEqual(localValue);
+        expect(localWins.record.petActivityRecords["pet-a"].skillIds).toEqual(["stay", "unknown"]);
         expect(buildPushPlan(localWins.record).petActivityUpserts).toEqual([{ value: localValue, updatedAt: T3 }]);
 
-        const newerRemote = snapshot({ petActivityRecords: { "pet-a": { value: PA("pet-a", T3), updatedAt: T3_LATER } } });
+        const newerRemote = snapshot({ petActivityRecords: { "pet-a": { value: PA("pet-a", T3, { activityType: "training", skillIds: ["down"] }), updatedAt: T3_LATER } } });
         const remoteWins = mergePulledSnapshot(local, newerRemote, NOW);
         expect(remoteWins.record.petActivityRecords["pet-a"].timestamp).toBe(T3);
+        expect(remoteWins.record.petActivityRecords["pet-a"].skillIds).toEqual(["down"]);
         expect(remoteWins.record.petActivityUpdatedAt).toEqual({});
 
         const deleted = recordFromBaseline(base, {

@@ -97,6 +97,10 @@ export function createPetActivityRecord(input: NewPetActivityRecordInput, now: D
         }
         record.durationMinutes = input.durationMinutes;
     }
+    if (input.activityType === "training" && input.skillIds?.length) {
+        const skillIds = [...new Set(input.skillIds)];
+        if (skillIds.length > 0) record.skillIds = skillIds;
+    }
     return record;
 }
 

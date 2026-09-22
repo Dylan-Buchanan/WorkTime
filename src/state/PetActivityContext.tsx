@@ -5,6 +5,7 @@ import {
     countActivitiesToday,
     logActivity as logActivityCommand,
     removeActivityRecord,
+    setActivitySkillIds as setRecordSkillIds,
 } from "../lib/pets";
 import type { NewPetActivityRecordInput, PetActivityCounts } from "../lib/pets";
 import type { PetActivityRecord, PetActivityType } from "./types";
@@ -27,6 +28,8 @@ export interface PetActivityContextValue {
     logActivity(input: NewPetActivityRecordInput): PetActivityRecord;
     /** Deletes a record entirely; the log recomputes as if it never happened. */
     undoActivity(id: string): void;
+    /** Replaces (or clears) the historical skill tags on a training record. */
+    setActivitySkillIds(id: string, skillIds: readonly string[]): void;
     /** Edits a today-stamped record's timestamp in place. */
     correctActivityTimestamp(id: string, timestamp: string | Date): void;
     /** True while a record's timestamp is still today and therefore correctable. */
@@ -88,6 +91,10 @@ function normalizeActivityRecord(value: unknown): PetActivityRecord | null {
             return null;
         }
         record.durationMinutes = value.durationMinutes;
+    }
+    if (value.skillIds !== undefined) {
+        if (!Array.isArray(value.skillIds) || !value.skillIds.every((id) => typeof id === "string")) return null;
+        if (value.skillIds.length > 0) record.skillIds = [...value.skillIds];
     }
     return record;
 }
@@ -238,6 +245,13 @@ export const PetActivityProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setState((previous) => ({ ...previous, records: { ...previous.records, [id]: corrected } }));
     };
 
+    const setActivitySkillIds = (id: string, skillIds: readonly string[]): void => {
+        const next = setRecordSkillIds(Object.values(stateRef.current.records), id, skillIds);
+        const updated = next.find((record) => record.id === id);
+        if (!updated) return;
+        setState((previous) => ({ ...previous, records: { ...previous.records, [id]: updated } }));
+    };
+
     const canCorrectActivity = (id: string): boolean => {
         const record = state.records[id];
         return record ? canCorrectActivityRecord(record, new Date()) : false;
@@ -255,6 +269,7 @@ export const PetActivityProvider: React.FC<{ children: React.ReactNode }> = ({ c
         hydrated,
         logActivity,
         undoActivity,
+        setActivitySkillIds,
         correctActivityTimestamp,
         canCorrectActivity,
         todayCounts,

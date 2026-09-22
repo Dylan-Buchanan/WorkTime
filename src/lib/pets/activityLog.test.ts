@@ -4,8 +4,10 @@ import {
     canCorrectActivityRecord,
     correctActivityTimestamp,
     countActivitiesToday,
+    countTrainingSessionsBySkill,
     logActivity,
     removeActivityRecord,
+    setActivitySkillIds,
 } from "./activityLog";
 import { buildPetSchedule } from "./schedule";
 
@@ -69,6 +71,45 @@ describe("pet activity log", () => {
             .toThrow(RangeError);
         expect(() => logActivity([], { activityType: "feeding", timestamp: now, durationMinutes: 5 }, now, "a4"))
             .toThrow(RangeError);
+    });
+
+    it("stores de-duplicated skill tags only on training records", () => {
+        const tagged = logActivity([], {
+            activityType: "training",
+            timestamp: now,
+            skillIds: ["sit", "stay", "sit"],
+        }, now, "a1");
+        expect(tagged.record.skillIds).toEqual(["sit", "stay"]);
+
+        expect(logActivity([], { activityType: "training", timestamp: now, skillIds: [] }, now, "a2").record)
+            .not.toHaveProperty("skillIds");
+        expect(logActivity([], { activityType: "potty", timestamp: now, skillIds: ["sit"] }, now, "a3").record)
+            .not.toHaveProperty("skillIds");
+    });
+
+    it("replaces and clears tags without changing the training record identity or timestamps", () => {
+        const original = activity("a1", "training", now, 12);
+        const tagged = setActivitySkillIds([original], "a1", ["sit", "sit", "stay"]);
+        expect(tagged[0]).toEqual({ ...original, skillIds: ["sit", "stay"] });
+        expect(tagged[0].id).toBe(original.id);
+        expect(tagged[0].timestamp).toBe(original.timestamp);
+        expect(tagged[0].createdAt).toBe(original.createdAt);
+
+        expect(setActivitySkillIds(tagged, "a1", [])[0]).toEqual(original);
+        expect(() => setActivitySkillIds([activity("p1", "potty", now)], "p1", ["sit"])).toThrow(RangeError);
+        expect(() => setActivitySkillIds([], "missing", ["sit"])).toThrow(RangeError);
+    });
+
+    it("counts training sessions per skill from training records only", () => {
+        const records: PetActivityRecord[] = [
+            { ...activity("t1", "training", new Date(2026, 8, 17, 9, 0)), skillIds: ["sit", "stay", "sit"] },
+            { ...activity("t2", "training", new Date(2026, 8, 16, 9, 0)), skillIds: ["sit"] },
+            { ...activity("t3", "training", new Date(2026, 8, 15, 9, 0)) },
+            { ...activity("p1", "potty", new Date(2026, 8, 17, 10, 0)), skillIds: ["sit"] },
+        ];
+
+        expect(countTrainingSessionsBySkill(records)).toEqual({ sit: 2, stay: 1 });
+        expect(countTrainingSessionsBySkill([])).toEqual({});
     });
 
     it("recomputes the interval anchor after undo and re-logging", () => {

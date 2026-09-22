@@ -940,6 +940,23 @@ describe("LocalStagingStore", () => {
         expect(isSyncSnapshot({ ...valid, petProfile: { value: valid.petProfile.value, updatedAt: null } })).toBe(false);
     });
 
+    it("accepts optional activity skill ids and rejects malformed values", () => {
+        const activity = {
+            id: "activity",
+            activityType: "training",
+            timestamp: "2026-01-01T00:00:00.000Z",
+            createdAt: "2026-01-01T00:00:00.000Z",
+        };
+        const withActivity = (value: unknown) => makeBaseline({
+            petActivityRecords: { activity: { value: value as never, updatedAt: "2026-01-02T00:00:00.000Z" } },
+        });
+        expect(isSyncSnapshot(withActivity(activity))).toBe(true);
+        expect(isSyncSnapshot(withActivity({ ...activity, skillIds: ["sit", "unknown"] }))).toBe(true);
+        expect(isSyncSnapshot(withActivity({ ...activity, skillIds: null }))).toBe(false);
+        expect(isSyncSnapshot(withActivity({ ...activity, skillIds: "sit" }))).toBe(false);
+        expect(isSyncSnapshot(withActivity({ ...activity, skillIds: ["sit", 1] }))).toBe(false);
+    });
+
     it("migrates v5 records to v7 with an empty local progress map", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await seedInitialized(store, OWNER_A);

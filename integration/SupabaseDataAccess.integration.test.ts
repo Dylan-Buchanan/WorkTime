@@ -14,6 +14,12 @@ const COMPLETION_ID = "00000000-0000-4000-8000-100000000004";
 const TODO_ID = "00000000-0000-4000-8000-100000000006";
 const PET_PROFILE_ID = "00000000-0000-4000-8000-100000000010";
 const PET_ACTIVITY_ID = "00000000-0000-4000-8000-100000000011";
+const PET_VALID_DIRECT_ACTIVITY_ID = "00000000-0000-4000-8000-100000000018";
+const PET_BAD_ACTIVITY_IDS = [
+    "00000000-0000-4000-8000-100000000019",
+    "00000000-0000-4000-8000-100000000020",
+    "00000000-0000-4000-8000-100000000021",
+];
 const PET_SCHEDULE_ID = "00000000-0000-4000-8000-100000000012";
 const PET_NAP_ID = "00000000-0000-4000-8000-100000000013";
 const PET_WEIGHT_ID = "00000000-0000-4000-8000-100000000014";
@@ -340,7 +346,7 @@ describe("SupabaseDataAccess transport", () => {
                 updatedAt: T0,
             },
             petActivityUpserts: [{
-                value: { id: PET_ACTIVITY_ID, activityType: "potty", timestamp: T0, createdAt: T0 },
+                value: { id: PET_ACTIVITY_ID, activityType: "training", timestamp: T0, skillIds: [PET_SKILL_ID, "unknown-skill"], createdAt: T0 },
                 updatedAt: T0,
             }],
             petScheduleUpserts: [{ value: { id: PET_SCHEDULE_ID, activityType: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
@@ -352,7 +358,34 @@ describe("SupabaseDataAccess transport", () => {
         });
         let snapshot = await remote.pull(user.userId);
         expect(snapshot.petProfile.value?.name).toBe("Whitney");
-        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.activityType).toBe("potty");
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).toMatchObject({
+            activityType: "training",
+            skillIds: [PET_SKILL_ID, "unknown-skill"],
+        });
+        const validTags = await user.client.from("pet_activity_records").insert({
+            id: PET_VALID_DIRECT_ACTIVITY_ID,
+            owner_id: user.userId,
+            activity_type: "training",
+            occurred_at: T0,
+            skill_ids: ["sit"],
+            created_at: T0,
+            updated_at: T0,
+        });
+        expect(validTags.error).toBeNull();
+        const malformedSkillIds: unknown[] = [["sit", 1], [["sit"]], ["sit", ["stay"]]];
+        for (const [index, skillIds] of malformedSkillIds.entries()) {
+            const malformedTags = await user.client.from("pet_activity_records").insert({
+                id: PET_BAD_ACTIVITY_IDS[index],
+                owner_id: user.userId,
+                activity_type: "training",
+                occurred_at: T0,
+                skill_ids: skillIds,
+                created_at: T0,
+                updated_at: T0,
+            });
+            expect(malformedTags.error).toMatchObject({ code: "23514" });
+            expect(malformedTags.error?.message).toMatch(/pet_activity_records_skill_ids_check/);
+        }
         expect(snapshot.petScheduleItems[PET_SCHEDULE_ID].value.label).toBe("Breakfast");
         expect(snapshot.petNapRecords[PET_NAP_ID].value.end).toBeNull();
         expect(snapshot.petWeightEntries[PET_WEIGHT_ID].value.weight).toBe(5.25);
@@ -367,7 +400,7 @@ describe("SupabaseDataAccess transport", () => {
                 updatedAt: EARLIER,
             },
             petActivityUpserts: [{
-                value: { id: PET_ACTIVITY_ID, activityType: "feeding", timestamp: T0, createdAt: T0 },
+                value: { id: PET_ACTIVITY_ID, activityType: "training", timestamp: T0, skillIds: ["stale"], createdAt: T0 },
                 updatedAt: EARLIER,
             }],
             petScheduleUpserts: [{ value: { id: PET_SCHEDULE_ID, activityType: "feeding", label: "Stale breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: T0, updatedAt: T0 }, updatedAt: EARLIER }],
@@ -387,13 +420,24 @@ describe("SupabaseDataAccess transport", () => {
         });
         snapshot = await remote.pull(user.userId);
         expect(snapshot.petProfile.value?.name).toBe("Whitney");
-        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.activityType).toBe("potty");
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.skillIds).toEqual([PET_SKILL_ID, "unknown-skill"]);
         expect(snapshot.petScheduleItems[PET_SCHEDULE_ID].value.label).toBe("Breakfast");
         expect(snapshot.petNapRecords[PET_NAP_ID].value.end).toBeNull();
         expect(snapshot.petWeightEntries[PET_WEIGHT_ID].value.weight).toBe(5.25);
         expect(snapshot.petTrainingSkills[PET_SKILL_ID].value.label).toBe("Sit");
         expect(snapshot.petFixations[PET_FIXATION_ID].value.label).toBe("Shoes");
         expect(snapshot.petNotableEvents[PET_EVENT_ID].value.title).toBe("First walk");
+
+        // A newer tag-only edit can clear the association while preserving the row.
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            petActivityUpserts: [{
+                value: { id: PET_ACTIVITY_ID, activityType: "training", timestamp: T0, createdAt: T0 },
+                updatedAt: LATER,
+            }],
+        });
+        snapshot = await remote.pull(user.userId);
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).not.toHaveProperty("skillIds");
 
         const defaults = defaultAppState();
         await remote.push(user.userId, {

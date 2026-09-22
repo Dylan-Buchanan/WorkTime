@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import type { NewPetScheduleItemInput } from "../../lib/pets";
 import type { PetActivityType, PetFlexibility } from "../../state/types";
 import { PET_ACTIVITY_META } from "./petShared";
+import { PetTimePicker } from "./PetTimePicker";
 
 interface PetScheduleItemFormProps {
     submitLabel: string;
@@ -129,15 +130,10 @@ export const PetScheduleItemForm: React.FC<PetScheduleItemFormProps> = ({ submit
             </div>
             {draft.mode === "fixed-time" ? (
                 <div className="grid gap-2 sm:grid-cols-2">
-                    <label className="flex flex-col gap-1 text-[11px] text-neutral-400">
-                        Time
-                        <input
-                            type="time"
-                            value={draft.time}
-                            onChange={(event) => setDraft({ ...draft, time: event.target.value })}
-                            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-100"
-                        />
-                    </label>
+                    <PetTimePicker
+                        value={draft.time}
+                        onChange={(time) => setDraft({ ...draft, time })}
+                    />
                     <label className="flex flex-col gap-1 text-[11px] text-neutral-400">
                         Window minutes
                         <input

@@ -226,6 +226,8 @@ export interface PetActivityRecord {
     timestamp: string;
     /** Optional; only meaningful for training and playtime. */
     durationMinutes?: number;
+    /** Historical training-skill ids. Present only for tagged training records. */
+    skillIds?: string[];
     createdAt: string;
 }
 

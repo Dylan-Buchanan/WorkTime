@@ -79,6 +79,18 @@ describe("pet factories", () => {
         expect(() => createPetActivityRecord({ activityType: "training", timestamp: now, durationMinutes: -1 }, now, "a3")).toThrow(RangeError);
     });
 
+    it("normalizes optional training skill tags", () => {
+        expect(createPetActivityRecord({
+            activityType: "training",
+            timestamp: now,
+            skillIds: ["sit", "stay", "sit"],
+        }, now, "a1").skillIds).toEqual(["sit", "stay"]);
+        expect(createPetActivityRecord({ activityType: "training", timestamp: now, skillIds: [] }, now, "a2"))
+            .not.toHaveProperty("skillIds");
+        expect(createPetActivityRecord({ activityType: "feeding", timestamp: now, skillIds: ["sit"] }, now, "a3"))
+            .not.toHaveProperty("skillIds");
+    });
+
     it("allows an open nap and rejects an inverted one", () => {
         const open = createPetNapRecord({ start: new Date(2026, 8, 17, 13, 0) }, now, "n1");
         expect(open.end).toBeNull();

@@ -99,7 +99,15 @@ function todoCompletionRow(completion: TodoCompletion) {
 }
 
 function petActivityRow(value: PetActivityRecord, updatedAt: string) {
-    return { id: value.id, activity_type: value.activityType, occurred_at: value.timestamp, duration_minutes: value.durationMinutes ?? null, created_at: value.createdAt, updated_at: updatedAt };
+    return {
+        id: value.id,
+        activity_type: value.activityType,
+        occurred_at: value.timestamp,
+        duration_minutes: value.durationMinutes ?? null,
+        ...(value.skillIds?.length ? { skill_ids: value.skillIds } : {}),
+        created_at: value.createdAt,
+        updated_at: updatedAt,
+    };
 }
 function petProfileRow(value: PetProfile, updatedAt: string) {
     return { id: value.id, name: value.name, birth_date: value.birthDate, created_at: value.createdAt, updated_at: updatedAt };
@@ -292,9 +300,21 @@ export class SupabaseDataAccess implements SyncRemote {
 
     private validatePetActivity(row: any): PetActivityRecord {
         this.validPetBase("pet_activity_records", row);
+        const durationMissing = row.duration_minutes === null || row.duration_minutes === undefined;
+        const skillIdsMissing = row.skill_ids === null || row.skill_ids === undefined;
         if (!["potty", "training", "playtime", "feeding"].includes(row.activity_type) || typeof row.occurred_at !== "string" ||
-            (row.duration_minutes !== null && (typeof row.duration_minutes !== "number" || row.duration_minutes < 0))) this.fail("pet_activity_records", new Error(`invalid row for ${row.id}`));
-        return { id: row.id, activityType: row.activity_type, timestamp: row.occurred_at, ...(row.duration_minutes === null ? {} : { durationMinutes: row.duration_minutes }), createdAt: row.created_at };
+            (!durationMissing && (typeof row.duration_minutes !== "number" || row.duration_minutes < 0)) ||
+            (!skillIdsMissing && (!Array.isArray(row.skill_ids) || !row.skill_ids.every((id: unknown) => typeof id === "string")))) {
+            this.fail("pet_activity_records", new Error(`invalid row for ${row.id}`));
+        }
+        return {
+            id: row.id,
+            activityType: row.activity_type,
+            timestamp: row.occurred_at,
+            ...(durationMissing ? {} : { durationMinutes: row.duration_minutes }),
+            ...(skillIdsMissing || row.skill_ids.length === 0 ? {} : { skillIds: [...row.skill_ids] }),
+            createdAt: row.created_at,
+        };
     }
     private validatePetProfile(row: any): PetProfile {
         this.validPetBase("pet_profiles", row);
