@@ -390,7 +390,7 @@ describe("PetPage", () => {
         expect(await data.loadPetNotableEvents()).toEqual([]);
     });
 
-    it("creates, advances, and archives a training skill", async () => {
+    it("creates, advances, and collects a completed training skill as a stamp", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data));
 
@@ -413,8 +413,10 @@ describe("PetPage", () => {
         await waitFor(async () => expect((await data.loadPetTrainingSkills())[0].resolvedAt).not.toBeNull());
         await waitFor(() => expect(screen.getByText("No skills in progress yet.")).toBeInTheDocument());
 
-        fireEvent.click(screen.getByRole("button", { name: "Show resolved skills (1)" }));
-        expect(screen.getByText("Sit")).toBeInTheDocument();
+        // The completed skill now appears as a stamp in the gallery.
+        expect(screen.getByText("Skill Stamps")).toBeInTheDocument();
+        expect(screen.getByText("1 skill collected.")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Reopen Sit" })).toBeInTheDocument();
     });
 
     it("steps a training skill back and reopens a resolved one", async () => {
@@ -440,9 +442,11 @@ describe("PetPage", () => {
         fireEvent.click(screen.getByRole("button", { name: "Mark done Sit" }));
         await waitFor(() => expect(screen.getByText("No skills in progress yet.")).toBeInTheDocument());
 
-        fireEvent.click(screen.getByRole("button", { name: "Show resolved skills (1)" }));
+        // Reopening removes the stamp and restores the active skill.
+        expect(screen.getByText("Skill Stamps")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Reopen Sit" }));
         await waitFor(() => expect(screen.getByText("Introduced")).toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByText("Skill Stamps")).toBeNull());
         expect(await data.loadPetTrainingSkills()).toMatchObject([
             { label: "Sit", status: "introduced", resolvedAt: null },
         ]);

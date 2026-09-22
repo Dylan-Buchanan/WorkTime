@@ -5,6 +5,7 @@ import {
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
     PET_TRAINING_STATUSES,
+    petSkillStampEmoji,
     petTrainingStatusLabel,
     previousPetTrainingStatus,
     reopenPetTrainingSkill,
@@ -92,6 +93,33 @@ function formatResolvedAt(value: string): string {
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
 }
 
+interface SkillStampProps {
+    skill: PetTrainingSkill;
+    onReopen: (id: string) => void;
+}
+
+const SkillStamp: React.FC<SkillStampProps> = ({ skill, onReopen }) => (
+    <li
+        className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-emerald-700/50 bg-emerald-950/20 p-3 text-center"
+    >
+        <span aria-hidden="true" className="text-2xl leading-none">
+            {petSkillStampEmoji(skill.label)}
+        </span>
+        <p className="w-full truncate text-xs text-neutral-100">{skill.label}</p>
+        <p className="text-[11px] text-neutral-500">
+            {skill.resolvedAt ? `done ${formatResolvedAt(skill.resolvedAt)}` : "done"}
+        </p>
+        <button
+            type="button"
+            aria-label={`Reopen ${skill.label}`}
+            onClick={() => onReopen(skill.id)}
+            className="mt-1 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+        >
+            Reopen
+        </button>
+    </li>
+);
+
 interface EditDraft {
     label: string;
     notes: string;
@@ -99,8 +127,8 @@ interface EditDraft {
 
 /**
  * The Training tab: the short list of skills Whitney is actively learning with
- * an `introduced → progressing → reliable` progression, plus a collapsed
- * archive of resolved skills. All transitions run through the pure pet lib;
+ * an `introduced → progressing → reliable` progression, plus a "Skill Stamps"
+ * gallery of resolved skills. All transitions run through the pure pet lib;
  * this component only persists the resulting full set.
  */
 export const PetTrainingTab: React.FC = () => {
@@ -110,7 +138,6 @@ export const PetTrainingTab: React.FC = () => {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [error, setError] = useState<string | null>(null);
-    const [archiveOpen, setArchiveOpen] = useState(false);
     const [flash, setFlash] = useState<{ id: string; direction: StepDirection } | null>(null);
 
     const persist = (next: PetTrainingSkill[]): void => {
@@ -380,43 +407,20 @@ export const PetTrainingTab: React.FC = () => {
                 </section>
 
                 {archived.length > 0 && (
-                    <section aria-label="Resolved training skills" className="flex flex-col gap-2">
-                        <button
-                            type="button"
-                            aria-expanded={archiveOpen}
-                            onClick={() => setArchiveOpen((value) => !value)}
-                            className="self-start rounded bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
-                        >
-                            {archiveOpen ? "Hide" : "Show"} resolved skills ({archived.length})
-                        </button>
-                        {archiveOpen && (
-                            <ul className="flex flex-col gap-2">
-                                {archived.map((skill) => (
-                                    <li
-                                        key={skill.id}
-                                        className="flex flex-wrap items-center gap-2 rounded-xl border border-neutral-800/60 bg-neutral-900/20 p-3"
-                                    >
-                                        <div className="min-w-0 flex-1">
-                                            <p className="truncate text-xs text-neutral-300">{skill.label}</p>
-                                            {skill.notes && (
-                                                <p className="truncate text-[11px] text-neutral-500">{skill.notes}</p>
-                                            )}
-                                        </div>
-                                        <span className="shrink-0 text-[11px] text-neutral-500">
-                                            {skill.resolvedAt ? `done ${formatResolvedAt(skill.resolvedAt)}` : "done"}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            aria-label={`Reopen ${skill.label}`}
-                                            onClick={() => reopen(skill.id)}
-                                            className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
-                                        >
-                                            Reopen
-                                        </button>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
+                    <section aria-label="Skill Stamps" className="flex flex-col gap-2">
+                        <div>
+                            <h2 className="text-sm font-semibold text-neutral-100">Skill Stamps</h2>
+                            <p className="text-[11px] text-neutral-500">
+                                {archived.length === 1
+                                    ? "1 skill collected."
+                                    : `${archived.length} skills collected.`}
+                            </p>
+                        </div>
+                        <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                            {archived.map((skill) => (
+                                <SkillStamp key={skill.id} skill={skill} onReopen={reopen} />
+                            ))}
+                        </ul>
                     </section>
                 )}
             </div>
