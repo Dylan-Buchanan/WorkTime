@@ -4,6 +4,7 @@ import {
     createPetTrainingSkill,
     isPetTrainingSkillResolved,
     nextPetTrainingStatus,
+    PET_TRAINING_STATUSES,
     petTrainingStatusLabel,
     previousPetTrainingStatus,
     reopenPetTrainingSkill,
@@ -13,10 +14,73 @@ import {
 import type { PetTrainingSkill, PetTrainingStatus } from "../../state/types";
 import { usePets } from "../../state/PetContext";
 
-const STATUS_TONES: Record<PetTrainingStatus, string> = {
-    introduced: "bg-neutral-800 text-neutral-300",
-    progressing: "bg-amber-900/40 text-amber-300",
-    reliable: "bg-emerald-900/40 text-emerald-300",
+interface StatusStyle {
+    /** Card shell tint so the whole card reads at a glance. */
+    card: string;
+    /** Status pill tone. */
+    pill: string;
+    /** Filled segment tone for the progress meter. */
+    segment: string;
+    /** Non-color cue so status never depends on hue alone. */
+    icon: string;
+}
+
+const STATUS_STYLES: Record<PetTrainingStatus, StatusStyle> = {
+    introduced: {
+        card: "border-neutral-700 bg-neutral-900/60",
+        pill: "bg-neutral-800 text-neutral-200",
+        segment: "bg-neutral-300",
+        icon: "○",
+    },
+    progressing: {
+        card: "border-amber-700/60 bg-amber-950/30",
+        pill: "bg-amber-900/50 text-amber-100",
+        segment: "bg-amber-400",
+        icon: "◐",
+    },
+    reliable: {
+        card: "border-emerald-700/60 bg-emerald-950/30",
+        pill: "bg-emerald-900/50 text-emerald-100",
+        segment: "bg-emerald-400",
+        icon: "✓",
+    },
+};
+
+const STATUS_INDEX: Record<PetTrainingStatus, number> = {
+    introduced: 0,
+    progressing: 1,
+    reliable: 2,
+};
+
+type StepDirection = "forward" | "back";
+
+const TrainingProgressMeter: React.FC<{ skill: PetTrainingSkill }> = ({ skill }) => {
+    const index = STATUS_INDEX[skill.status];
+    return (
+        <div className="flex items-center gap-1.5">
+            <div
+                role="progressbar"
+                aria-label={`${skill.label} training progress`}
+                aria-valuemin={1}
+                aria-valuemax={PET_TRAINING_STATUSES.length}
+                aria-valuenow={index + 1}
+                aria-valuetext={petTrainingStatusLabel(skill.status)}
+                className="flex items-center gap-1"
+            >
+                {PET_TRAINING_STATUSES.map((status, position) => (
+                    <span
+                        key={status}
+                        className={`h-1.5 w-7 rounded-full ${
+                            position <= index ? STATUS_STYLES[skill.status].segment : "bg-neutral-700/70"
+                        }`}
+                    />
+                ))}
+            </div>
+            <span className="text-[10px] tabular-nums text-neutral-400">
+                {index + 1}/{PET_TRAINING_STATUSES.length}
+            </span>
+        </div>
+    );
 };
 
 function messageFor(error: unknown, fallback: string): string {
@@ -47,6 +111,7 @@ export const PetTrainingTab: React.FC = () => {
     const [editDraft, setEditDraft] = useState<EditDraft>({ label: "", notes: "" });
     const [error, setError] = useState<string | null>(null);
     const [archiveOpen, setArchiveOpen] = useState(false);
+    const [flash, setFlash] = useState<{ id: string; direction: StepDirection } | null>(null);
 
     const persist = (next: PetTrainingSkill[]): void => {
         pets.setTrainingSkills(next);
@@ -70,6 +135,7 @@ export const PetTrainingTab: React.FC = () => {
         try {
             const updated = advancePetTrainingSkill(skill, pets.now());
             persist(skills.map((entry) => (entry.id === id ? updated : entry)));
+            setFlash({ id, direction: "forward" });
             setError(null);
         } catch (caught) {
             setError(messageFor(caught, "Could not advance the skill"));
@@ -94,6 +160,7 @@ export const PetTrainingTab: React.FC = () => {
         try {
             const updated = reversePetTrainingSkill(skill, pets.now());
             persist(skills.map((entry) => (entry.id === id ? updated : entry)));
+            setFlash({ id, direction: "back" });
             setError(null);
         } catch (caught) {
             setError(messageFor(caught, "Could not step the skill back"));
@@ -194,7 +261,19 @@ export const PetTrainingTab: React.FC = () => {
                             {active.map((skill) => (
                                 <li
                                     key={skill.id}
-                                    className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/40 p-3"
+                                    data-status={skill.status}
+                                    onAnimationEnd={() =>
+                                        setFlash((current) => (current?.id === skill.id ? null : current))
+                                    }
+                                    className={`flex flex-col gap-2 rounded-xl border p-3 transition-colors ${
+                                        STATUS_STYLES[skill.status].card
+                                    } ${
+                                        flash?.id === skill.id
+                                            ? flash.direction === "forward"
+                                                ? "training-step-forward"
+                                                : "training-step-back"
+                                            : ""
+                                    }`}
                                 >
                                     {editingId === skill.id ? (
                                         <div className="flex flex-col gap-2">
@@ -234,52 +313,62 @@ export const PetTrainingTab: React.FC = () => {
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <div className="min-w-0 flex-1">
-                                                <p className="truncate text-xs text-neutral-100">{skill.label}</p>
-                                                {skill.notes && (
-                                                    <p className="truncate text-[11px] text-neutral-500">{skill.notes}</p>
-                                                )}
+                                        <div className="flex flex-col gap-2">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="truncate text-xs text-neutral-100">{skill.label}</p>
+                                                    {skill.notes && (
+                                                        <p className="truncate text-[11px] text-neutral-500">{skill.notes}</p>
+                                                    )}
+                                                </div>
+                                                <span
+                                                    className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${STATUS_STYLES[skill.status].pill}`}
+                                                >
+                                                    <span aria-hidden="true">{STATUS_STYLES[skill.status].icon}</span>
+                                                    <span>{petTrainingStatusLabel(skill.status)}</span>
+                                                </span>
                                             </div>
-                                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_TONES[skill.status]}`}>
-                                                {petTrainingStatusLabel(skill.status)}
-                                            </span>
-                                            {previousPetTrainingStatus(skill.status) !== null && (
-                                                <button
-                                                    type="button"
-                                                    aria-label={`Step back ${skill.label}`}
-                                                    onClick={() => reverse(skill.id)}
-                                                    className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
-                                                >
-                                                    Step back
-                                                </button>
-                                            )}
-                                            {nextPetTrainingStatus(skill.status) !== null && (
-                                                <button
-                                                    type="button"
-                                                    aria-label={`Advance ${skill.label}`}
-                                                    onClick={() => advance(skill.id)}
-                                                    className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-200 hover:bg-neutral-700"
-                                                >
-                                                    Advance
-                                                </button>
-                                            )}
-                                            <button
-                                                type="button"
-                                                aria-label={`Mark done ${skill.label}`}
-                                                onClick={() => resolve(skill.id)}
-                                                className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-200 hover:bg-neutral-700"
-                                            >
-                                                Mark done
-                                            </button>
-                                            <button
-                                                type="button"
-                                                aria-label={`Edit ${skill.label}`}
-                                                onClick={() => startEdit(skill)}
-                                                className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
-                                            >
-                                                Edit
-                                            </button>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <TrainingProgressMeter skill={skill} />
+                                                <div className="ml-auto flex flex-wrap items-center gap-2">
+                                                    {previousPetTrainingStatus(skill.status) !== null && (
+                                                        <button
+                                                            type="button"
+                                                            aria-label={`Step back ${skill.label}`}
+                                                            onClick={() => reverse(skill.id)}
+                                                            className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                                                        >
+                                                            Step back
+                                                        </button>
+                                                    )}
+                                                    {nextPetTrainingStatus(skill.status) !== null && (
+                                                        <button
+                                                            type="button"
+                                                            aria-label={`Advance ${skill.label}`}
+                                                            onClick={() => advance(skill.id)}
+                                                            className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-200 hover:bg-neutral-700"
+                                                        >
+                                                            Advance
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        aria-label={`Mark done ${skill.label}`}
+                                                        onClick={() => resolve(skill.id)}
+                                                        className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-200 hover:bg-neutral-700"
+                                                    >
+                                                        Mark done
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        aria-label={`Edit ${skill.label}`}
+                                                        onClick={() => startEdit(skill)}
+                                                        className="shrink-0 rounded-lg bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
                                 </li>

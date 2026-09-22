@@ -448,6 +448,40 @@ describe("PetPage", () => {
         ]);
     });
 
+    it("shows training progress and animates forward versus reverse steps", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data));
+
+        fireEvent.click(screen.getByRole("tab", { name: "Training" }));
+        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+
+        fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+        await waitFor(() => expect(screen.getByText("Sit")).toBeInTheDocument());
+
+        // The card reflects its status and exposes an accessible progress meter.
+        expect(screen.getByText("Sit").closest("li")).toHaveAttribute("data-status", "introduced");
+        const progress = screen.getByRole("progressbar", { name: "Sit training progress" });
+        expect(progress).toHaveAttribute("aria-valuenow", "1");
+        expect(progress).toHaveAttribute("aria-valuetext", "Introduced");
+
+        fireEvent.click(screen.getByRole("button", { name: "Advance Sit" }));
+        await waitFor(() => expect(screen.getByText("Progressing")).toBeInTheDocument());
+        expect(screen.getByRole("progressbar", { name: "Sit training progress" })).toHaveAttribute(
+            "aria-valuenow",
+            "2",
+        );
+        expect(screen.getByText("Sit").closest("li")).toHaveClass("training-step-forward");
+
+        fireEvent.click(screen.getByRole("button", { name: "Step back Sit" }));
+        await waitFor(() => expect(screen.getByText("Introduced")).toBeInTheDocument());
+        expect(screen.getByRole("progressbar", { name: "Sit training progress" })).toHaveAttribute(
+            "aria-valuenow",
+            "1",
+        );
+        expect(screen.getByText("Sit").closest("li")).toHaveClass("training-step-back");
+    });
+
     it("edits a training skill without disturbing its status and rejects a blank label", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data));

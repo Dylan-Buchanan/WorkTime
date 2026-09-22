@@ -47,3 +47,39 @@ body {
 .app-scrollbar::-webkit-scrollbar-corner {
     background: transparent;
 }
+
+@keyframes training-step-forward {
+    from {
+        transform: translateY(8px);
+        opacity: 0.45;
+        box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-emerald-400) 70%, transparent);
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+        box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-emerald-400) 0%, transparent);
+    }
+}
+
+@keyframes training-step-back {
+    from {
+        transform: translateY(-8px);
+        opacity: 0.45;
+        box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-amber-400) 70%, transparent);
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+        box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-amber-400) 0%, transparent);
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .training-step-forward {
+        animation: training-step-forward 520ms ease-out;
+    }
+
+    .training-step-back {
+        animation: training-step-back 520ms ease-out;
+    }
+}
