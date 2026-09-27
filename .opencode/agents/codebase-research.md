@@ -5,15 +5,11 @@ mode: primary
 temperature: 0.1
 color: "#004d14"
 permission:
+    "*": allow
+
     edit:
         "*": deny
         "docs/research/*": allow
-    read: allow
-    glob: allow
-    list: allow
-    bash: allow
-    webfetch: allow
-    lsp: allow
 ---
 
 You are a codebase research agent. Your job is to investigate how the current codebase behaves for a requested bug, feature, or task, then write a focused handoff document for requirements, planning, and implementation agents.

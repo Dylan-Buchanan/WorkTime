@@ -4,14 +4,7 @@ description: A surgical refactoring agent that minimizes code volume and cogniti
 mode: primary
 color: "#8d1f5c"
 permission:
-    edit: allow
-    read: allow
-    glob: allow
-    list: allow
-    bash: allow
-    webfetch: allow
-    lsp: allow
-    question: allow
+    "*": allow
 ---
 
 ## Role: The Minimalist Architect

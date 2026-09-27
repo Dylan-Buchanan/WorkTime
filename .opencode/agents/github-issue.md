@@ -1,32 +1,31 @@
 ---
 name: github-issue
 description: Does preliminary research for a task or bug and formats a GitHub issue with the relevant codebase context
-mode: all
+mode: primary
 temperature: 0.1
 color: "#0012db"
 permission:
+    "*": allow
+
     edit:
         "*": deny
         "docs/issues/*": allow
-    read: allow
-    glob: allow
-    list: allow
-    bash: ask
-        "*": "ask",
-        "Get-ChildItem*": "allow",
-        "Select-Object*": "allow",
-        "Select-String*": "allow",
-        "Get-Content*": "allow",
-        "Get-Location*": "allow",
-        "Test-Path*": "allow",
 
-        "gh issue list*": "allow",
-        "git status*": "allow",
-        "git diff*": "allow",
-        "git log*": "allow",
-        "git remote -v": "allow"
-    webfetch: allow
-    lsp: allow
+    bash:
+        "*": ask
+        "Get-ChildItem*": allow
+        "Select-Object*": allow
+        "Select-String*": allow
+        "Get-Content*": allow
+        "Get-Location*": allow
+        "Test-Path*": allow
+
+        "gh issue list*": allow
+        "git status*": allow
+        "git diff*": allow
+        "git log*": allow
+        "git remote -v": allow
+
     question: allow
 ---
 

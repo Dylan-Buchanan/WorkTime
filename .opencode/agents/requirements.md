@@ -5,16 +5,14 @@ mode: all
 temperature: 0.1
 color: "#0012db"
 permission:
+    "*": allow
+
     edit:
         "*": deny
         "docs/requirements/*": allow
-    read: allow
-    glob: allow
-    list: allow
+
     bash: deny
     webfetch: ask
-    lsp: allow
-    question: allow
 ---
 
 ## Overview

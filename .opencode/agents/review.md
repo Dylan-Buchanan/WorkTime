@@ -4,15 +4,11 @@ description: Review code changes and look for untested edge cases, potential bug
 mode: all
 color: "#fa19c2"
 permission:
+    "*": allow
+
     edit:
         "*": deny
         "docs/reviews/*": allow
-    read: allow
-    glob: allow
-    list: allow
-    bash: allow
-    webfetch: allow
-    lsp: allow
 ---
 
 ## Purpose

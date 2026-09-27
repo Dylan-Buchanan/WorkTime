@@ -4,13 +4,11 @@ description: Classifies the scope of a GitHub issue based on the relevant codeba
 mode: subagent
 color: "#dbd400"
 permission:
+    "*": allow
+
     edit: deny
-    read: allow
-    glob: allow
-    list: allow
     bash: deny
-    webfetch: allow
-    lsp: allow
+    question: deny
 ---
 
 You are a narrowly focused issue scope classification subagent.
