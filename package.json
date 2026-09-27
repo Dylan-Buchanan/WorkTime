@@ -18,7 +18,7 @@
         "test:unit": "vitest run",
         "test:unit:watch": "vitest",
         "test:e2e": "playwright test",
-        "test:integration": "node scripts/verify-local-first-migration.mjs && vitest run --config vitest.integration.config.ts",
+        "test:integration": "pnpm supabase:reset && vitest run --config vitest.integration.config.ts",
         "test:pwa": "npm run build && node scripts/verify-pwa-build.mjs",
         "test:platform": "node scripts/verify-platform-cleanup.mjs",
         "test:all": "pnpm test:unit && node scripts/verify-pwa-build.mjs && pnpm test:platform && pnpm test:integration && pnpm test:e2e",
@@ -28,7 +28,7 @@
         "supabase:status": "npx supabase status",
         "supabase:serve": "npx supabase functions serve --env-file supabase/.env.local",
         "supabase:fullstart": "npm run supabase:start && npm run supabase:serve",
-        "branch:check": "pnpm supabase:reset && pnpm lint && pnpm build && pnpm test:all"
+        "branch:check": "pnpm lint && pnpm build && pnpm test:all"
     },
     "dependencies": {
         "@dnd-kit/core": "^6.3.1",
