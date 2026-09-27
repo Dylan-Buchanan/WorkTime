@@ -30,9 +30,9 @@ import { PetTrainingTagDialog } from "./PetTrainingTagDialog";
 /**
  * The Today tab: profile card, hero status, conditional overdue banner, nap
  * toggle with wake-confirmation reflow, today's card deck, and the persistent
- * potty bar. Profile/schedule/nap/weight records stage through the data
- * provider; every activity log write goes through the single
- * `logActivity` path in `PetActivityContext`, so the potty bar and the inline
+ * potty/training quick-action bar. Profile/schedule/nap/weight records stage
+ * through the data provider; every activity log write goes through the single
+ * `logActivity` path in `PetActivityContext`, so quick actions and inline
  * checks can never diverge.
  */
 export const PetTodayTab: React.FC = () => {
@@ -222,7 +222,7 @@ export const PetTodayTab: React.FC = () => {
                     )}
                 </div>
             </div>
-            <PetPottyBar onPotty={() => logCareActivity("potty")} />
+            <PetPottyBar onPotty={() => logCareActivity("potty")} onTraining={() => logCareActivity("training")} />
             {visibleTrainingTagPrompt && (
                 <PetTrainingTagDialog
                     skills={trainingSkills}

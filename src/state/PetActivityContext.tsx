@@ -23,7 +23,7 @@ export interface PetActivityContextValue {
     hydrated: boolean;
     /**
      * The single one-tap write path. Both the schedule inline checks and the
-     * bottom potty bar call this; it appends one record and shows the undo toast.
+     * bottom quick-action bar call this; it appends one record and shows the undo toast.
      */
     logActivity(input: NewPetActivityRecordInput): PetActivityRecord;
     /** Deletes a record entirely; the log recomputes as if it never happened. */

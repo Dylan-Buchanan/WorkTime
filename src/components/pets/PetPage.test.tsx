@@ -232,6 +232,32 @@ describe("PetPage", () => {
         expect(records.some((record) => record.timestamp === NOW.toISOString())).toBe(true);
     });
 
+    it("logs quick training from the persistent bar and restores its interval when undone", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([intervalItem("training", "training", "Training", 60, 90)]);
+        await data.savePetActivityRecords([activityRow("a1", "training", at(13, 0))]);
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
+        const pottyButton = screen.getByRole("button", { name: /Potty/ });
+        const trainingButton = screen.getByRole("button", { name: /🎓 Training/ });
+        expect(pottyButton.parentElement).toBe(trainingButton.parentElement);
+        expect(screen.getByRole("alert")).toHaveTextContent("Training was due 30 min ago");
+
+        fireEvent.click(trainingButton);
+        await waitFor(() => expect(screen.getByRole("dialog", { name: "Tag training session" })).toBeInTheDocument());
+        expect(screen.getByText(/next training ~4:00 PM/)).toBeInTheDocument();
+        expect((await data.loadPetActivityRecords()).some((record) => record.timestamp === NOW.toISOString())).toBe(true);
+
+        fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tag training session" })).toBeNull());
+        await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Training was due 30 min ago"));
+        expect(screen.getByText("2:00 PM")).toBeInTheDocument();
+        expect(screen.getByText("overdue 30m")).toBeInTheDocument();
+        expect(await data.loadPetActivityRecords()).toEqual([expect.objectContaining({ id: "a1" })]);
+    });
+
     it("offers optional skill tagging after a one-tap training log while keeping Undo", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePetProfile(profileRow());
@@ -240,7 +266,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
-        fireEvent.click(screen.getByRole("button", { name: /Log training/ }));
+        fireEvent.click(screen.getByRole("button", { name: /🎓 Training/ }));
         const prompt = await waitFor(() => screen.getByRole("dialog", { name: "Tag training session" }));
         expect(screen.getByTestId("toast-message")).toHaveTextContent("Logged training");
         expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
@@ -249,7 +275,7 @@ describe("PetPage", () => {
         await waitFor(() => expect(prompt).not.toBeInTheDocument());
         await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([]));
 
-        fireEvent.click(screen.getByRole("button", { name: /Log training/ }));
+        fireEvent.click(screen.getByRole("button", { name: /🎓 Training/ }));
         const skipPrompt = await waitFor(() => screen.getByRole("dialog", { name: "Tag training session" }));
 
         expect(screen.getByRole("checkbox", { name: "Stay" })).toBeInTheDocument();
@@ -259,7 +285,7 @@ describe("PetPage", () => {
 
         fireEvent.click(screen.getByRole("button", { name: "Undo" }));
         await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([]));
-        fireEvent.click(screen.getByRole("button", { name: /Log training/ }));
+        fireEvent.click(screen.getByRole("button", { name: /🎓 Training/ }));
         await waitFor(() => expect(screen.getByRole("dialog", { name: "Tag training session" })).toBeInTheDocument());
         fireEvent.click(screen.getByRole("checkbox", { name: "Sit" }));
         fireEvent.click(screen.getByRole("button", { name: "Save tags" }));
