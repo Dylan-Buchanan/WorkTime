@@ -21,7 +21,7 @@
         "test:integration": "node scripts/verify-local-first-migration.mjs && vitest run --config vitest.integration.config.ts",
         "test:pwa": "npm run build && node scripts/verify-pwa-build.mjs",
         "test:platform": "node scripts/verify-platform-cleanup.mjs",
-        "test:all": "npm run test:unit && npm run test:pwa && npm run test:platform && npm run test:integration && npm run test:e2e",
+        "test:all": "pnpm test:unit && node scripts/verify-pwa-build.mjs && pnpm test:platform && pnpm test:integration && pnpm test:e2e",
         "supabase:start": "npx supabase start",
         "supabase:stop": "npx supabase stop",
         "supabase:reset": "npx supabase db reset",

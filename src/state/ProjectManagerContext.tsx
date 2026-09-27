@@ -4,12 +4,7 @@ import { useAppState } from "./AppStateContext";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
 import type { SyncedPMState } from "../lib/data/DataAccess";
-import {
-    clearAgentProjectSnapshot,
-    getAgentProjectSnapshot,
-    planAgentSnapshotRevert,
-    saveAgentProjectSnapshot,
-} from "../lib/agent/snapshotStore";
+import { clearAgentProjectSnapshot, getAgentProjectSnapshot, planAgentSnapshotRevert, saveAgentProjectSnapshot } from "../lib/agent/snapshotStore";
 import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/snapshotStore";
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { normalizeTaskDueDate } from "../lib/taskDueDate";
@@ -195,7 +190,11 @@ export const ProjectManagerProvider: React.FC<{
     // drives staged PM reloads, and `sync` is the only remote write path.
     const { initialized, revision, sync } = useSync();
     const hasLocalStorage = (() => {
-        try { return typeof window !== "undefined" && typeof window.localStorage !== "undefined"; } catch { return false; }
+        try {
+            return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+        } catch {
+            return false;
+        }
     })();
     const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
     const [hydrated, setHydrated] = useState(false);
@@ -220,7 +219,10 @@ export const ProjectManagerProvider: React.FC<{
         stateRef.current = state;
     }, [state]);
 
-    const serverSlice = useCallback((input: ProjectManagerState | SyncedPMState): SyncedPMState => JSON.parse(JSON.stringify({ projects: input.projects, tasks: input.tasks, meta: input.meta })) as SyncedPMState, []);
+    const serverSlice = useCallback(
+        (input: ProjectManagerState | SyncedPMState): SyncedPMState => JSON.parse(JSON.stringify({ projects: input.projects, tasks: input.tasks, meta: input.meta })) as SyncedPMState,
+        [],
+    );
     const applyServerState = useCallback((remote: SyncedPMState | null, localUI: ProjectManagerState["ui"]): ProjectManagerState => {
         const normalized = normalizeState(remote ? { ...remote, ui: buildDefaultState().ui } : null);
         // Keep device-local UI preferences but drop project references that no
@@ -232,7 +234,12 @@ export const ProjectManagerProvider: React.FC<{
             const first = Object.keys(normalized.projects)[0];
             if (first) selectedProjectIds = [first];
         }
-        return { projects: normalized.projects, tasks: normalized.tasks, meta: normalized.meta, ui: { ...localUI, selectedProjectIds, statusFilter: [...localUI.statusFilter], tagFilter: [...localUI.tagFilter], priorityFilter: [...localUI.priorityFilter] } };
+        return {
+            projects: normalized.projects,
+            tasks: normalized.tasks,
+            meta: normalized.meta,
+            ui: { ...localUI, selectedProjectIds, statusFilter: [...localUI.statusFilter], tagFilter: [...localUI.tagFilter], priorityFilter: [...localUI.priorityFilter] },
+        };
     }, []);
 
     const readLocalUI = useCallback((): ProjectManagerState["ui"] => {
@@ -266,10 +273,16 @@ export const ProjectManagerProvider: React.FC<{
             // A null remote renders the normalized default but is never staged
             // here: the bootstrap guard forbids seeding before the first pull.
             if (hasLocalStorage) {
-                try { window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: localUI })); } catch { /* local UI is best effort */ }
+                try {
+                    window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: localUI }));
+                } catch {
+                    /* local UI is best effort */
+                }
             }
         })();
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+        };
     }, [applyServerState, data, hasLocalStorage, readLocalUI, serverSlice]);
 
     useEffect(() => {
@@ -286,22 +299,28 @@ export const ProjectManagerProvider: React.FC<{
         // Keep the React view ahead of the staged copy until the write really
         // succeeds. A later revision then retries this exact snapshot instead
         // of reloading stale data over an unsaved edit.
-        void data.savePMState(synced).then(() => {
-            if (pendingServerSerializedRef.current === serialized) {
-                lastServerSerializedRef.current = serialized;
-                pendingServerSerializedRef.current = null;
-            }
-        }).catch((err) => {
-            if (pendingServerSerializedRef.current === serialized) {
-                pendingServerSerializedRef.current = null;
-            }
-            console.warn("[PM] failed to persist project manager state", err);
-        });
+        void data
+            .savePMState(synced)
+            .then(() => {
+                if (pendingServerSerializedRef.current === serialized) {
+                    lastServerSerializedRef.current = serialized;
+                    pendingServerSerializedRef.current = null;
+                }
+            })
+            .catch(() => {
+                if (pendingServerSerializedRef.current === serialized) {
+                    pendingServerSerializedRef.current = null;
+                }
+            });
     }, [state, hydrated, initialized, revision, serverSlice, data]);
 
     useEffect(() => {
         if (!hydrated || !hasLocalStorage) return;
-        try { window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: state.ui })); } catch (err) { console.warn("[PM] failed to save local UI state", err); }
+        try {
+            window.localStorage.setItem(LS_KEY, JSON.stringify({ ui: state.ui }));
+        } catch (err) {
+            console.warn("[PM] failed to save local UI state", err);
+        }
     }, [state.ui, hydrated, hasLocalStorage]);
 
     // Reloads the staged PM slice, applying the server slice while retaining the
@@ -364,47 +383,50 @@ export const ProjectManagerProvider: React.FC<{
     const getAgentSnapshot = useCallback(() => getAgentProjectSnapshot(), []);
     const clearAgentSnapshot = useCallback(() => clearAgentProjectSnapshot(), []);
 
-    const revertAgentSnapshot = useCallback((confirmationToken?: string): AgentSnapshotRevertResult => {
-        const snapshot = getAgentProjectSnapshot();
-        if (!snapshot) return { status: "no-snapshot" };
+    const revertAgentSnapshot = useCallback(
+        (confirmationToken?: string): AgentSnapshotRevertResult => {
+            const snapshot = getAgentProjectSnapshot();
+            if (!snapshot) return { status: "no-snapshot" };
 
-        const current = stateRef.current;
-        if (!current.projects[snapshot.projectId]) {
-            return { status: "project-missing", projectId: snapshot.projectId };
-        }
-        const plan = planAgentSnapshotRevert(snapshot, current.tasks);
-        if (plan.conflicts.length > 0 && confirmationToken !== plan.confirmationToken) {
+            const current = stateRef.current;
+            if (!current.projects[snapshot.projectId]) {
+                return { status: "project-missing", projectId: snapshot.projectId };
+            }
+            const plan = planAgentSnapshotRevert(snapshot, current.tasks);
+            if (plan.conflicts.length > 0 && confirmationToken !== plan.confirmationToken) {
+                return {
+                    status: "conflicts",
+                    snapshot,
+                    conflicts: plan.conflicts,
+                    confirmationToken: plan.confirmationToken,
+                };
+            }
+
+            if (plan.restoreTasks.length > 0 || plan.archiveTaskIds.length > 0) {
+                const revertedAt = now();
+                persist((prev) => {
+                    const tasks = { ...prev.tasks };
+                    for (const task of plan.restoreTasks) {
+                        tasks[task.id] = { ...task, updatedAt: revertedAt };
+                    }
+                    for (const taskId of plan.archiveTaskIds) {
+                        const task = tasks[taskId];
+                        if (task) tasks[taskId] = { ...task, isArchived: true, updatedAt: revertedAt };
+                    }
+                    return { ...prev, tasks };
+                });
+            }
+
             return {
-                status: "conflicts",
+                status: "reverted",
                 snapshot,
                 conflicts: plan.conflicts,
-                confirmationToken: plan.confirmationToken,
+                restoredTaskIds: plan.restoreTasks.map((task) => task.id),
+                archivedTaskIds: plan.archiveTaskIds,
             };
-        }
-
-        if (plan.restoreTasks.length > 0 || plan.archiveTaskIds.length > 0) {
-            const revertedAt = now();
-            persist((prev) => {
-                const tasks = { ...prev.tasks };
-                for (const task of plan.restoreTasks) {
-                    tasks[task.id] = { ...task, updatedAt: revertedAt };
-                }
-                for (const taskId of plan.archiveTaskIds) {
-                    const task = tasks[taskId];
-                    if (task) tasks[taskId] = { ...task, isArchived: true, updatedAt: revertedAt };
-                }
-                return { ...prev, tasks };
-            });
-        }
-
-        return {
-            status: "reverted",
-            snapshot,
-            conflicts: plan.conflicts,
-            restoredTaskIds: plan.restoreTasks.map((task) => task.id),
-            archivedTaskIds: plan.archiveTaskIds,
-        };
-    }, [persist]);
+        },
+        [persist],
+    );
 
     const createProject = (name: string, color?: string): Project => {
         const id = uuid();
@@ -506,13 +528,9 @@ export const ProjectManagerProvider: React.FC<{
             // PM metadata row for the same app task. Deduplicate against the
             // latest functional-update snapshot rather than the render-time
             // `state` closure, otherwise quick add can create two PM rows.
-            const linked = opts.appTaskId
-                ? Object.values(prev.tasks).find((task) => task.appTaskId === opts.appTaskId)
-                : undefined;
+            const linked = opts.appTaskId ? Object.values(prev.tasks).find((task) => task.appTaskId === opts.appTaskId) : undefined;
             if (linked) {
-                const dueDate = Object.prototype.hasOwnProperty.call(opts, "dueDate")
-                    ? normalizeTaskDueDate(opts.dueDate)
-                    : linked.dueDate;
+                const dueDate = Object.prototype.hasOwnProperty.call(opts, "dueDate") ? normalizeTaskDueDate(opts.dueDate) : linked.dueDate;
                 const task: PMTask = {
                     ...linked,
                     ...opts,
@@ -556,16 +574,6 @@ export const ProjectManagerProvider: React.FC<{
                 ...prev,
                 tasks: { ...prev.tasks, [id]: task },
             };
-            try {
-                console.log("[PM] createTaskLocal", {
-                    id,
-                    title,
-                    projectId,
-                    status,
-                    totalTasksBefore: Object.keys(prev.tasks).length,
-                    totalTasksAfter: Object.keys(next.tasks).length,
-                });
-            } catch {}
             return next;
         });
         return created!;
@@ -639,9 +647,7 @@ export const ProjectManagerProvider: React.FC<{
     const updateTask = (id: string, patch: Partial<PMTask>) => {
         const t = state.tasks[id];
         if (!t) return;
-        const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "dueDate")
-            ? { ...patch, dueDate: normalizeTaskDueDate(patch.dueDate) }
-            : patch;
+        const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "dueDate") ? { ...patch, dueDate: normalizeTaskDueDate(patch.dueDate) } : patch;
         const upd: PMTask = { ...t, ...normalizedPatch, updatedAt: now() };
         persist((prev) => ({
             ...prev,
@@ -747,11 +753,6 @@ export const ProjectManagerProvider: React.FC<{
             createTask,
             createProject,
         };
-        console.log("[PM] provider render", {
-            projects: Object.keys(state.projects).length,
-            tasks: Object.keys(state.tasks).length,
-            selected: state.ui.selectedProjectIds,
-        });
     });
 
     return (
@@ -793,7 +794,7 @@ export const usePM = () => {
 };
 
 function record(input: unknown): Record<string, any> | null {
-    return input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, any> : null;
+    return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, any>) : null;
 }
 
 export function normalizeLocalUI(input: unknown): ProjectManagerState["ui"] {
@@ -901,7 +902,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
     const validSorts = ["manual", "due", "priority", "updated"] as const;
     const validDueFilters = ["all", "today", "thisWeek", "later", "overdue"] as const;
 
-    const uiSource: Partial<ProjectManagerState["ui"]> = record(source?.ui) as Partial<ProjectManagerState["ui"]> ?? {};
+    const uiSource: Partial<ProjectManagerState["ui"]> = (record(source?.ui) as Partial<ProjectManagerState["ui"]>) ?? {};
     const selectedProjectIds = Array.isArray(uiSource.selectedProjectIds) ? uiSource.selectedProjectIds.filter((id): id is string => typeof id === "string" && !!projects[id]) : [];
     const statusFilter = Array.isArray(uiSource.statusFilter) ? uiSource.statusFilter.filter((status): status is TaskStatus => validStatuses.includes(status as TaskStatus)) : [];
     const tagFilter = Array.isArray(uiSource.tagFilter) ? uiSource.tagFilter.filter((tag): tag is string => typeof tag === "string") : [];

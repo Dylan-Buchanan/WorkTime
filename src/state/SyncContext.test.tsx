@@ -9,6 +9,11 @@ import { makeAppState } from "../test/mockTauri";
 import { isTauri } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: vi.fn() }));
+// These tests exercise sync lifecycle behavior, not the native close bridge.
+// The Tauri branch below runs in jsdom, which has no native window metadata.
+vi.mock("../lib/platform/tauriClose", () => ({
+    createTauriCloseAdapter: vi.fn().mockResolvedValue(null),
+}));
 
 const OWNER = "owner-1";
 

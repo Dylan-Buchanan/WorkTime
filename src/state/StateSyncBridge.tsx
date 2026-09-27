@@ -141,8 +141,7 @@ export const StateSyncBridge: React.FC = () => {
                 try {
                     await data.setTaskTarget(appTaskId, desired);
                     changed = true;
-                } catch (err) {
-                    console.warn("Failed to push estimate to backend", err);
+                } catch {
                     // Clear only the pending entry that still holds the
                     // attempted value; a later edit that rekeyed the pending
                     // target survives.
