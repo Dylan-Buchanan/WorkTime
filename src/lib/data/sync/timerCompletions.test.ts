@@ -108,7 +108,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const base = snapshot();
     return {
-        schemaVersion: 7,
+        schemaVersion: 8,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,

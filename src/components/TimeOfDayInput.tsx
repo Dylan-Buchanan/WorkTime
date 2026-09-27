@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { isEndOfDayTime } from "../lib/settings";
+import { DEFAULT_END_OF_DAY, isTimeOfDay } from "../lib/settings";
 
 type Period = "AM" | "PM";
 
@@ -7,6 +7,7 @@ interface TimeOfDayInputProps {
     id: string;
     label: string;
     value: string;
+    fallbackValue?: string;
     onChange(value: string): void;
 }
 
@@ -23,8 +24,8 @@ function toTwentyFourHour(hour: number, period: Period): number {
     return hour % 12 + (period === "PM" ? 12 : 0);
 }
 
-export const TimeOfDayInput: React.FC<TimeOfDayInputProps> = ({ id, label, value, onChange }) => {
-    const safeValue = isEndOfDayTime(value) ? value : "22:00";
+export const TimeOfDayInput: React.FC<TimeOfDayInputProps> = ({ id, label, value, fallbackValue = DEFAULT_END_OF_DAY, onChange }) => {
+    const safeValue = isTimeOfDay(value) ? value : fallbackValue;
     const displayed = displayParts(safeValue);
     const [hourDraft, setHourDraft] = useState(displayed.hour);
     const [minuteDraft, setMinuteDraft] = useState(displayed.minute);

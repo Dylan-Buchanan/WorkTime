@@ -1,5 +1,5 @@
 import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
-import { DEFAULT_END_OF_DAY } from "../settings";
+import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY } from "../settings";
 import type { InProgressPomodoroMap } from "./pomodoroProgress";
 
 export interface EngineResult<T> {
@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
     short_break_minutes: 5,
     long_break_minutes: 20,
     segment_length: 4,
+    start_of_day: DEFAULT_START_OF_DAY,
     end_of_day: DEFAULT_END_OF_DAY,
 });
 

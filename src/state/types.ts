@@ -113,6 +113,8 @@ export interface Settings {
     short_break_minutes: number;
     long_break_minutes: number;
     segment_length: number;
+    /** Local wall-clock day boundary in 24-hour HH:mm form. Independent of end_of_day. */
+    start_of_day: string;
     /** Local wall-clock cutoff in 24-hour HH:mm form. */
     end_of_day: string;
 }

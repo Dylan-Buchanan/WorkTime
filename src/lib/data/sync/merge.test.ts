@@ -114,7 +114,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 7,
+        schemaVersion: 8,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -182,7 +182,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 7,
+        schemaVersion: 8,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
@@ -830,10 +830,10 @@ describe("habit completion union", () => {
 
 describe("singleton whole-row merges", () => {
     const base = snapshot({
-        settings: { value: { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" }, updatedAt: T1 },
+        settings: { value: { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" }, updatedAt: T1 },
     });
 
-    const localSettings = { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" };
+    const localSettings = { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "06:30", end_of_day: "22:00" };
 
     it("adopts a remote settings change with nothing pending", () => {
         const record = recordFromBaseline(base);
@@ -843,6 +843,7 @@ describe("singleton whole-row merges", () => {
 
         const merged = mergePulledSnapshot(record, remote, NOW);
         expect(merged.record.state.settings.work_minutes).toBe(30);
+        expect(merged.record.state.settings.start_of_day).toBe("06:30");
         expect(merged.record.settingsUpdatedAt).toBeNull();
         expect(merged.pendingCount).toBe(0);
         expect(buildPushPlan(merged.record).settings).toBeNull();
@@ -1033,7 +1034,7 @@ describe("full wipe", () => {
         const base = snapshot({
             tasks: { t1: { value: T("t1", { name: "Doomed" }), updatedAt: T3 } },
             logs: { "log-0": { ...LOG("log-0") } },
-            settings: { value: { work_minutes: 45, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" }, updatedAt: T3 },
+            settings: { value: { work_minutes: 45, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" }, updatedAt: T3 },
         });
         const record = recordFromBaseline(base, {
             fullWipe: { createdAt: W },
@@ -1307,7 +1308,7 @@ describe("buildPushPlan and commit", () => {
                 ...recordFromBaseline(base).state,
                 tasks: { t1: T("t1", { name: "Local" }), t2: T("t2", { name: "New" }) },
                 logs: [LOG("log-0"), LOG("log-1", { finished_at: "2026-01-02T00:25:00.000Z" })],
-                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" },
+                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" },
             },
             taskUpdatedAt: { t1: T2, t2: T2 },
             settingsUpdatedAt: T2,
@@ -1320,7 +1321,7 @@ describe("buildPushPlan and commit", () => {
         expect(plan1.taskUpserts).toHaveLength(2);
         expect(plan1.logUpserts).toHaveLength(1);
         expect(plan1.settings).toEqual({
-            value: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" },
+            value: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" },
             updatedAt: T2,
         });
 
@@ -1330,7 +1331,7 @@ describe("buildPushPlan and commit", () => {
                 t2: { value: T("t2", { name: "New" }), updatedAt: T2 },
             },
             logs: { "log-0": { ...LOG("log-0") }, "log-1": { ...LOG("log-1", { finished_at: "2026-01-02T00:25:00.000Z" }) } },
-            settings: { value: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" }, updatedAt: T2 },
+            settings: { value: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" }, updatedAt: T2 },
         });
         const committed = commitAcknowledgedPush(record, plan1, pushed);
         expect(committed.taskUpdatedAt).toEqual({});
@@ -1463,7 +1464,7 @@ describe("first-pull bootstrap merge", () => {
             state: {
                 tasks: { t2: T("t2", { name: "Local" }) },
                 logs: [],
-                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" },
+                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" },
                 active_task: null,
                 current_cycle_pomodoros: 0,
                 timer: null,
@@ -1487,7 +1488,7 @@ describe("first-pull bootstrap merge", () => {
         const plan = buildPushPlan(merged.record);
         expect(plan.taskUpserts).toEqual([{ value: T("t2", { name: "Local" }), updatedAt: T2 }]);
         expect(plan.settings).toEqual({
-            value: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" },
+            value: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" },
             updatedAt: T2,
         });
         expect(plan.fullWipe).toBe(false);

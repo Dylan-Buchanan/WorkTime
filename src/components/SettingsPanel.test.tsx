@@ -46,7 +46,7 @@ describe("SettingsPanel reset scope", () => {
         const minute = screen.getByLabelText("End of day minute");
         expect(hour).toHaveValue("10");
         expect(minute).toHaveValue("00");
-        expect(screen.getByRole("button", { name: "PM" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getAllByRole("button", { name: "PM" })[1]).toHaveAttribute("aria-pressed", "true");
 
         // Settle every pending provider update (PM hydration, sync bootstrap,
         // Tauri adapter) before driving the controlled inputs. If a provider
@@ -71,10 +71,30 @@ describe("SettingsPanel reset scope", () => {
 
         expect(await screen.findByLabelText("End of day hour")).toHaveAttribute("inputmode", "numeric");
         expect(screen.queryByDisplayValue("09:15")).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole("button", { name: "PM" }));
+        fireEvent.click(screen.getAllByRole("button", { name: "PM" })[1]);
         fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
         await waitFor(() => expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ end_of_day: "21:15" })));
+    });
+
+    it("edits start of day independently and saves it", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const updateSpy = vi.spyOn(data, "updateSettings");
+        render(wrap(data, <SettingsPanel />));
+
+        const hour = await screen.findByLabelText("Start of day hour");
+        const minute = screen.getByLabelText("Start of day minute");
+        expect(hour).toHaveValue("12");
+        expect(minute).toHaveValue("00");
+        await act(async () => {});
+
+        fireEvent.change(hour, { target: { value: "7" } });
+        fireEvent.blur(hour);
+        fireEvent.change(minute, { target: { value: "30" } });
+        fireEvent.blur(minute);
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() => expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ start_of_day: "07:30", end_of_day: "22:00" })));
     });
 
     it("resets timer data once, keeps PM, and describes the scoped deletion", async () => {

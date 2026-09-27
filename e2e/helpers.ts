@@ -165,7 +165,7 @@ export async function syncData(page: Page): Promise<void> {
     await expect(page.getByTestId("sync-status")).toHaveText(/Synced|Ready/);
 }
 
-export const defaultSettings: Settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+export const defaultSettings: Settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" };
 
 export function baseState(overrides: Partial<AppStateData> = {}): AppStateData {
     return { tasks: {}, logs: [], settings: { ...defaultSettings }, active_task: null, current_cycle_pomodoros: 0, timer: null, ...overrides };

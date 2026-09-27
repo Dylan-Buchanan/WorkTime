@@ -12,7 +12,7 @@ import {
     subscribeToAgentApiKey,
     subscribeToAgentProvider,
 } from "../lib/agent";
-import { isEndOfDayTime } from "../lib/settings";
+import { DEFAULT_START_OF_DAY, isTimeOfDay } from "../lib/settings";
 import { TimeOfDayInput } from "./TimeOfDayInput";
 
 export const SettingsPanel: React.FC = () => {
@@ -68,11 +68,21 @@ export const SettingsPanel: React.FC = () => {
                         </label>
                     ))}
                     <TimeOfDayInput
+                        id="start-of-day"
+                        label="Start of day"
+                        value={local.start_of_day}
+                        fallbackValue={DEFAULT_START_OF_DAY}
+                        onChange={(startOfDay) => setLocal((previous) => previous ? { ...previous, start_of_day: startOfDay } : previous)}
+                    />
+                    <TimeOfDayInput
                         id="end-of-day"
                         label="End of day"
                         value={local.end_of_day}
                         onChange={(endOfDay) => setLocal((previous) => previous ? { ...previous, end_of_day: endOfDay } : previous)}
                     />
+                    <p className="col-span-2 text-[10px] text-neutral-500">
+                        Start of day defaults to midnight. It is independent of End of day, so either time may come first.
+                    </p>
                 </div>
             ) : (
                 <div className="text-[11px] text-neutral-500 py-4">
@@ -81,7 +91,7 @@ export const SettingsPanel: React.FC = () => {
             )}
             {local && (
                 <button
-                    disabled={!isEndOfDayTime(local.end_of_day)}
+                    disabled={!isTimeOfDay(local.start_of_day) || !isTimeOfDay(local.end_of_day)}
                     onMouseEnter={() => play("hover")}
                     onClick={() => {
                         updateSettings(local);

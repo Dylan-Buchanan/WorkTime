@@ -155,9 +155,11 @@ describe("SupabaseDataAccess habit transport mapping", () => {
     it("normalizes legacy settings rows while rejecting malformed cutoffs", async () => {
         const legacy = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
         const snapshot = await new SupabaseDataAccess(pullClient(legacy)).pull(OWNER);
-        expect(snapshot.settings.value).toEqual({ ...legacy, end_of_day: "22:00" });
+        expect(snapshot.settings.value).toEqual({ ...legacy, start_of_day: "00:00", end_of_day: "22:00" });
 
         await expect(new SupabaseDataAccess(pullClient({ ...legacy, end_of_day: "24:00" })).pull(OWNER))
+            .rejects.toThrow(/invalid settings row/);
+        await expect(new SupabaseDataAccess(pullClient({ ...legacy, start_of_day: "24:00" })).pull(OWNER))
             .rejects.toThrow(/invalid settings row/);
     });
 

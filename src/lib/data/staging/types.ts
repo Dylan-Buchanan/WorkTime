@@ -110,7 +110,7 @@ export interface TodoCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 7;
+    schemaVersion: 8;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -192,7 +192,7 @@ export interface StagedOwnerRecord {
     petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 7 as const;
+export const STAGING_SCHEMA_VERSION = 8 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -638,14 +638,15 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `7` are accepted; records at the unchanged v1 key migrate in memory
+ * through `8` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
  * local data is never silently overwritten or read under the wrong owner.
  * `unbootstrapped` predates this schema revision and defaults to false when
  * absent so previously stored records keep loading. The v6 -> v7 migration
- * installs the pet domain and its remote mirrors atomically.
+ * installs the pet domain and its remote mirrors atomically. The v7 -> v8
+ * migration backfills start_of_day in both local state and the sync baseline.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -664,7 +665,8 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         parsed.schemaVersion !== 4 &&
         parsed.schemaVersion !== 5 &&
         parsed.schemaVersion !== 6 &&
-        parsed.schemaVersion !== 7
+        parsed.schemaVersion !== 7 &&
+        parsed.schemaVersion !== 8
     ) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
@@ -785,6 +787,23 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             petNotableEventTombstones: record.petNotableEventTombstones ?? {},
             lastSynced,
         };
+    }
+    if (record.schemaVersion === 7) {
+        const state = isObject(record.state)
+            ? { ...record.state, settings: parsePersistedSettings(record.state.settings) ?? record.state.settings }
+            : record.state;
+        const lastSynced = isObject(record.lastSynced) && isObject(record.lastSynced.settings)
+            ? {
+                  ...record.lastSynced,
+                  settings: {
+                      ...record.lastSynced.settings,
+                      value: record.lastSynced.settings.value === null
+                          ? null
+                          : parsePersistedSettings(record.lastSynced.settings.value) ?? record.lastSynced.settings.value,
+                  },
+              }
+            : record.lastSynced;
+        record = { ...record, schemaVersion: 8, state, lastSynced };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

@@ -874,7 +874,7 @@ describe("SyncCoordinator", () => {
             lastSynced: snapshot(),
             state: {
                 ...current.state,
-                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" },
+                settings: { work_minutes: 50, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" },
             },
             settingsUpdatedAt: T1,
         }));
@@ -895,7 +895,7 @@ describe("SyncCoordinator", () => {
             ...current,
             state: {
                 ...current.state,
-                settings: { work_minutes: 60, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, end_of_day: "22:00" },
+                settings: { work_minutes: 60, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" },
             },
             settingsUpdatedAt: T2,
         }));
