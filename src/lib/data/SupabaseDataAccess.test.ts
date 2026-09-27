@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "./SupabaseDataAccess";
+import { DataAccessJwtTimingError } from "./DataAccess";
 import type { Habit, HabitCompletion } from "../../state/types";
 import type { PushPlan } from "./sync/types";
 import type { Todo, TodoCompletion } from "../todos";
@@ -56,7 +57,11 @@ function mockClient(): { client: SupabaseClient; rpc: ReturnType<typeof vi.fn> }
     return { client, rpc };
 }
 
-function pullClient(settingsData: unknown, tableRows: Record<string, unknown[]> = {}): SupabaseClient {
+function pullClient(
+    settingsData: unknown,
+    tableRows: Record<string, unknown[]> = {},
+    tableErrors: Record<string, { code: string; message: string }> = {},
+): SupabaseClient {
     const from = vi.fn((table: string) => {
         if (table === "settings" || table === "timer_state" || table === "pm_state") {
             const data = table === "settings"
@@ -72,7 +77,7 @@ function pullClient(settingsData: unknown, tableRows: Record<string, unknown[]> 
         const query: Record<string, unknown> = {};
         query.eq = () => query;
         query.order = () => query;
-        query.range = async () => ({ data: tableRows[table] ?? [], error: null });
+        query.range = async () => ({ data: tableRows[table] ?? [], error: tableErrors[table] ?? null });
         return { select: () => query };
     });
     return {
@@ -127,6 +132,26 @@ function emptyPlan(): PushPlan {
 }
 
 describe("SupabaseDataAccess habit transport mapping", () => {
+    it.each(["todos", "pet_fixations"])("keeps the %s JWT timing message and marks it retryable", async (table) => {
+        const data = new SupabaseDataAccess(pullClient(null, {}, {
+            [table]: { code: "PGRST303", message: "JWT issued at future" },
+        }));
+        await expect(data.pull(OWNER)).rejects.toThrow(
+            `Supabase ${table} query failed: JWT issued at future (code=PGRST303)`,
+        );
+        await expect(data.pull(OWNER)).rejects.toBeInstanceOf(DataAccessJwtTimingError);
+    });
+
+    it("does not retry other PGRST303 claims failures", async () => {
+        const data = new SupabaseDataAccess(pullClient(null, {}, {
+            todos: { code: "PGRST303", message: "JWT claims invalid" },
+        }));
+        await expect(data.pull(OWNER)).rejects.toMatchObject({
+            name: "Error",
+            message: "Supabase todos query failed: JWT claims invalid (code=PGRST303)",
+        });
+    });
+
     it("normalizes legacy settings rows while rejecting malformed cutoffs", async () => {
         const legacy = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
         const snapshot = await new SupabaseDataAccess(pullClient(legacy)).pull(OWNER);

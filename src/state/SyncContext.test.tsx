@@ -26,6 +26,7 @@ function Probe() {
         <div>
             <div data-testid="status">{ctx.status}</div>
             <div data-testid="error-kind">{ctx.errorKind ?? "none"}</div>
+            <div data-testid="error">{ctx.error ?? "none"}</div>
             <div data-testid="pending">{ctx.pendingCount}</div>
             <div data-testid="revision">{ctx.revision}</div>
             <div data-testid="banner">{ctx.showUnsyncedBanner ? "yes" : "no"}</div>
@@ -53,6 +54,28 @@ afterEach(() => {
 });
 
 describe("SyncContext lifecycle triggers", () => {
+    it("keeps pending work on failure and clears the error after a successful manual retry", async () => {
+        let attempts = 0;
+        const data = new InMemoryDataAccess(makeAppState(), {
+            onSync: async () => {
+                if (attempts++ === 0) throw new Error("JWT issued at future");
+            },
+        });
+        await data.createTask("Pending", 1);
+        render(wrap(data, <Probe />));
+
+        await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("error"));
+        expect(screen.getByTestId("error-kind")).toHaveTextContent("sync");
+        expect(screen.getByTestId("error")).toHaveTextContent("JWT issued at future");
+        expect(screen.getByTestId("pending")).toHaveTextContent("1");
+
+        act(() => screen.getByText("sync-manual").click());
+        await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("success"));
+        expect(screen.getByTestId("error-kind")).toHaveTextContent("none");
+        expect(screen.getByTestId("error")).toHaveTextContent("none");
+        expect(screen.getByTestId("pending")).toHaveTextContent("0");
+    });
+
     it("re-enables manual sync after a hung coordinator watchdog", async () => {
         vi.useFakeTimers();
         const gate = deferred();

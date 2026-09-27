@@ -1,4 +1,4 @@
-import { DataAccessAuthError } from "../DataAccess";
+import { DataAccessAuthError, DataAccessJwtTimingError } from "../DataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "../DataAccess";
 import type { LocalStagingStore } from "../staging/LocalStagingStore";
 import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot } from "../staging/types";
@@ -9,6 +9,9 @@ import { applyCompletionLoser, applyCompletionWinner } from "./timerCompletions"
 function clone<T>(value: T): T {
     return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }
+
+const JWT_TIMING_RETRY_DELAYS_MS = [2_000, 5_000] as const;
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** True when a push plan carries at least one entity/marker to apply. */
 export function isPlanNonEmpty(plan: PushPlan): boolean {
@@ -170,18 +173,20 @@ export class SyncCoordinator implements SyncExecutor {
     private readonly store: LocalStagingStore;
     private readonly remote: SyncRemote;
     private readonly now: () => Date;
+    private readonly delay: (ms: number) => Promise<void>;
     private inFlight: Promise<SyncResult> | null = null;
 
     constructor(
         ownerId: string,
         store: LocalStagingStore,
         remote: SyncRemote,
-        options?: { now?: () => Date },
+        options?: { now?: () => Date; delay?: (ms: number) => Promise<void> },
     ) {
         this.ownerId = ownerId;
         this.store = store;
         this.remote = remote;
         this.now = options?.now ?? (() => new Date());
+        this.delay = options?.delay ?? wait;
     }
 
     sync(options: SyncOptions): Promise<SyncResult> {
@@ -193,7 +198,7 @@ export class SyncCoordinator implements SyncExecutor {
             return shared;
         }
 
-        const attempt = this.performSync();
+        const attempt = this.performSync(options);
         this.inFlight = attempt;
         attempt.then(
             () => {
@@ -210,20 +215,31 @@ export class SyncCoordinator implements SyncExecutor {
     }
 
     /**
-     * Runs one attempt, catching only auth failures. A session refresh is tried
-     * exactly once, then the entire pull -> merge -> push attempt restarts from
-     * the persisted staging record. The auth error surfaces when the refresh or
-     * the retry fails; arbitrary network/database errors are never retried here.
+     * Refreshes once for auth failures. A narrowly identified JWT clock error
+     * gets two delayed retries for ordinary automatic triggers. Every retry
+     * starts from persisted staging; exit paths and manual sync never wait.
      */
-    private async performSync(): Promise<SyncResult> {
-        try {
-            return await this.syncOnce();
-        } catch (error) {
-            if (error instanceof DataAccessAuthError) {
-                await this.remote.refreshSession(this.ownerId);
-                return this.syncOnce();
+    private async performSync(options: SyncOptions): Promise<SyncResult> {
+        const retryTiming = options.reason === "bootstrap" || options.reason === "focus" ||
+            options.reason === "visibility" || options.reason === "bridge";
+        let refreshed = false;
+        let timingRetries = 0;
+        for (;;) {
+            try {
+                return await this.syncOnce();
+            } catch (error) {
+                if (error instanceof DataAccessAuthError && !refreshed) {
+                    refreshed = true;
+                    await this.remote.refreshSession(this.ownerId);
+                    continue;
+                }
+                if (retryTiming && error instanceof DataAccessJwtTimingError &&
+                    timingRetries < JWT_TIMING_RETRY_DELAYS_MS.length) {
+                    await this.delay(JWT_TIMING_RETRY_DELAYS_MS[timingRetries++]);
+                    continue;
+                }
+                throw error;
             }
-            throw error;
         }
     }
 

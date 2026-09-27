@@ -4,7 +4,7 @@ import type {
     PetNotableEvent, PetProfile, PetScheduleItem, PetTrainingSkill, PetWeightEntry,
     PomodoroLogEntry, Task,
 } from "../../state/types";
-import { DataAccessAuthError } from "./DataAccess";
+import { DataAccessAuthError, DataAccessJwtTimingError } from "./DataAccess";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "./staging/types";
 import type { PushPlan, SyncRemote } from "./sync/types";
 import { completionRpcPayload } from "./sync/timerCompletions";
@@ -158,7 +158,13 @@ export class SupabaseDataAccess implements SyncRemote {
             if (typeof error.hint === "string" && error.hint) parts.push(`hint=${error.hint}`);
         }
         const suffix = parts.length ? ` (${parts.join(", ")})` : "";
-        throw new Error(`Supabase ${table} query failed: ${message}${suffix}`);
+        const formatted = `Supabase ${table} query failed: ${message}${suffix}`;
+        // PGRST303 also covers other JWT claim failures, so only the issued-in-
+        // the-future response is eligible for a short timing retry.
+        if (isRecord(error) && error.code === "PGRST303" && /jwt issued at future/i.test(message)) {
+            throw new DataAccessJwtTimingError(formatted);
+        }
+        throw new Error(formatted);
     }
 
     /**

@@ -3,7 +3,7 @@ import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from
 import { defaultAppState } from "../../engine";
 import { LocalStagingStore, stagingKey, type StorageLike } from "../staging/LocalStagingStore";
 import type { PendingTimerCompletion, SyncSnapshot, TimerStateSlice } from "../staging/types";
-import { DataAccessAuthError } from "../DataAccess";
+import { DataAccessAuthError, DataAccessJwtTimingError } from "../DataAccess";
 import type { PushPlan, SyncRemote } from "./types";
 import { timerGenerationKey } from "./timerCompletions";
 import { timestampMs } from "./merge";
@@ -271,6 +271,81 @@ async function seedCompletion(store: LocalStagingStore, entry: PendingTimerCompl
 }
 
 describe("SyncCoordinator", () => {
+    it("waits and recovers from a JWT timing failure during automatic sync while retaining staged work", async () => {
+        const { remote, server } = makeRemote(snapshot());
+        const store = new LocalStagingStore(makeStorage());
+        await store.update(OWNER, (current) => ({
+            ...current,
+            state: { ...current.state, tasks: { t1: T("t1") } },
+            taskUpdatedAt: { t1: T1 },
+        }));
+        remote.pull.mockRejectedValueOnce(new DataAccessJwtTimingError(
+            "Supabase todos query failed: JWT issued at future (code=PGRST303)",
+        )).mockResolvedValue(clone(server));
+        let releaseRetry!: () => void;
+        const delay = vi.fn(() => new Promise<void>((resolve) => { releaseRetry = resolve; }));
+        const coordinator = new SyncCoordinator(OWNER, store, remote, { now: () => NOW, delay });
+
+        const bootstrap = coordinator.sync({ reason: "bootstrap" });
+        await vi.waitFor(() => expect(delay).toHaveBeenCalledWith(2_000));
+        expect(remote.pull).toHaveBeenCalledTimes(1);
+        expect(remote.push).not.toHaveBeenCalled();
+        expect(store.read(OWNER).initialized).toBe(false);
+        expect(store.read(OWNER).state.tasks.t1).toEqual(T("t1"));
+        const focus = coordinator.sync({ reason: "focus" });
+        releaseRetry();
+
+        const [first, second] = await Promise.all([bootstrap, focus]);
+        expect(first).toEqual(second);
+        expect(remote.pull).toHaveBeenCalledTimes(2);
+        expect(remote.push).toHaveBeenCalledTimes(1);
+        expect(remote.refreshSession).not.toHaveBeenCalled();
+        expect(first.pendingCount).toBe(0);
+        expect(store.read(OWNER).initialized).toBe(true);
+        expect(server.tasks.t1).toBeDefined();
+    });
+
+    it("stops after two JWT timing retries and lets a later manual sync recover staged work", async () => {
+        const { remote, server } = makeRemote(snapshot());
+        const store = new LocalStagingStore(makeStorage());
+        await store.update(OWNER, (current) => ({
+            ...current,
+            state: { ...current.state, tasks: { t1: T("t1") } },
+            taskUpdatedAt: { t1: T1 },
+        }));
+        const timingError = new DataAccessJwtTimingError("JWT issued at future");
+        remote.pull.mockRejectedValueOnce(timingError).mockRejectedValueOnce(timingError)
+            .mockRejectedValueOnce(timingError).mockResolvedValue(clone(server));
+        const delay = vi.fn(async (_ms: number) => {});
+        const coordinator = new SyncCoordinator(OWNER, store, remote, { now: () => NOW, delay });
+
+        await expect(coordinator.sync({ reason: "visibility" })).rejects.toBe(timingError);
+        expect(delay.mock.calls.map(([ms]) => ms)).toEqual([2_000, 5_000]);
+        expect(remote.pull).toHaveBeenCalledTimes(3);
+        expect(remote.push).not.toHaveBeenCalled();
+        expect(store.read(OWNER).initialized).toBe(false);
+        expect(store.read(OWNER).state.tasks.t1).toEqual(T("t1"));
+
+        const recovered = await coordinator.sync({ reason: "manual" });
+        expect(recovered.pendingCount).toBe(0);
+        expect(remote.pull).toHaveBeenCalledTimes(4);
+        expect(remote.push).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["manual", "pagehide", "close"] as const)("does not delay a %s sync", async (reason) => {
+        const { remote } = makeRemote(snapshot());
+        remote.pull.mockRejectedValue(new DataAccessJwtTimingError("JWT issued at future"));
+        const delay = vi.fn(async (_ms: number) => {});
+        const coordinator = new SyncCoordinator(OWNER, new LocalStagingStore(makeStorage()), remote, { delay });
+        if (reason === "manual") {
+            await expect(coordinator.sync({ reason })).rejects.toThrow("JWT issued at future");
+        } else {
+            await expect(coordinator.sync({ reason, bestEffort: true })).resolves.toMatchObject({ initialized: false });
+        }
+        expect(remote.pull).toHaveBeenCalledTimes(1);
+        expect(delay).not.toHaveBeenCalled();
+    });
+
     it("never writes before a successful bootstrap pull and leaves initialized unchanged", async () => {
         const { remote } = makeRemote(snapshot());
         const store = new LocalStagingStore(makeStorage());

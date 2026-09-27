@@ -100,6 +100,15 @@ export class DataAccessAuthError extends Error {
     }
 }
 
+/** PostgREST rejected a JWT whose issued-at claim is ahead of server time. */
+export class DataAccessJwtTimingError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "DataAccessJwtTimingError";
+        Object.setPrototypeOf(this, new.target.prototype);
+    }
+}
+
 export interface DataAccess {
     fetchState(): Promise<FetchStateResult>;
     createTask(name: string, targetPomodoros: number): Promise<EngineResult<Task>>;
