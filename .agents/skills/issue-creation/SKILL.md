@@ -10,7 +10,7 @@ Create a simple and clear Github issue that another software engineer or a codin
 ## Overview
 
 - Create the issue as a markdown file at `docs/issues/issue-<issue-number>.md`.
-- You can use `git log` to see what number this issue should be chronologically if not specified by the user directly.
+- You can use `gh issue list --search "sort:created-desc"` to see what number this issue should be chronologically if not specified by the user directly.
 - If the user specifies a github issue number than use that.
 - If you are creating multiple issues at once then the issues should be numbered based on the order in which they should be completed.
 - The goal is to explain the issue clearly, give background information, state the work that must be done clearly, and give code information and file references

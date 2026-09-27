@@ -41,10 +41,10 @@ Load the **issue-creation** skill.
 You will use it to format the full issue (combining your research, the initial description, and the classification output) into a markdown file.
 The skill will tell you where to place the file and the exact template to follow.
 
-### Step 2: Run the `git log` command
+### Step 2: Run the `git issue list` command
 
-Running `git log` will tell you what issue number this issue should be.
-You should set the issue number to be the next possible issue number based on the log
+Running `gh issue list --search "sort:created-desc"` will tell you what issue number this issue should be.
+You should set the issue number to be the next possible issue number based on the list
 
 ### Step 3: Research the codebase
 
