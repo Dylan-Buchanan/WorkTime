@@ -1,53 +1,43 @@
 ---
 name: issue-creation
-description: Create a well-formatted issue based on user description
+description: Create a well-formatted Github issue based on user description
 ---
 
-Create the issue as a markdown file at `docs/issues/issue-<issue-number>.md`. Assume that this folder already exists. You can use `git log` to see what number this issue is.
-If you are creating multiple issues at once then the issues should be numbered based on the order in which they should be completed.
+# Issue Creation
 
-Use the template below. Fill every section. Omit sections only if they truly do not apply.
+Create a simple and clear Github issue that another software engineer or a coding agent could pick up and easily complete.
 
-```markdown
-## Title: <Issue Title>
+## Overview
 
-## Tags
+- Create the issue as a markdown file at `docs/issues/issue-<issue-number>.md`.
+- You can use `git log` to see what number this issue should be chronologically if not specified by the user directly.
+- If the user specifies a github issue number than use that.
+- If you are creating multiple issues at once then the issues should be numbered based on the order in which they should be completed.
+- The goal is to explain the issue clearly, give background information, state the work that must be done clearly, and give code information and file references
+- The issue markdown template can be found in `references/issue-template.md`
 
-Complexity Classification: <T0, T1, T2, T3, or T4>
-Severity: <Low, Medium, High, Critical>
-Reason: <Classification justification>
-Needs research before implementation: <Yes or No, with explanation if Yes>
+## Content
 
-## Summary
+The following topics are what should be included in an issue
 
-<1-3 sentence summary of the problem or feature>
+- Complexity Classification
+- Severity Classification
+- Research Still Required
+- A Clear Summary of the Issue
+- Steps to Reproduce the Context of the Issue
+- Expected Behavior
+- Actual Behavior
+- Requirements to Complete the Issue
+- Testing Instructions
+- Context in the Form of Code Snippets and File References
 
-## Steps to Reproduce Context
+## Instructions
 
-1. <step>
-2. <step>
-3. <step>
-
-## Expected Behavior
-
-<what should happen>
-
-## Actual Behavior
-
-<what happens instead>
-
-## Requirements for completed issue
-
-1. <requirement>
-2. <requirement>
-3. <requirement>
-
-## Context
-
-- Files: <relevant file references found in the codebase>
-- Code Snippets: <relevant code snippets found in the codebase>
-
-## Notes
-
-<optional logs, screenshots, or extra context>
-```
+1. Research the codebase for a basic understanding of the issue presented
+2. Gather information from the user about what is the problem and what should be done
+    - Ask questions about the problem or feature
+    - Ask questions about scope
+    - Ask questions about the desired outcome
+3. Perform any follow up research necessary
+4. Determine if the issue should be broken up into several issues
+5. Write the issue(s) as `docs/issues/issue-<issue-number>.md`
