@@ -11,7 +11,7 @@ interface PetProfileSetupProps {
  * one small form; the birth date feeds the derived age display.
  */
 export const PetProfileSetup: React.FC<PetProfileSetupProps> = ({ onSaveProfile }) => {
-    const [nameDraft, setNameDraft] = useState("Whitney");
+    const [nameDraft, setNameDraft] = useState("");
     const [birthDraft, setBirthDraft] = useState("");
     const [error, setError] = useState<string | null>(null);
 

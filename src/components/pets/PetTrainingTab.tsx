@@ -155,7 +155,7 @@ interface EditDraft {
 }
 
 /**
- * The Training tab: the short list of skills Whitney is actively learning with
+ * The Training tab: the short list of skills the pet is actively learning with
  * an `introduced → progressing → reliable` progression, plus a "Skill Stamps"
  * gallery of resolved skills. All transitions run through the pure pet lib;
  * this component only persists the resulting full set.
@@ -373,7 +373,7 @@ export const PetTrainingTab: React.FC = () => {
                 <section className="flex flex-col gap-3">
                     <div>
                         <h2 className="text-sm font-semibold text-neutral-100">Training</h2>
-                        <p className="text-[11px] text-neutral-500">What Whitney is learning right now.</p>
+                        <p className="text-[11px] text-neutral-500">What your pet is learning right now.</p>
                     </div>
 
                     <form

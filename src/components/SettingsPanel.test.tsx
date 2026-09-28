@@ -36,12 +36,19 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
 
 beforeEach(() => localStorage.clear());
 
+function expandSection(name: string) {
+    const button = screen.getByRole("button", { name, expanded: false });
+    fireEvent.click(button);
+    return screen.getByRole("button", { name, expanded: true });
+}
+
 describe("SettingsPanel reset scope", () => {
     it("edits and saves the global end-of-day cutoff", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const updateSpy = vi.spyOn(data, "updateSettings");
         render(wrap(data, <SettingsPanel />));
 
+        expandSection("Day hour settings");
         const hour = await screen.findByLabelText("End of day hour");
         const minute = screen.getByLabelText("End of day minute");
         expect(hour).toHaveValue("10");
@@ -69,6 +76,7 @@ describe("SettingsPanel reset scope", () => {
         const updateSpy = vi.spyOn(data, "updateSettings");
         render(wrap(data, <SettingsPanel />));
 
+        expandSection("Day hour settings");
         expect(await screen.findByLabelText("End of day hour")).toHaveAttribute("inputmode", "numeric");
         expect(screen.queryByDisplayValue("09:15")).not.toBeInTheDocument();
         fireEvent.click(screen.getAllByRole("button", { name: "PM" })[1]);
@@ -82,6 +90,7 @@ describe("SettingsPanel reset scope", () => {
         const updateSpy = vi.spyOn(data, "updateSettings");
         render(wrap(data, <SettingsPanel />));
 
+        expandSection("Day hour settings");
         const hour = await screen.findByLabelText("Start of day hour");
         const minute = screen.getByLabelText("Start of day minute");
         expect(hour).toHaveValue("12");
@@ -149,6 +158,7 @@ describe("SettingsPanel reset scope", () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data, <SettingsPanel />));
 
+        expandSection("Agent API key");
         const input = await screen.findByLabelText("Agent API key");
         fireEvent.change(screen.getByRole("combobox", { name: /Provider/ }), { target: { value: "deepseek" } });
         fireEvent.change(input, { target: { value: "  secret-key  " } });
@@ -168,6 +178,7 @@ describe("SettingsPanel reset scope", () => {
     it("shows a failure indicator when browser storage rejects the save", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data, <SettingsPanel />));
+        expandSection("Agent API key");
         const input = await screen.findByLabelText("Agent API key");
         fireEvent.change(input, { target: { value: "secret-key" } });
         vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
@@ -177,5 +188,30 @@ describe("SettingsPanel reset scope", () => {
         fireEvent.click(screen.getByText("Save API key"));
 
         expect(screen.getByRole("status")).toHaveTextContent("Unable to save the API key locally");
+    });
+
+    it("starts all sections collapsed, toggles them independently, and resets on remount", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const view = render(wrap(data, <SettingsPanel />));
+        const names = ["Base settings", "Day hour settings", "Agent API key"];
+        for (const name of names) {
+            expect(screen.getByRole("button", { name, expanded: false })).toBeInTheDocument();
+        }
+        expect(screen.queryByLabelText("work minutes")).not.toBeInTheDocument();
+        expect(screen.queryByLabelText("Start of day hour")).not.toBeInTheDocument();
+        expect(document.getElementById("settings-agent-content")).toHaveAttribute("hidden");
+
+        for (const name of names) {
+            expandSection(name);
+            expect(screen.getByRole("button", { name, expanded: true })).toHaveAttribute("aria-controls");
+            fireEvent.click(screen.getByRole("button", { name, expanded: true }));
+            expect(screen.getByRole("button", { name, expanded: false })).toBeInTheDocument();
+        }
+
+        view.unmount();
+        render(wrap(data, <SettingsPanel />));
+        for (const name of names) {
+            expect(screen.getByRole("button", { name, expanded: false })).toBeInTheDocument();
+        }
     });
 });

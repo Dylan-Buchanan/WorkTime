@@ -342,7 +342,7 @@ describe("SupabaseDataAccess transport", () => {
         await remote.push(user.userId, {
             ...emptyPlan(),
             petProfile: {
-                value: { id: PET_PROFILE_ID, name: "Whitney", birthDate: "2026-07-10", createdAt: T0, updatedAt: T0 },
+                value: { id: PET_PROFILE_ID, name: "Buddy", birthDate: "2026-07-10", createdAt: T0, updatedAt: T0 },
                 updatedAt: T0,
             },
             petActivityUpserts: [{
@@ -357,7 +357,7 @@ describe("SupabaseDataAccess transport", () => {
             petNotableEventUpserts: [{ value: { id: PET_EVENT_ID, title: "First walk", notes: "", timestamp: T0, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
         });
         let snapshot = await remote.pull(user.userId);
-        expect(snapshot.petProfile.value?.name).toBe("Whitney");
+        expect(snapshot.petProfile.value?.name).toBe("Buddy");
         expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).toMatchObject({
             activityType: "training",
             skillIds: [PET_SKILL_ID, "unknown-skill"],
@@ -419,7 +419,7 @@ describe("SupabaseDataAccess transport", () => {
             petNotableEventTombstones: [{ id: PET_EVENT_ID, deletedAt: EARLIER }],
         });
         snapshot = await remote.pull(user.userId);
-        expect(snapshot.petProfile.value?.name).toBe("Whitney");
+        expect(snapshot.petProfile.value?.name).toBe("Buddy");
         expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.skillIds).toEqual([PET_SKILL_ID, "unknown-skill"]);
         expect(snapshot.petScheduleItems[PET_SCHEDULE_ID].value.label).toBe("Breakfast");
         expect(snapshot.petNapRecords[PET_NAP_ID].value.end).toBeNull();

@@ -14,6 +14,7 @@ import {
 } from "../lib/agent";
 import { DEFAULT_START_OF_DAY, isTimeOfDay } from "../lib/settings";
 import { TimeOfDayInput } from "./TimeOfDayInput";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 export const SettingsPanel: React.FC = () => {
     const { state, updateSettings, resetAll } = useAppState();
@@ -27,6 +28,8 @@ export const SettingsPanel: React.FC = () => {
     const [agentProvider, setAgentProviderChoice] = useState(() => getAgentProvider());
     const [agentSaveStatus, setAgentSaveStatus] = useState<"success" | "error" | null>(null);
     const [agentSaveMessage, setAgentSaveMessage] = useState("");
+    const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+    const toggleSection = (section: string) => setExpandedSections((current) => ({ ...current, [section]: !current[section] }));
     React.useEffect(() => {
         setLocal(s || null);
     }, [s]);
@@ -48,8 +51,13 @@ export const SettingsPanel: React.FC = () => {
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
                 Settings
             </h3>
-            {local ? (
-                <div className="grid grid-cols-2 gap-3">
+            <section className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button type="button" aria-expanded={Boolean(expandedSections.base)} aria-controls="settings-base-content" onClick={() => toggleSection("base")} className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-800/40">
+                    {expandedSections.base ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                    <span>Base settings</span>
+                </button>
+                <div id="settings-base-content" hidden={!expandedSections.base} className="grid grid-cols-2 gap-3 p-2">
+                    {local ? <>
                     {fields.map((key) => (
                         <label
                             key={key}
@@ -67,6 +75,16 @@ export const SettingsPanel: React.FC = () => {
                             />
                         </label>
                     ))}
+                    </> : <div className="col-span-2 text-[11px] text-neutral-500 py-4">Loading…</div>}
+                </div>
+            </section>
+            <section className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button type="button" aria-expanded={Boolean(expandedSections.day)} aria-controls="settings-day-content" onClick={() => toggleSection("day")} className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-800/40">
+                    {expandedSections.day ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                    <span>Day hour settings</span>
+                </button>
+                <div id="settings-day-content" hidden={!expandedSections.day} className="grid grid-cols-2 gap-3 p-2">
+                    {local ? <>
                     <TimeOfDayInput
                         id="start-of-day"
                         label="Start of day"
@@ -83,31 +101,16 @@ export const SettingsPanel: React.FC = () => {
                     <p className="col-span-2 text-[10px] text-neutral-500">
                         Pet schedule occurrences reset at Start of day and stop at End of day (10:00 PM by default). Items outside that window are hidden. Equal times make a 24-hour schedule.
                     </p>
+                    </> : <div className="col-span-2 text-[11px] text-neutral-500 py-4">Loading…</div>}
                 </div>
-            ) : (
-                <div className="text-[11px] text-neutral-500 py-4">
-                    Loading…
-                </div>
-            )}
-            {local && (
-                <button
-                    disabled={!isTimeOfDay(local.start_of_day) || !isTimeOfDay(local.end_of_day)}
-                    onMouseEnter={() => play("hover")}
-                    onClick={() => {
-                        updateSettings(local);
-                        play("pressSide");
-                    }}
-                    className="w-full mt-2 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 text-[11px] font-medium tracking-wide"
-                >
-                    Save
+            </section>
+            <section className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button type="button" aria-expanded={Boolean(expandedSections.agent)} aria-controls="settings-agent-content" onClick={() => toggleSection("agent")} className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-800/40">
+                    {expandedSections.agent ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                    <span>Agent API key</span>
                 </button>
-            )}
-            <div className="pt-1 border-t border-neutral-800" />
-            <div className="space-y-2">
+                <div id="settings-agent-content" hidden={!expandedSections.agent} className="space-y-2 p-2">
                 <div>
-                    <h4 className="text-[11px] font-semibold text-neutral-300">
-                        Agent API key
-                    </h4>
                     <p className="text-[10px] text-neutral-500 leading-relaxed">
                         Stored only in this browser or Tauri webview. Enter it once per surface.
                     </p>
@@ -127,9 +130,7 @@ export const SettingsPanel: React.FC = () => {
                         className="bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                     >
                         {AGENT_PROVIDER_OPTIONS.map((provider) => (
-                            <option key={provider.id} value={provider.id}>
-                                {provider.label}
-                            </option>
+                            <option key={provider.id} value={provider.id}>{provider.label}</option>
                         ))}
                     </select>
                     <span className="font-normal text-neutral-600">
@@ -141,63 +142,38 @@ export const SettingsPanel: React.FC = () => {
                     type="password"
                     autoComplete="off"
                     value={agentApiKey}
-                    onChange={(event) => {
-                        setAgentApiKeyDraft(event.target.value);
-                        setAgentSaveStatus(null);
-                    }}
+                    onChange={(event) => { setAgentApiKeyDraft(event.target.value); setAgentSaveStatus(null); }}
                     placeholder="sk-…"
                     className="w-full bg-neutral-800/60 border border-neutral-700 rounded px-2 py-1.5 sm:py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
                 <div className="flex gap-2">
-                    <button
-                        type="button"
-                        onMouseEnter={() => play("hover")}
-                        onClick={() => {
-                            try {
-                                setAgentProvider(agentProvider);
-                                setAgentApiKey(agentApiKey);
-                                setAgentSaveStatus("success");
-                                setAgentSaveMessage("API key saved locally for the selected provider.");
-                                play("pressSide");
-                            } catch {
-                                setAgentSaveStatus("error");
-                                setAgentSaveMessage("Unable to save the API key locally. Check browser storage permissions and try again.");
-                            }
-                        }}
-                        className="flex-1 px-2 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-[11px] font-medium"
-                    >
-                        Save API key
-                    </button>
-                    <button
-                        type="button"
-                        disabled={!hasAgentApiKey}
-                        onMouseEnter={() => hasAgentApiKey && play("hover")}
-                        onClick={() => {
-                            try {
-                                clearAgentApiKey();
-                                setAgentSaveStatus("success");
-                                setAgentSaveMessage("API key cleared from this surface.");
-                                play("pressSide");
-                            } catch {
-                                setAgentSaveStatus("error");
-                                setAgentSaveMessage("Unable to clear the API key from local storage. Try again.");
-                            }
-                        }}
-                        className="px-2 py-1.5 rounded border border-neutral-700 bg-neutral-800/60 hover:bg-neutral-800 text-[11px] text-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                        Clear
-                    </button>
+                    <button type="button" onMouseEnter={() => play("hover")} onClick={() => {
+                        try {
+                            setAgentProvider(agentProvider); setAgentApiKey(agentApiKey); setAgentSaveStatus("success");
+                            setAgentSaveMessage("API key saved locally for the selected provider."); play("pressSide");
+                        } catch {
+                            setAgentSaveStatus("error"); setAgentSaveMessage("Unable to save the API key locally. Check browser storage permissions and try again.");
+                        }
+                    }} className="flex-1 px-2 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-[11px] font-medium">Save API key</button>
+                    <button type="button" disabled={!hasAgentApiKey} onMouseEnter={() => hasAgentApiKey && play("hover")} onClick={() => {
+                        try {
+                            clearAgentApiKey(); setAgentSaveStatus("success"); setAgentSaveMessage("API key cleared from this surface."); play("pressSide");
+                        } catch {
+                            setAgentSaveStatus("error"); setAgentSaveMessage("Unable to clear the API key from local storage. Try again.");
+                        }
+                    }} className="px-2 py-1.5 rounded border border-neutral-700 bg-neutral-800/60 hover:bg-neutral-800 text-[11px] text-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed">Clear</button>
                 </div>
-                {agentSaveStatus && (
-                    <p
-                        role="status"
-                        aria-live="polite"
-                        className={agentSaveStatus === "success" ? "text-[10px] text-emerald-400" : "text-[10px] text-red-400"}
-                    >
-                        {agentSaveMessage}
-                    </p>
-                )}
-            </div>
+                {agentSaveStatus && <p role="status" aria-live="polite" className={agentSaveStatus === "success" ? "text-[10px] text-emerald-400" : "text-[10px] text-red-400"}>{agentSaveMessage}</p>}
+                </div>
+            </section>
+            {local && (
+                <button
+                    disabled={!isTimeOfDay(local.start_of_day) || !isTimeOfDay(local.end_of_day)}
+                    onMouseEnter={() => play("hover")}
+                    onClick={() => { updateSettings(local); play("pressSide"); }}
+                    className="w-full mt-2 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 text-[11px] font-medium tracking-wide"
+                >Save</button>
+            )}
             <div className="pt-1 border-t border-neutral-800" />
             <button
                 type="button"

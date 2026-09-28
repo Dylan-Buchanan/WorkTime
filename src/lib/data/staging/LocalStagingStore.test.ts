@@ -385,7 +385,7 @@ describe("LocalStagingStore", () => {
         // Populated groups round-trip through serialize then parse.
         await store.update(OWNER_A, (r) => ({
             ...r,
-            petProfile: { id: "p1", name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
+            petProfile: { id: "p1", name: "Buddy", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
             petProfileUpdatedAt: "2026-01-01T10:00:00.000Z",
             petScheduleItems: {
                 s1: {
@@ -417,7 +417,7 @@ describe("LocalStagingStore", () => {
             },
         }));
         const roundTripped = store.read(OWNER_A);
-        expect(roundTripped.petProfile?.name).toBe("Whitney");
+        expect(roundTripped.petProfile?.name).toBe("Buddy");
         expect(roundTripped.petScheduleItems.s1.recurrence).toEqual({ mode: "interval", minMinutes: 60, maxMinutes: 90 });
         expect(roundTripped.petReminderMarks["s1:2026-01-01T11:00:00.000Z"]?.itemId).toBe("s1");
         expect(roundTripped.petNapRecords.n1.end).toBeNull();
@@ -545,7 +545,7 @@ describe("LocalStagingStore", () => {
             ...r,
             initialized: true,
             lastSynced: baseline,
-            petProfile: { id: "p1", name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
+            petProfile: { id: "p1", name: "Buddy", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z" },
             petProfileUpdatedAt: "2026-01-01T10:00:00.000Z",
             petScheduleItems: {
                 s1: {

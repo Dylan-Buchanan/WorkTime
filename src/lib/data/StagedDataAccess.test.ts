@@ -83,7 +83,7 @@ function PA(id: string, activityType: PetActivityType, overrides: Partial<PetAct
 }
 
 function PP(id: string, overrides: Partial<PetProfile> = {}): PetProfile {
-    return { id, name: "Whitney", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z", ...overrides };
+    return { id, name: "Buddy", birthDate: "2026-07-10", createdAt: "2026-01-01T10:00:00.000Z", updatedAt: "2026-01-01T10:00:00.000Z", ...overrides };
 }
 
 function PSI(id: string, overrides: Partial<PetScheduleItem> = {}): PetScheduleItem {
@@ -743,7 +743,7 @@ describe("StagedDataAccess", () => {
         await data.savePetProfile(PP("p1"));
         let record = store.read(OWNER_A);
         expect(sync).not.toHaveBeenCalled();
-        expect(record.petProfile?.name).toBe("Whitney");
+        expect(record.petProfile?.name).toBe("Buddy");
         expect(record.petProfileUpdatedAt).toBe("2026-01-02T00:00:00.000Z");
 
         // An unchanged profile keeps its stamp; a changed one is re-stamped.
@@ -751,9 +751,9 @@ describe("StagedDataAccess", () => {
         record = store.read(OWNER_A);
         expect(record.petProfileUpdatedAt).toBe("2026-01-02T00:00:00.000Z");
         current = new Date("2026-01-02T01:00:00.000Z");
-        await data.savePetProfile(PP("p1", { name: "Whitney II" }));
+        await data.savePetProfile(PP("p1", { name: "Buddy II" }));
         record = store.read(OWNER_A);
-        expect(record.petProfile?.name).toBe("Whitney II");
+        expect(record.petProfile?.name).toBe("Buddy II");
         expect(record.petProfileUpdatedAt).toBe("2026-01-02T01:00:00.000Z");
 
         // Clearing the profile records an LWW tombstone; re-adding clears it.
@@ -765,7 +765,7 @@ describe("StagedDataAccess", () => {
         expect(record.petProfileTombstone).toEqual({ id: "p1", deletedAt: "2026-01-02T02:00:00.000Z" });
         expect(await data.loadPetProfile()).toBeNull();
         current = new Date("2026-01-02T03:00:00.000Z");
-        await data.savePetProfile(PP("p1", { name: "Whitney III" }));
+        await data.savePetProfile(PP("p1", { name: "Buddy III" }));
         record = store.read(OWNER_A);
         expect(record.petProfileTombstone).toBeNull();
         expect(record.petProfileUpdatedAt).toBe("2026-01-02T03:00:00.000Z");

@@ -32,7 +32,7 @@ function at(hour: number, minute = 0): Date {
 }
 
 function profileRow(): PetProfile {
-    return { id: "p1", name: "Whitney", birthDate: "2026-07-10", createdAt: T0, updatedAt: T0 };
+    return { id: "p1", name: "Buddy", birthDate: "2026-07-10", createdAt: T0, updatedAt: T0 };
 }
 
 function fixedItem(
@@ -189,13 +189,13 @@ describe("PetPage", () => {
         render(wrap(data));
 
         await waitFor(() => expect(screen.getByText("When was your puppy born?")).toBeInTheDocument());
-        fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Whitney" } });
+        fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Buddy" } });
         fireEvent.change(screen.getByLabelText("Birth date"), { target: { value: "2026-07-10" } });
         fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
 
         await waitFor(() => expect(screen.getByText("Add your first schedule items")).toBeInTheDocument());
         const saved = await data.loadPetProfile();
-        expect(saved).toMatchObject({ name: "Whitney", birthDate: "2026-07-10" });
+        expect(saved).toMatchObject({ name: "Buddy", birthDate: "2026-07-10" });
         expect(screen.getByText(/9 weeks old/)).toBeInTheDocument();
     });
 
@@ -369,7 +369,7 @@ describe("PetPage", () => {
         await seedNapFlowData(data);
         render(wrap(data));
 
-        await waitFor(() => expect(screen.getByText(/Whitney's napping/)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/Buddy's napping/)).toBeInTheDocument());
         expect(screen.getByText(/next potty ~3:20 PM/)).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /Napping — 60m/ })).toBeInTheDocument();
 
@@ -526,7 +526,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("What your pet is learning right now.")).toBeInTheDocument());
 
         fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
         fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
@@ -614,7 +614,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("What your pet is learning right now.")).toBeInTheDocument());
 
         const sitCard = screen.getByRole("progressbar", { name: "Sit training progress" }).closest("li") as HTMLElement;
         expect(within(sitCard).getByText("2 sessions")).toBeInTheDocument();
@@ -638,7 +638,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("What your pet is learning right now.")).toBeInTheDocument());
 
         const sitCard = screen.getByRole("progressbar", { name: "Sit training progress" }).closest("li") as HTMLElement;
         expect(within(sitCard).getByText("1 week in training")).toBeInTheDocument();
@@ -653,7 +653,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("What your pet is learning right now.")).toBeInTheDocument());
 
         fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
         fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
@@ -686,7 +686,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("What your pet is learning right now.")).toBeInTheDocument());
 
         fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
         fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
@@ -720,7 +720,7 @@ describe("PetPage", () => {
         render(wrap(data));
 
         fireEvent.click(screen.getByRole("tab", { name: "Training" }));
-        await waitFor(() => expect(screen.getByText("What Whitney is learning right now.")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("What your pet is learning right now.")).toBeInTheDocument());
 
         fireEvent.change(screen.getByLabelText("Skill"), { target: { value: "Sit" } });
         fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "lure" } });

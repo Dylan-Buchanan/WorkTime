@@ -260,7 +260,7 @@ describe("InMemoryDataAccess", () => {
 
         const profile: PetProfile = {
             id: "p1",
-            name: "Whitney",
+            name: "Buddy",
             birthDate: "2026-07-10",
             createdAt: "2026-01-01T10:00:00.000Z",
             updatedAt: "2026-01-01T10:00:00.000Z",
@@ -298,7 +298,7 @@ describe("InMemoryDataAccess", () => {
 
         const loadedProfile = await data.loadPetProfile();
         loadedProfile!.name = "Mutated";
-        expect((await data.loadPetProfile())!.name).toBe("Whitney");
+        expect((await data.loadPetProfile())!.name).toBe("Buddy");
 
         const loadedItems = await data.loadPetScheduleItems();
         loadedItems[0].label = "Mutated";

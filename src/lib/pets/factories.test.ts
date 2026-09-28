@@ -14,17 +14,17 @@ const now = new Date(2026, 8, 17, 12, 0, 0, 0);
 
 describe("pet factories", () => {
     it("creates a profile with a derived-only birth date and trimmed name", () => {
-        const profile = createPetProfile({ name: "  Whitney  ", birthDate: new Date(2026, 0, 10, 9, 0) }, now, "p1");
+        const profile = createPetProfile({ name: "  Buddy  ", birthDate: new Date(2026, 0, 10, 9, 0) }, now, "p1");
         expect(profile.id).toBe("p1");
-        expect(profile.name).toBe("Whitney");
+        expect(profile.name).toBe("Buddy");
         expect(profile.birthDate).toBe("2026-01-10");
         expect(profile.createdAt).toBe(now.toISOString());
     });
 
     it("preserves date-only birth strings and rejects rollover dates", () => {
-        expect(createPetProfile({ name: "Whitney", birthDate: "2026-01-10" }, now, "p1").birthDate).toBe("2026-01-10");
-        expect(() => createPetProfile({ name: "Whitney", birthDate: "2026-02-30" }, now, "p2")).toThrow(RangeError);
-        expect(() => createPetProfile({ name: "Whitney", birthDate: "2026-01-10T00:00:00Z" }, now, "p3")).toThrow(RangeError);
+        expect(createPetProfile({ name: "Buddy", birthDate: "2026-01-10" }, now, "p1").birthDate).toBe("2026-01-10");
+        expect(() => createPetProfile({ name: "Buddy", birthDate: "2026-02-30" }, now, "p2")).toThrow(RangeError);
+        expect(() => createPetProfile({ name: "Buddy", birthDate: "2026-01-10T00:00:00Z" }, now, "p3")).toThrow(RangeError);
     });
 
     it("rejects a nameless profile", () => {
