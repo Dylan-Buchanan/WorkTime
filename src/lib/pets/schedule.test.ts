@@ -60,6 +60,126 @@ function nap(id: string, start: Date, end: Date | null): PetNapRecord {
 }
 
 describe("buildPetSchedule interval anchoring", () => {
+    it("starts a configured day with fresh fixed and interval occurrences", () => {
+        const now = new Date(2026, 8, 18, 6, 30);
+        const fixed = fixedItem("morning", "feeding", "06:00", "fixed");
+        const interval = intervalItem({ recurrence: { mode: "interval", minMinutes: 60, maxMinutes: 90 } });
+        const yesterday = new Date(2026, 8, 17, 23, 30);
+        const schedule = buildPetSchedule({
+            now,
+            startOfDay: "06:00",
+            endOfDay: "22:00",
+            scheduleItems: [fixed, interval],
+            activityRecords: [activity("yesterday", yesterday)],
+            naps: [],
+        });
+
+        expect(schedule.dayStart).toEqual(new Date(2026, 8, 18, 6, 0));
+        expect(schedule.dayEnd).toEqual(new Date(2026, 8, 18, 22, 0));
+        expect(schedule.entries.find((entry) => entry.itemId === "morning")).toMatchObject({
+            fulfilled: false,
+            overdueMinutes: 30,
+        });
+        expect(schedule.entries.find((entry) => entry.itemId === "potty")?.start).toEqual(new Date(2026, 8, 18, 7, 0));
+
+        const withCurrentActivity = buildPetSchedule({
+            now,
+            startOfDay: "06:00",
+            endOfDay: "22:00",
+            scheduleItems: [fixed, interval],
+            activityRecords: [
+                activity("yesterday", yesterday),
+                activity("today-feeding", new Date(2026, 8, 18, 6, 10), "feeding"),
+                activity("today-potty", new Date(2026, 8, 18, 6, 10)),
+            ],
+            naps: [],
+        });
+        expect(withCurrentActivity.entries.find((entry) => entry.itemId === "morning")?.fulfilled).toBe(true);
+        expect(withCurrentActivity.entries.find((entry) => entry.itemId === "potty")?.start).toEqual(new Date(2026, 8, 18, 7, 10));
+    });
+
+    it("places overnight fixed occurrences on the calendar day inside the configured window", () => {
+        const now = new Date(2026, 8, 18, 6, 30);
+        const morning = fixedItem("morning", "feeding", "06:00", "fixed");
+        const outside = fixedItem("midday", "feeding", "12:00", "fixed");
+        const schedule = buildPetSchedule({
+            now,
+            startOfDay: "20:00",
+            endOfDay: "08:00",
+            scheduleItems: [morning, outside],
+            activityRecords: [],
+            naps: [],
+        });
+
+        expect(schedule.dayStart).toEqual(new Date(2026, 8, 17, 20, 0));
+        expect(schedule.dayEnd).toEqual(new Date(2026, 8, 18, 8, 0));
+        expect(schedule.entries.map((entry) => entry.itemId)).toEqual(["morning"]);
+        expect(schedule.entries[0].start).toEqual(new Date(2026, 8, 18, 6, 0));
+    });
+
+    it("ends the configured schedule window until the next start boundary", () => {
+        const schedule = buildPetSchedule({
+            now: new Date(2026, 8, 17, 22, 1),
+            startOfDay: "06:00",
+            endOfDay: "22:00",
+            scheduleItems: [fixedItem("dinner", "feeding", "18:00", "fixed")],
+            activityRecords: [],
+            naps: [],
+        });
+        expect(schedule.dayStart).toEqual(new Date(2026, 8, 17, 6, 0));
+        expect(schedule.dayEnd).toEqual(new Date(2026, 8, 17, 22, 0));
+        expect(schedule.entries).toEqual([]);
+    });
+
+    it("closes the default day at 22:00 and starts fresh at the next midnight", () => {
+        const dinner = fixedItem("dinner", "feeding", "21:00", "fixed");
+        const late = fixedItem("late", "feeding", "23:00", "fixed");
+        const input = { scheduleItems: [dinner, late], activityRecords: [], naps: [] };
+        const before = buildPetSchedule({ ...input, now: at(21, 59) });
+        expect(before.entries.map((entry) => entry.itemId)).toEqual(["dinner"]);
+        expect(before.entries[0].overdueMinutes).toBe(59);
+        expect(buildPetSchedule({ ...input, now: at(22) }).entries).toEqual([]);
+        const next = buildPetSchedule({ ...input, now: new Date(2026, 8, 18, 0, 0) });
+        expect(next.dayStart).toEqual(new Date(2026, 8, 18, 0, 0));
+        expect(next.entries.map((entry) => entry.itemId)).toEqual(["dinner"]);
+        expect(next.entries[0].overdueMinutes).toBe(0);
+    });
+
+    it("skips a gap-due interval and ignores its prior-day record at the next start", () => {
+        const potty = intervalItem({ recurrence: { mode: "interval", minMinutes: 240, maxMinutes: 270 } });
+        const previous = activity("evening", at(19));
+        const input = { startOfDay: "06:00", endOfDay: "22:00", scheduleItems: [potty], activityRecords: [previous], naps: [] };
+        expect(buildPetSchedule({ ...input, now: at(21) }).entries).toEqual([]);
+        const next = buildPetSchedule({ ...input, now: new Date(2026, 8, 18, 6, 0) });
+        expect(next.entries[0].start).toEqual(new Date(2026, 8, 18, 10, 0));
+        expect(next.entries[0].fulfilled).toBe(false);
+    });
+
+    it("keeps a future creation timestamp as the first interval anchor", () => {
+        const item = intervalItem({ createdAt: at(18).toISOString() });
+        const schedule = buildPetSchedule({ now: at(15), scheduleItems: [item], activityRecords: [], naps: [] });
+        expect(schedule.entries[0].start).toEqual(at(19));
+        expect(schedule.entries[0].overdueMinutes).toBe(0);
+    });
+
+    it("keeps derived end minutes aligned with the clamped end", () => {
+        const fixed = fixedItem("late", "feeding", "21:30", "fixed", 60);
+        const interval = intervalItem({ recurrence: { mode: "interval", minMinutes: 30, maxMinutes: 90 }, createdAt: at(21).toISOString() });
+        const schedule = buildPetSchedule({ now: at(21, 45), scheduleItems: [fixed, interval], activityRecords: [], naps: [] });
+        expect(schedule.entries).toHaveLength(2);
+        for (const entry of schedule.entries) {
+            expect(entry.end).toEqual(at(22));
+            expect(entry.endMinutes).toBe(22 * 60);
+        }
+    });
+
+    it("treats equal boundaries as a full 24-hour day", () => {
+        const schedule = buildPetSchedule({ now: at(23), startOfDay: "22:00", endOfDay: "22:00",
+            scheduleItems: [fixedItem("morning", "feeding", "06:00", "fixed")], activityRecords: [], naps: [] });
+        expect(schedule.dayEnd).toEqual(new Date(2026, 8, 18, 22));
+        expect(schedule.entries[0].start).toEqual(new Date(2026, 8, 18, 6));
+    });
+
     it("starts a new interval at item creation instead of local midnight", () => {
         const item = intervalItem({ createdAt: at(15, 0).toISOString() });
         const schedule = buildPetSchedule({

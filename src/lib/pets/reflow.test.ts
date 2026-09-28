@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PetActivityRecord, PetActivityType, PetNapRecord, PetScheduleItem } from "../../state/types";
 import { applyNapReflow, proposeNapReflow } from "./reflow";
+import { buildPetSchedule } from "./schedule";
 
 const createdAt = new Date(2026, 8, 17, 0, 0, 0, 0).toISOString();
 
@@ -73,6 +74,33 @@ describe("proposeNapReflow", () => {
             }),
         ).toThrow(RangeError);
     });
+
+    it("does not offer a fixed-time shift past the configured end", () => {
+        const eveningNap = nap("evening", at(21, 10), at(21, 50));
+        const proposal = proposeNapReflow({ nap: eveningNap, now: at(21, 50),
+            scheduleItems: [item("walk", "playtime", "flexible", { mode: "fixed-time", time: "21:30", startMinutes: 1290, endMinutes: 1290 })],
+            activityRecords: [], naps: [eveningNap] });
+        expect(proposal.changes).toEqual([]);
+    });
+
+    it("uses the same fallback window as the schedule for invalid times", () => {
+        const walk = item("walk", "playtime", "flexible", { mode: "fixed-time", time: "05:00", startMinutes: 300, endMinutes: 300 });
+        const earlyNap = nap("early", at(4), at(4, 40));
+        const schedule = buildPetSchedule({ now: at(4, 45), startOfDay: "6:00", endOfDay: "bad",
+            scheduleItems: [walk], activityRecords: [], naps: [] });
+        const proposal = proposeNapReflow({ nap: earlyNap, now: at(4, 45), startOfDay: "6:00", endOfDay: "bad",
+            scheduleItems: [walk], activityRecords: [], naps: [earlyNap] });
+        expect(schedule.entries[0].start).toEqual(at(5));
+        expect(proposal.changes[0].from).toEqual(at(5));
+    });
+
+    it("returns no changes after the configured day has ended", () => {
+        const lateNap = nap("late", at(21, 30), at(22, 45));
+        const proposal = proposeNapReflow({ nap: lateNap, now: at(22, 45),
+            scheduleItems: [item("walk", "playtime", "flexible", { mode: "fixed-time", time: "21:45", startMinutes: 1305, endMinutes: 1305 })],
+            activityRecords: [], naps: [lateNap] });
+        expect(proposal.changes).toEqual([]);
+    });
 });
 
 describe("applyNapReflow", () => {
@@ -82,10 +110,11 @@ describe("applyNapReflow", () => {
         item("feeding", "feeding", "fixed", { mode: "fixed-time", time: "17:00", startMinutes: 1020, endMinutes: 1020 }),
     ];
 
-    const proposalFor = (items: PetScheduleItem[]): ReturnType<typeof proposeNapReflow> =>
+    const proposalFor = (items: PetScheduleItem[], endOfDay?: string): ReturnType<typeof proposeNapReflow> =>
         proposeNapReflow({
             nap: endedNap,
             now: at(14, 45),
+            endOfDay,
             scheduleItems: items,
             activityRecords: [activity("p1", at(13, 20))],
             naps: [endedNap],
@@ -113,9 +142,12 @@ describe("applyNapReflow", () => {
         expect(next.find((entry) => entry.id === "potty")).toEqual(items[0]);
     });
 
-    it("wraps a shift that crosses midnight within the same day", () => {
+    it("wraps a shift that crosses midnight within an overnight schedule day", () => {
         const items = [item("walk", "playtime", "flexible", { mode: "fixed-time", time: "23:40", startMinutes: 1420, endMinutes: 1450 })];
-        const next = applyNapReflow(items, proposalFor(items), at(14, 46));
+        const overnightNap = nap("overnight", at(22, 0), at(22, 40));
+        const proposal = proposeNapReflow({ nap: overnightNap, now: at(22, 45), startOfDay: "20:00", endOfDay: "08:00",
+            scheduleItems: items, activityRecords: [], naps: [overnightNap] });
+        const next = applyNapReflow(items, proposal, at(22, 46));
         expect(next[0].recurrence).toEqual({ mode: "fixed-time", time: "00:20", startMinutes: 20, endMinutes: 50 });
     });
 

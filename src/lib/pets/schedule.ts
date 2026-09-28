@@ -14,6 +14,7 @@ import type {
     PetShiftIndicator,
     PetShiftReason,
 } from "./types";
+import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY, isTimeOfDay } from "../settings";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -22,19 +23,36 @@ function assertValidDate(date: Date, label: string): Date {
     return date;
 }
 
-function startOfLocalDay(date: Date): Date {
-    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+export function parsePetScheduleTime(value: string | undefined, fallback: string): number {
+    const time = isTimeOfDay(value) ? value : fallback;
+    const [hours, minutes] = time.split(":").map(Number);
+    return hours * 60 + minutes;
 }
 
-function nextLocalDay(dayStart: Date): Date {
-    return new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1, 0, 0, 0, 0);
+/** Resolve the latest configured start boundary at or before `now`. */
+export function resolvePetScheduleDay(now: Date, startOfDay = DEFAULT_START_OF_DAY, endOfDay = DEFAULT_END_OF_DAY): { dayStart: Date; dayEnd: Date } {
+    const startMinute = parsePetScheduleTime(startOfDay, DEFAULT_START_OF_DAY);
+    const endMinute = parsePetScheduleTime(endOfDay, DEFAULT_END_OF_DAY);
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), Math.floor(startMinute / 60), startMinute % 60);
+    const dayStart = now.getTime() >= todayStart.getTime()
+        ? todayStart
+        : new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, Math.floor(startMinute / 60), startMinute % 60);
+    // Equal boundaries intentionally represent a full 24-hour schedule day.
+    const overnight = endMinute <= startMinute;
+    const endDate = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + (overnight ? 1 : 0), Math.floor(endMinute / 60), endMinute % 60);
+    return { dayStart, dayEnd: endDate };
 }
 
-/** Local wall-clock date for minutes-from-midnight; values past 1440 roll over. */
-function dayMinute(dayStart: Date, minute: number): Date {
-    const hours = Math.floor(minute / 60);
-    const mins = minute % 60;
-    return new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate(), hours, mins, 0, 0);
+export function resolveFixedTimeInScheduleDay(dayStart: Date, startMinute: number, dayEnd: Date, configuredStartMinute: number, configuredEndMinute: number): Date | null {
+    const overnight = configuredEndMinute <= configuredStartMinute;
+    let dateOffset = 0;
+    if (startMinute < configuredStartMinute) {
+        if (!overnight || (configuredEndMinute !== configuredStartMinute && startMinute >= configuredEndMinute)) return null;
+        dateOffset = 1;
+    }
+    const date = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + dateOffset,
+        Math.floor(startMinute / 60), startMinute % 60);
+    return date >= dayStart && date < dayEnd ? date : null;
 }
 
 function minutesOfDay(date: Date): number {
@@ -98,13 +116,14 @@ function latestRecordAtOrBefore(
     records: readonly PetActivityRecord[],
     activityType: PetActivityType,
     nowMs: number,
+    fromMs = Number.NEGATIVE_INFINITY,
 ): PetActivityRecord | null {
     let latest: PetActivityRecord | null = null;
     let latestMs = Number.NEGATIVE_INFINITY;
     for (const record of records) {
         if (record.activityType !== activityType) continue;
         const time = new Date(record.timestamp).getTime();
-        if (Number.isNaN(time) || time > nowMs) continue;
+        if (Number.isNaN(time) || time > nowMs || time < fromMs) continue;
         if (time > latestMs) {
             latest = record;
             latestMs = time;
@@ -188,9 +207,9 @@ export interface ResolvedIntervalWindow {
 
 /**
  * Resolves the next interval occurrence for an item. The anchor is the latest
- * matching activity record at or before `now` (falling back to the schedule
- * item's creation time when no matching record exists). Nap time after the
- * anchor pauses the interval so overdue never accrues while the pet is asleep,
+ * matching activity record in the current schedule day (falling back to the
+ * item's creation time when it belongs to that day, otherwise the day start).
+ * Nap time after the anchor pauses the interval so overdue never accrues while the pet is asleep,
  * and a nap that ran through the due moment pulls the next occurrence forward
  * to the wake time.
  */
@@ -206,12 +225,14 @@ export function resolveIntervalWindow(
     }
     const nowMs = now.getTime();
     const itemCreatedMs = new Date(item.createdAt).getTime();
-    const firstAnchorMs = Number.isNaN(itemCreatedMs) ? dayStart.getTime() : itemCreatedMs;
-    const anchorRecord = latestRecordAtOrBefore(records, item.activityType, nowMs);
+    const firstAnchorMs = Number.isNaN(itemCreatedMs) || itemCreatedMs < dayStart.getTime()
+        ? dayStart.getTime()
+        : itemCreatedMs;
+    const anchorRecord = latestRecordAtOrBefore(records, item.activityType, nowMs, dayStart.getTime());
     const anchorMs = anchorRecord ? new Date(anchorRecord.timestamp).getTime() : firstAnchorMs;
     const baseStartMs = anchorMs + item.recurrence.minMinutes * MS_PER_MINUTE;
     const baseEndMs = anchorMs + item.recurrence.maxMinutes * MS_PER_MINUTE;
-    const pause = summarizePause(naps, anchorMs, nowMs);
+    const pause = summarizePause(naps, Math.max(anchorMs, dayStart.getTime()), nowMs);
     const pauseMs = pause.totalMs;
     const pausedStartMs = baseStartMs + pauseMs;
     const pausedEndMs = baseEndMs + pauseMs;
@@ -307,9 +328,19 @@ function buildEntry(
     item: PetScheduleItem,
     input: BuildPetScheduleInput,
     dayStart: Date,
+    dayEnd: Date,
     now: Date,
-): PetScheduleEntry {
+): PetScheduleEntry | null {
     if (item.recurrence.mode === "fixed-time") {
+        const configuredStartMinute = parsePetScheduleTime(input.startOfDay, DEFAULT_START_OF_DAY);
+        const configuredEndMinute = parsePetScheduleTime(input.endOfDay, DEFAULT_END_OF_DAY);
+        const start = resolveFixedTimeInScheduleDay(dayStart, item.recurrence.startMinutes, dayEnd, configuredStartMinute, configuredEndMinute);
+        if (!start) return null;
+        const rawEnd = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate(),
+            Math.floor(item.recurrence.endMinutes / 60), item.recurrence.endMinutes % 60);
+        const end = rawEnd < start
+            ? new Date(rawEnd.getFullYear(), rawEnd.getMonth(), rawEnd.getDate() + 1, rawEnd.getHours(), rawEnd.getMinutes())
+            : rawEnd;
         return {
             itemId: item.id,
             activityType: item.activityType,
@@ -317,11 +348,11 @@ function buildEntry(
             mode: "fixed-time",
             flexibility: item.flexibility,
             priority: item.priority,
-            start: dayMinute(dayStart, item.recurrence.startMinutes),
-            end: dayMinute(dayStart, item.recurrence.endMinutes),
+            start,
+            end: end > dayEnd ? dayEnd : end,
             startMinutes: item.recurrence.startMinutes,
-            endMinutes: item.recurrence.endMinutes,
-            windowEnd: dayMinute(dayStart, item.recurrence.endMinutes),
+            endMinutes: minutesOfDay(end > dayEnd ? dayEnd : end),
+            windowEnd: end > dayEnd ? dayEnd : end,
             fulfilled: false,
             fulfilledAt: null,
             overdueMinutes: 0,
@@ -332,6 +363,7 @@ function buildEntry(
     }
 
     const resolved = resolveIntervalWindow(item, input.activityRecords, input.naps, now, dayStart);
+    if (resolved.start < dayStart || resolved.start >= dayEnd) return null;
     return {
         itemId: item.id,
         activityType: item.activityType,
@@ -340,10 +372,10 @@ function buildEntry(
         flexibility: item.flexibility,
         priority: item.priority,
         start: resolved.start,
-        end: resolved.end,
+        end: resolved.end > dayEnd ? dayEnd : resolved.end,
         startMinutes: minutesOfDay(resolved.start),
-        endMinutes: minutesOfDay(resolved.end),
-        windowEnd: resolved.end,
+        endMinutes: minutesOfDay(resolved.end > dayEnd ? dayEnd : resolved.end),
+        windowEnd: resolved.end > dayEnd ? dayEnd : resolved.end,
         fulfilled: false,
         fulfilledAt: null,
         overdueMinutes: 0,
@@ -370,20 +402,20 @@ function firstMatchingRecord(entry: PetScheduleEntry, records: readonly PetActiv
 }
 
 /**
- * Builds the local-day schedule for `now`. Fulfillment is decided by the agreed
+ * Builds the configured schedule day for `now`. Fulfillment is decided by the agreed
  * `[item start, next item start)` window; overdue is always recomputed from the
  * log and never stored.
  */
 export function buildPetSchedule(input: BuildPetScheduleInput): PetDaySchedule {
     const now = assertValidDate(input.now, "pet schedule now");
-    const dayStart = startOfLocalDay(now);
-    const dayEnd = nextLocalDay(dayStart);
+    const { dayStart, dayEnd } = resolvePetScheduleDay(now, input.startOfDay, input.endOfDay);
     const nowMs = now.getTime();
     const activeNap = latestInProgressNap(input.naps, nowMs);
 
-    const entries = input.scheduleItems
+    const entries = now.getTime() >= dayEnd.getTime() ? [] : input.scheduleItems
         .filter((item) => item.isActive)
-        .map((item) => buildEntry(item, input, dayStart, now))
+        .map((item) => buildEntry(item, input, dayStart, dayEnd, now))
+        .filter((entry): entry is PetScheduleEntry => entry !== null)
         .sort(compareEntries);
 
     let groupStart = 0;

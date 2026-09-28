@@ -6,6 +6,7 @@ import { PET_ACTIVITY_META } from "./petShared";
 
 interface PetScheduleDeckProps {
     schedule: PetDaySchedule;
+    excludedFixedCount: number;
     /** Done-today counts from the activity log; never stored. */
     doneCounts: PetActivityCounts;
     todayNaps: PetNapRecord[];
@@ -98,6 +99,7 @@ const ScheduleCard: React.FC<{ entry: PetScheduleEntry; now: Date; onCheck(entry
  */
 export const PetScheduleDeck: React.FC<PetScheduleDeckProps> = ({
     schedule,
+    excludedFixedCount,
     doneCounts,
     todayNaps,
     now,
@@ -127,6 +129,13 @@ export const PetScheduleDeck: React.FC<PetScheduleDeckProps> = ({
                     {expanded ? "Show upcoming only" : "Show full day"}
                 </button>
             </div>
+
+            <p className="px-1 text-[11px] text-neutral-500">
+                {now >= schedule.dayEnd
+                    ? `Schedule ended at ${formatClock(schedule.dayEnd)}. New occurrences begin at ${formatClock(schedule.dayStart)}.`
+                    : `Schedule window: ${formatClock(schedule.dayStart)}–${formatClock(schedule.dayEnd)}.`}
+                {excludedFixedCount > 0 && ` ${excludedFixedCount} fixed-time item${excludedFixedCount === 1 ? " is" : "s are"} outside this window.`}
+            </p>
 
             {doneSummary && (
                 <p className="rounded-xl border border-neutral-800/60 bg-neutral-900/20 px-3 py-2 text-[11px] text-neutral-400">

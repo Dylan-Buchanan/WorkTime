@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
 import type { PetActivityRecord, PetScheduleItem } from "./types";
-import { resetNotifyForTesting } from "./AppStateContext";
+import { AppStateProvider, resetNotifyForTesting } from "./AppStateContext";
 import { DataProvider } from "./DataContext";
 import { PetActivityProvider, usePetActivity } from "./PetActivityContext";
 import { PetReminderProvider } from "./PetReminderContext";
@@ -71,11 +71,13 @@ function wrap(data: InMemoryDataAccess) {
         <TauriCloseProvider>
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId={OWNER}>
+                    <AppStateProvider>
                     <ToastProvider>
                         <PetProvider><PetActivityProvider>
                             <PetReminderProvider><Probe /></PetReminderProvider>
                         </PetActivityProvider></PetProvider>
                     </ToastProvider>
+                    </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
         </TauriCloseProvider>
@@ -125,6 +127,29 @@ describe("PetReminderProvider", () => {
         expect(notifications).toHaveLength(1);
     });
 
+    it("reminds a new occurrence at the configured boundary and does not catch up after reopening", async () => {
+        const boundary = new Date(2026, 8, 17, 21, 59, 0, 0);
+        vi.setSystemTime(boundary);
+        const data = new InMemoryDataAccess(makeAppState());
+        const appState = makeAppState();
+        await data.updateSettings({ ...appState.settings, start_of_day: "22:00", end_of_day: "08:00" });
+        await data.savePetScheduleItems([fixedItem("night-care", "Night care", new Date(2026, 8, 17, 22, 0))]);
+
+        const view = render(wrap(data));
+        await waitFor(() => expect(screen.getByText("ready:true:0")).toBeInTheDocument());
+        await advance(60_000);
+        await waitFor(() => expect(notifications).toHaveLength(1));
+        expect(notifications[0].title).toBe("Pet care: Night care");
+        await waitFor(async () => expect(await data.loadPetReminderMarks()).toHaveLength(1));
+
+        view.unmount();
+        vi.setSystemTime(new Date(2026, 8, 17, 22, 5));
+        render(wrap(data));
+        await waitFor(() => expect(screen.getByText("ready:true:0")).toBeInTheDocument());
+        await advance(1_000);
+        expect(notifications).toHaveLength(1);
+    });
+
     it("re-arms an interval reminder after a new activity record changes its anchor", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePetScheduleItems([intervalItem()]);
@@ -142,6 +167,30 @@ describe("PetReminderProvider", () => {
         await advance(60_000);
         await waitFor(() => expect(notifications).toHaveLength(2));
         expect((await data.loadPetReminderMarks()).map((mark) => mark.id)).toHaveLength(2);
+    });
+
+    it("continues reminders using defaults when app state cannot hydrate", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        vi.spyOn(data, "fetchState").mockRejectedValueOnce(new Error("app state unavailable"));
+        await data.savePetScheduleItems([fixedItem("dinner", "Dinner", new Date(START.getTime() + 60_000))]);
+        render(wrap(data));
+        await waitFor(() => expect(screen.getByText("ready:true:0")).toBeInTheDocument());
+        await advance(60_000);
+        await waitFor(() => expect(notifications).toHaveLength(1));
+    });
+
+    it("does not notify again when settings move an already-due interval", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.updateSettings({ ...makeAppState().settings, start_of_day: "15:00" });
+        await data.savePetScheduleItems([intervalItem()]);
+        render(wrap(data));
+        await waitFor(() => expect(screen.getByText("ready:true:0")).toBeInTheDocument());
+        await advance(60_000);
+        await waitFor(() => expect(notifications).toHaveLength(1));
+        await advance(60_000);
+        await data.updateSettings({ ...makeAppState().settings, start_of_day: "15:01" });
+        await advance(1_000);
+        expect(notifications).toHaveLength(1);
     });
 
     it("shows one shared warning toast when an item crosses overdue", async () => {

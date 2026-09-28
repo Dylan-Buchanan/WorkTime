@@ -15,6 +15,7 @@ import {
 import type { NewPetScheduleItemInput, PetNapReflowProposal, PetScheduleEntry } from "../../lib/pets";
 import type { PetNapRecord, PetProfile } from "../../state/types";
 import { usePetActivity } from "../../state/PetActivityContext";
+import { useAppState } from "../../state/AppStateContext";
 import { usePets } from "../../state/PetContext";
 import { PetHeroStatus } from "./PetHeroStatus";
 import { PetNapToggle } from "./PetNapToggle";
@@ -37,6 +38,7 @@ import { PetTrainingTagDialog } from "./PetTrainingTagDialog";
  */
 export const PetTodayTab: React.FC = () => {
     const pets = usePets();
+    const app = useAppState();
     const activity = usePetActivity();
     const profile = pets.state.profile;
     const scheduleItems = Object.values(pets.state.scheduleItems);
@@ -46,6 +48,7 @@ export const PetTodayTab: React.FC = () => {
     const [now, setNow] = useState(() => pets.now());
     const [deckExpanded, setDeckExpanded] = useState(false);
     const [reflowProposal, setReflowProposal] = useState<PetNapReflowProposal | null>(null);
+    const [reflowMessage, setReflowMessage] = useState<string | null>(null);
     const [trainingTagPrompt, setTrainingTagPrompt] = useState<{ recordId: string; skillIds: string[] } | null>(null);
 
     useEffect(() => {
@@ -59,14 +62,25 @@ export const PetTodayTab: React.FC = () => {
         : null;
 
     const schedule = useMemo(
-        () => buildPetSchedule({ now, scheduleItems, activityRecords, naps }),
-        [now, scheduleItems, activityRecords, naps],
+        () => buildPetSchedule({
+            now,
+            scheduleItems,
+            activityRecords,
+            naps,
+            startOfDay: app.state?.settings.start_of_day,
+            endOfDay: app.state?.settings.end_of_day,
+        }),
+        [now, scheduleItems, activityRecords, naps, app.state?.settings.start_of_day, app.state?.settings.end_of_day],
     );
 
     const overdueEntries = useMemo(
         () => schedule.entries.filter((entry) => !entry.fulfilled && entry.overdueMinutes > 0),
         [schedule.entries],
     );
+    const excludedFixedCount = now < schedule.dayEnd
+        ? scheduleItems.filter((item) => item.isActive && item.recurrence.mode === "fixed-time"
+            && !schedule.entries.some((entry) => entry.itemId === item.id)).length
+        : 0;
 
     const todayNaps = useMemo(
         () => naps.filter((nap) => nap.end !== null && isSameLocalDay(new Date(nap.end), now)),
@@ -131,6 +145,7 @@ export const PetTodayTab: React.FC = () => {
 
     const startNap = (): void => {
         if (schedule.activeNap) return;
+        setReflowMessage(null);
         const nap = createPetNapRecord({ start: now }, now, pets.uuid());
         const next = [...naps, nap];
         pets.setNaps(next);
@@ -148,7 +163,12 @@ export const PetTodayTab: React.FC = () => {
             scheduleItems,
             activityRecords,
             naps: next,
+            startOfDay: app.state?.settings.start_of_day,
+            endOfDay: app.state?.settings.end_of_day,
         });
+        setReflowMessage(proposal.changes.length === 0 && now >= schedule.dayEnd
+            ? "The schedule day has ended. There are no remaining items to shift."
+            : null);
         if (proposal.changes.length > 0) setReflowProposal(proposal);
     };
 
@@ -163,7 +183,7 @@ export const PetTodayTab: React.FC = () => {
         setReflowProposal(null);
     };
 
-    if (!pets.hydrated || !activity.hydrated) {
+    if (!pets.hydrated || !activity.hydrated || (!app.state && !app.error)) {
         return (
             <div className="flex h-full items-center justify-center text-xs text-neutral-500" role="status">
                 Loading…
@@ -208,8 +228,10 @@ export const PetTodayTab: React.FC = () => {
                                 onStart={startNap}
                                 onEnd={endNap}
                             />
+                            {reflowMessage && now >= schedule.dayEnd && <p role="status" className="text-xs text-neutral-400">{reflowMessage}</p>}
                             <PetScheduleDeck
                                 schedule={schedule}
+                                excludedFixedCount={excludedFixedCount}
                                 doneCounts={doneCounts}
                                 todayNaps={todayNaps}
                                 now={now}

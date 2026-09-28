@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { buildPetSchedule } from "../lib/pets";
 import type { PetScheduleEntry } from "../lib/pets";
 import type { PetReminderMark } from "./types";
-import { notifyNow } from "./AppStateContext";
+import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY } from "../lib/settings";
+import { notifyNow, useAppState } from "./AppStateContext";
 import { useData } from "./DataContext";
 import { usePetActivity } from "./PetActivityContext";
 import { usePets } from "./PetContext";
@@ -28,6 +29,9 @@ export function petOccurrenceId(entry: Pick<PetScheduleEntry, "itemId" | "start"
  */
 export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const data = useData();
+    const app = useAppState();
+    const settingsKey = `${app.state?.settings.start_of_day ?? DEFAULT_START_OF_DAY}:${app.state?.settings.end_of_day ?? DEFAULT_END_OF_DAY}`;
+    const previousSettingsKeyRef = useRef<string | null>(null);
     const pets = usePets();
     const { revision } = useSync();
     const { state: activityState, hydrated: activityHydrated } = usePetActivity();
@@ -67,7 +71,9 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
         scheduleItems: Object.values(pets.state.scheduleItems),
         activityRecords: Object.values(activityState.records),
         naps: Object.values(pets.state.naps),
-    }), [activityState.records, now, pets.state.naps, pets.state.scheduleItems]);
+        startOfDay: app.state?.settings.start_of_day,
+        endOfDay: app.state?.settings.end_of_day,
+    }), [activityState.records, app.state?.settings.start_of_day, app.state?.settings.end_of_day, now, pets.state.naps, pets.state.scheduleItems]);
 
     useEffect(() => {
         if (!hydrated || !pets.hydrated || !activityHydrated) return;
@@ -80,6 +86,12 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
         );
         const dueIds = new Set(dueEntries.map(petOccurrenceId));
         const overdueIds = new Set(overdueEntries.map(petOccurrenceId));
+        if (previousSettingsKeyRef.current !== settingsKey) {
+            previousSettingsKeyRef.current = settingsKey;
+            previousDueRef.current = dueIds;
+            previousOverdueRef.current = overdueIds;
+            return;
+        }
 
         if (previousDueRef.current === null || previousOverdueRef.current === null) {
             previousDueRef.current = dueIds;
@@ -123,7 +135,7 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 console.warn("[PetReminder] failed to persist reminder marks", error);
             });
         });
-    }, [activityHydrated, data, hydrated, now, pets.hydrated, schedule.entries, showToast, snapshot.marks]);
+    }, [activityHydrated, data, hydrated, now, pets.hydrated, schedule.entries, settingsKey, showToast, snapshot.marks]);
 
     return <>{children}</>;
 };

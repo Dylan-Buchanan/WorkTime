@@ -1,6 +1,7 @@
 import type { PetScheduleItem } from "../../state/types";
 import { formatMinuteOfDay } from "./format";
-import { formatShiftIndicator, resolveIntervalWindow } from "./schedule";
+import { formatShiftIndicator, parsePetScheduleTime, resolveFixedTimeInScheduleDay, resolveIntervalWindow, resolvePetScheduleDay } from "./schedule";
+import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY } from "../settings";
 import type {
     PetNapReflowProposal,
     PetReflowChange,
@@ -10,17 +11,6 @@ import type {
 
 const MS_PER_MINUTE = 60_000;
 const MINUTES_PER_DAY = 1440;
-
-function startOfLocalDay(date: Date): Date {
-    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-}
-
-function dayMinute(dayStart: Date, minute: number): Date {
-    const hours = Math.floor(minute / 60);
-    const mins = minute % 60;
-    return new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate(), hours, mins, 0, 0);
-}
-
 /**
  * Proposes how the rest of the day reflows around a nap that just ended.
  * Interval items follow their paused/pulled-forward occurrence; flexible
@@ -37,21 +27,26 @@ export function proposeNapReflow(input: ProposeNapReflowInput): PetNapReflowProp
     const napEndMs = new Date(input.nap.end).getTime();
     if (Number.isNaN(napStartMs) || Number.isNaN(napEndMs)) throw new RangeError("Invalid pet reflow nap");
     const napMinutes = Math.max(0, (napEndMs - napStartMs) / MS_PER_MINUTE);
-    const dayStart = startOfLocalDay(new Date(napEndMs));
+    const { dayStart, dayEnd } = resolvePetScheduleDay(new Date(napEndMs), input.startOfDay, input.endOfDay);
+    const configuredStartMinute = parsePetScheduleTime(input.startOfDay, DEFAULT_START_OF_DAY);
+    const configuredEndMinute = parsePetScheduleTime(input.endOfDay, DEFAULT_END_OF_DAY);
 
     const changes: PetReflowChange[] = [];
     for (const item of input.scheduleItems) {
         if (!item.isActive) continue;
         if (item.recurrence.mode === "fixed-time") {
             if (item.flexibility === "fixed") continue;
-            const start = dayMinute(dayStart, item.recurrence.startMinutes);
+            const start = resolveFixedTimeInScheduleDay(dayStart, item.recurrence.startMinutes, dayEnd, configuredStartMinute, configuredEndMinute);
+            if (!start) continue;
             if (start.getTime() < napStartMs) continue;
+            const shifted = new Date(start.getTime() + napMinutes * MS_PER_MINUTE);
+            if (shifted >= dayEnd) continue;
             changes.push({
                 itemId: item.id,
                 activityType: item.activityType,
                 label: item.label,
                 from: start,
-                to: new Date(start.getTime() + napMinutes * MS_PER_MINUTE),
+                to: shifted,
                 deltaMinutes: napMinutes,
                 reason: "nap",
             });
@@ -59,6 +54,7 @@ export function proposeNapReflow(input: ProposeNapReflowInput): PetNapReflowProp
         }
 
         const resolved = resolveIntervalWindow(item, input.activityRecords, input.naps, now, dayStart);
+        if (resolved.start < dayStart || resolved.start >= dayEnd) continue;
         if (resolved.shiftReason === null) continue;
         changes.push({
             itemId: item.id,

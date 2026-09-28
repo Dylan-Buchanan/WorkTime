@@ -7,6 +7,7 @@ import { TauriCloseProvider } from "../../state/TauriCloseContext";
 import { ToastProvider } from "../../state/ToastContext";
 import { PetActivityProvider } from "../../state/PetActivityContext";
 import { PetProvider } from "../../state/PetContext";
+import { AppStateProvider } from "../../state/AppStateContext";
 import { InMemoryDataAccess } from "../../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../../test/mockTauri";
 import type {
@@ -100,9 +101,11 @@ function wrap(data: InMemoryDataAccess) {
         <TauriCloseProvider>
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId={OWNER}>
+                    <AppStateProvider>
                     <ToastProvider>
                         <PetProvider><PetActivityProvider><PetPage /></PetActivityProvider></PetProvider>
                     </ToastProvider>
+                    </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
         </TauriCloseProvider>
@@ -131,6 +134,56 @@ afterEach(() => {
 });
 
 describe("PetPage", () => {
+    it("waits for configured hours before rendering the Today schedule", async () => {
+        vi.setSystemTime(at(23));
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.updateSettings({ ...makeAppState().settings, start_of_day: "20:00", end_of_day: "08:00" });
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([fixedItem("lunch", "feeding", "Lunch", "12:00")]);
+        const fetchState = data.fetchState.bind(data);
+        let release!: () => void;
+        const pending = new Promise<void>((resolve) => { release = resolve; });
+        vi.spyOn(data, "fetchState").mockImplementationOnce(async () => { await pending; return fetchState(); });
+        render(wrap(data));
+        expect(screen.queryByText("Today's schedule")).toBeNull();
+        release();
+        await waitFor(() => expect(screen.getByText("Today's schedule")).toBeInTheDocument());
+        expect(screen.getByText(/1 fixed-time item is outside this window/)).toBeInTheDocument();
+    });
+
+    it("renders and reflows within a configured overnight window", async () => {
+        vi.setSystemTime(at(23));
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.updateSettings({ ...makeAppState().settings, start_of_day: "20:00", end_of_day: "08:00" });
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([
+            fixedItem("walk", "playtime", "Night walk", "23:30", { flexibility: "flexible" }),
+            fixedItem("lunch", "feeding", "Lunch", "12:00"),
+        ]);
+        await data.savePetNapRecords([napRow("night", at(22), null)]);
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText("11:30 PM")).toBeInTheDocument());
+        expect(screen.getByText(/1 fixed-time item is outside this window/)).toBeInTheDocument();
+        expect(screen.queryByText("Lunch")).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: /Napping/ }));
+        expect(await screen.findByRole("dialog", { name: "Nap reflow suggestion" })).toHaveTextContent("12:30 AM");
+    });
+
+    it("explains a wake after the configured schedule day ends", async () => {
+        vi.setSystemTime(at(22, 45));
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([fixedItem("walk", "playtime", "Evening walk", "21:45", { flexibility: "flexible" })]);
+        await data.savePetNapRecords([napRow("late", at(21, 30), null)]);
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText(/Schedule ended at 10:00 PM/)).toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: /Napping/ }));
+        expect(await screen.findByText("The schedule day has ended. There are no remaining items to shift.")).toBeInTheDocument();
+        expect(screen.queryByRole("dialog", { name: "Nap reflow suggestion" })).toBeNull();
+    });
+
     it("runs the first-run onboarding from birth date to first schedule items", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data));

@@ -116,7 +116,7 @@ export interface PetShiftIndicator {
     description: string;
 }
 
-/** One resolved occurrence of a schedule item for the local day of `now`. */
+/** One resolved occurrence of a schedule item for the configured day of `now`. */
 export interface PetScheduleEntry {
     itemId: string;
     activityType: PetActivityType;
@@ -146,6 +146,10 @@ export interface PetScheduleEntry {
 
 export interface BuildPetScheduleInput {
     now: Date;
+    /** Configured local wall-clock start edge; defaults to midnight. */
+    startOfDay?: string;
+    /** Configured local wall-clock end edge; defaults to 22:00. */
+    endOfDay?: string;
     scheduleItems: readonly PetScheduleItem[];
     activityRecords: readonly PetActivityRecord[];
     naps: readonly PetNapRecord[];
@@ -192,6 +196,8 @@ export interface ProposeNapReflowInput {
     /** The nap that just ended. */
     nap: PetNapRecord;
     now: Date;
+    startOfDay?: string;
+    endOfDay?: string;
     scheduleItems: readonly PetScheduleItem[];
     activityRecords: readonly PetActivityRecord[];
     naps: readonly PetNapRecord[];

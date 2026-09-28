@@ -81,7 +81,7 @@ export const SettingsPanel: React.FC = () => {
                         onChange={(endOfDay) => setLocal((previous) => previous ? { ...previous, end_of_day: endOfDay } : previous)}
                     />
                     <p className="col-span-2 text-[10px] text-neutral-500">
-                        Start of day defaults to midnight. It is independent of End of day, so either time may come first.
+                        Pet schedule occurrences reset at Start of day and stop at End of day (10:00 PM by default). Items outside that window are hidden. Equal times make a 24-hour schedule.
                     </p>
                 </div>
             ) : (
