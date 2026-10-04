@@ -1,11 +1,12 @@
-import React from "react";
+import React, { useState } from "react";
 import { formatClock } from "../../lib/pets";
 import type { PetActivityCounts, PetDaySchedule, PetScheduleEntry } from "../../lib/pets";
-import type { PetActivityType, PetNapRecord } from "../../state/types";
+import type { PetActivityType, PetNapRecord, PetScheduleItem } from "../../state/types";
 import { PET_ACTIVITY_META } from "./petShared";
 
 interface PetScheduleDeckProps {
     schedule: PetDaySchedule;
+    scheduleItems: PetScheduleItem[];
     excludedFixedCount: number;
     /** Done-today counts from the activity log; never stored. */
     doneCounts: PetActivityCounts;
@@ -14,6 +15,7 @@ interface PetScheduleDeckProps {
     expanded: boolean;
     onToggleExpanded(): void;
     onCheck(entry: PetScheduleEntry): void;
+    onRemove(itemId: string): void;
 }
 
 function summarizeDone(counts: PetActivityCounts, todayNaps: readonly PetNapRecord[]): string | null {
@@ -47,16 +49,22 @@ const CHIP_TONES: Record<"done" | "due" | "overdue" | "paused" | "upcoming", str
     upcoming: "bg-neutral-800 text-neutral-300",
 };
 
-const ScheduleCard: React.FC<{ entry: PetScheduleEntry; now: Date; onCheck(entry: PetScheduleEntry): void }> = ({
+const ScheduleCard: React.FC<{
+    entry: PetScheduleEntry;
+    now: Date;
+    onCheck(entry: PetScheduleEntry): void;
+    onRemove(itemId: string): void;
+}> = ({
     entry,
     now,
     onCheck,
+    onRemove,
 }) => {
     const chip = statusChip(entry, now);
     const due = !entry.fulfilled && !entry.paused && entry.start.getTime() <= now.getTime();
     return (
         <article
-            className={`flex items-center gap-3 rounded-xl border p-3 ${
+            className={`flex flex-wrap items-center gap-3 rounded-xl border p-3 ${
                 chip.tone === "overdue"
                     ? "border-red-900/60 bg-red-950/20"
                     : entry.fulfilled
@@ -86,6 +94,15 @@ const ScheduleCard: React.FC<{ entry: PetScheduleEntry; now: Date; onCheck(entry
                     ✓ Log {entry.label.toLowerCase()}
                 </button>
             )}
+            <button
+                type="button"
+                onClick={() => onRemove(entry.itemId)}
+                aria-label={`Remove ${entry.label} from schedule`}
+                title="Remove this item and all its future occurrences. Care history is kept."
+                className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-neutral-400 hover:bg-red-950/40 hover:text-red-300"
+            >
+                Remove
+            </button>
         </article>
     );
 };
@@ -99,6 +116,7 @@ const ScheduleCard: React.FC<{ entry: PetScheduleEntry; now: Date; onCheck(entry
  */
 export const PetScheduleDeck: React.FC<PetScheduleDeckProps> = ({
     schedule,
+    scheduleItems,
     excludedFixedCount,
     doneCounts,
     todayNaps,
@@ -106,7 +124,9 @@ export const PetScheduleDeck: React.FC<PetScheduleDeckProps> = ({
     expanded,
     onToggleExpanded,
     onCheck,
+    onRemove,
 }) => {
+    const [managing, setManaging] = useState(false);
     const doneSummary = summarizeDone(doneCounts, todayNaps);
     const upcoming = schedule.entries.filter((entry) => !entry.fulfilled);
     const visible = expanded ? schedule.entries : upcoming;
@@ -128,7 +148,38 @@ export const PetScheduleDeck: React.FC<PetScheduleDeckProps> = ({
                 >
                     {expanded ? "Show upcoming only" : "Show full day"}
                 </button>
+                <button
+                    type="button"
+                    onClick={() => setManaging((value) => !value)}
+                    aria-expanded={managing}
+                    className="rounded bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                >
+                    Manage schedule items
+                </button>
             </div>
+
+            {managing && (
+                <section aria-label="Manage schedule items" className="rounded-xl border border-neutral-800 p-3">
+                    <p className="mb-2 text-[11px] text-neutral-400">
+                        Removing an item stops all its future occurrences. Care history is kept.
+                    </p>
+                    <ul className="flex flex-col gap-2">
+                        {scheduleItems.map((item) => (
+                            <li key={item.id} className="flex items-center justify-between gap-3 text-xs text-neutral-100">
+                                <span>{item.label}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => onRemove(item.id)}
+                                    aria-label={`Remove ${item.label} from schedule`}
+                                    className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-neutral-400 hover:bg-red-950/40 hover:text-red-300"
+                                >
+                                    Remove
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </section>
+            )}
 
             <p className="px-1 text-[11px] text-neutral-500">
                 {now >= schedule.dayEnd
@@ -152,7 +203,7 @@ export const PetScheduleDeck: React.FC<PetScheduleDeckProps> = ({
             {visible.length > 0 ? (
                 <div className="flex flex-col gap-2">
                     {visible.map((entry) => (
-                        <ScheduleCard key={`${entry.itemId}-${entry.start.getTime()}`} entry={entry} now={now} onCheck={onCheck} />
+                        <ScheduleCard key={`${entry.itemId}-${entry.start.getTime()}`} entry={entry} now={now} onCheck={onCheck} onRemove={onRemove} />
                     ))}
                 </div>
             ) : (

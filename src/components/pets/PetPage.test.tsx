@@ -221,6 +221,82 @@ describe("PetPage", () => {
         expect(items[0].recurrence).toMatchObject({ mode: "fixed-time", time: "18:00" });
     });
 
+    it.each([
+        fixedItem("remove", "feeding", "Evening meal", "18:00"),
+        intervalItem("remove", "feeding", "Evening meal", 60, 90),
+    ])("removes a $recurrence.mode item and keeps other items and care history after reload", async (item) => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const remaining = fixedItem("play", "playtime", "Evening play", "19:00");
+        const history = [activityRow("a1", "feeding", at(8)), activityRow("a2", "playtime", at(9))];
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([item, remaining]);
+        await data.savePetActivityRecords(history);
+        const saveHistory = vi.spyOn(data, "savePetActivityRecords");
+        const view = render(wrap(data));
+
+        const removeButtons = await screen.findAllByRole("button", { name: "Remove Evening meal from schedule" });
+        fireEvent.click(removeButtons[0]);
+        expect(screen.queryByText("Evening meal")).toBeNull();
+        expect(screen.getByText("Evening play")).toBeInTheDocument();
+        expect(screen.getByText("Done today: 1 playtime, 1 feeding")).toBeInTheDocument();
+        await waitFor(async () => expect(await data.loadPetScheduleItems()).toEqual([remaining]));
+        expect(await data.loadPetActivityRecords()).toEqual(history);
+        expect(saveHistory).not.toHaveBeenCalled();
+
+        view.unmount();
+        // Reload on the following day: removed items must not recur.
+        vi.setSystemTime(new Date(2026, 8, 18, 15));
+        render(wrap(data));
+        await screen.findByText("Today's schedule");
+        fireEvent.click(screen.getByRole("button", { name: "Show full day" }));
+        expect(screen.queryByText("Evening meal")).toBeNull();
+        expect(screen.getByText("Evening play")).toBeInTheDocument();
+        expect(await data.loadPetScheduleItems()).toEqual([remaining]);
+        expect(await data.loadPetActivityRecords()).toEqual(history);
+    });
+
+    it("removes the last completed item from the full day without deleting its history", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const history = [activityRow("a1", "feeding", at(8, 5))];
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([fixedItem("breakfast", "feeding", "Breakfast", "08:00", { windowMinutes: 30 })]);
+        await data.savePetActivityRecords(history);
+        const view = render(wrap(data));
+
+        await screen.findByText("Today's schedule");
+        fireEvent.click(screen.getByRole("button", { name: "Show full day" }));
+        expect(screen.getByText("done at 8:05 AM")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Remove Breakfast from schedule" }));
+        expect(screen.getByText("Add your first schedule items")).toBeInTheDocument();
+        await waitFor(async () => expect(await data.loadPetScheduleItems()).toEqual([]));
+        expect(await data.loadPetActivityRecords()).toEqual(history);
+
+        view.unmount();
+        render(wrap(data));
+        await screen.findByText("Add your first schedule items");
+        expect(screen.queryByText("Breakfast")).toBeNull();
+        expect(await data.loadPetActivityRecords()).toEqual(history);
+    });
+
+    it.each([at(15), at(23)])("can manage items with no visible occurrences at %s", async (time) => {
+        vi.setSystemTime(time);
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.updateSettings({ ...makeAppState().settings, start_of_day: "08:00", end_of_day: "22:00" });
+        const remaining = fixedItem("dinner", "feeding", "Dinner", "18:00");
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([fixedItem("early", "playtime", "Early walk", "04:00"), remaining]);
+        render(wrap(data));
+
+        await screen.findByText("Today's schedule");
+        expect(screen.queryByText("Early walk")).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Manage schedule items" }));
+        const manager = screen.getByRole("region", { name: "Manage schedule items" });
+        fireEvent.click(within(manager).getByRole("button", { name: "Remove Early walk from schedule" }));
+        expect(within(manager).queryByText("Early walk")).toBeNull();
+        expect(within(manager).getByText("Dinner")).toBeInTheDocument();
+        await waitFor(async () => expect(await data.loadPetScheduleItems()).toEqual([remaining]));
+    });
+
     it("does not mark a newly added interval item overdue", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePetProfile(profileRow());

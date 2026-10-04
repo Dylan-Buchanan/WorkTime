@@ -131,6 +131,12 @@ export const PetTodayTab: React.FC = () => {
         }
     };
 
+    const removeScheduleItem = (itemId: string): void => {
+        pets.setScheduleItems(scheduleItems.filter((item) => item.id !== itemId));
+        // A pending nap proposal was calculated from the previous schedule.
+        setReflowProposal(null);
+    };
+
     /** The single write path for every log action on this page. */
     const logCareActivity = (activityType: PetScheduleEntry["activityType"]): void => {
         const record = activity.logActivity({ activityType, timestamp: now });
@@ -231,6 +237,7 @@ export const PetTodayTab: React.FC = () => {
                             {reflowMessage && now >= schedule.dayEnd && <p role="status" className="text-xs text-neutral-400">{reflowMessage}</p>}
                             <PetScheduleDeck
                                 schedule={schedule}
+                                scheduleItems={scheduleItems}
                                 excludedFixedCount={excludedFixedCount}
                                 doneCounts={doneCounts}
                                 todayNaps={todayNaps}
@@ -238,6 +245,7 @@ export const PetTodayTab: React.FC = () => {
                                 expanded={deckExpanded}
                                 onToggleExpanded={() => setDeckExpanded((value) => !value)}
                                 onCheck={(entry) => logCareActivity(entry.activityType)}
+                                onRemove={removeScheduleItem}
                             />
                             <PetScheduleItemForm submitLabel="Add schedule item" onAddItem={addScheduleItem} />
                         </>
