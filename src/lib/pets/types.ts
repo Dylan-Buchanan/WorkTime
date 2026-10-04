@@ -56,6 +56,8 @@ export interface NewPetActivityRecordInput {
     timestamp: string | Date;
     durationMinutes?: number;
     skillIds?: string[];
+    scheduleItemId?: string;
+    scheduleOccurrenceStart?: string | Date;
 }
 
 export interface NewPetNapRecordInput {
@@ -130,7 +132,7 @@ export interface PetScheduleEntry {
     end: Date;
     startMinutes: number;
     endMinutes: number;
-    /** Exclusive close of the fulfillment window: next entry start or day end. */
+    /** Exclusive close for unassigned activity matching: next entry start or day end. */
     windowEnd: Date;
     fulfilled: boolean;
     fulfilledAt: Date | null;

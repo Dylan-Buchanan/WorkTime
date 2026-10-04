@@ -91,6 +91,13 @@ export function createPetActivityRecord(input: NewPetActivityRecordInput, now: D
         timestamp: toIso(input.timestamp, "pet activity timestamp"),
         createdAt: now.toISOString(),
     };
+    if (input.scheduleItemId !== undefined || input.scheduleOccurrenceStart !== undefined) {
+        if (!input.scheduleItemId || input.scheduleOccurrenceStart === undefined) {
+            throw new RangeError("A scheduled activity requires both item id and occurrence start");
+        }
+        record.scheduleItemId = input.scheduleItemId;
+        record.scheduleOccurrenceStart = toIso(input.scheduleOccurrenceStart, "pet schedule occurrence start");
+    }
     if (input.durationMinutes !== undefined) {
         if (!Number.isFinite(input.durationMinutes) || input.durationMinutes < 0) {
             throw new RangeError("Pet activity durationMinutes must be a non-negative number");

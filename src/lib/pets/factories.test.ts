@@ -13,6 +13,15 @@ import {
 const now = new Date(2026, 8, 17, 12, 0, 0, 0);
 
 describe("pet factories", () => {
+    it("keeps the actual log time and validates a complete occurrence reference", () => {
+        const input = { activityType: "feeding" as const, timestamp: now, scheduleItemId: "breakfast", scheduleOccurrenceStart: new Date(2026, 8, 17, 8) };
+        expect(createPetActivityRecord(input, now, "a1")).toMatchObject({
+            timestamp: now.toISOString(), scheduleItemId: "breakfast", scheduleOccurrenceStart: input.scheduleOccurrenceStart.toISOString(),
+        });
+        expect(() => createPetActivityRecord({ ...input, scheduleItemId: undefined }, now, "a1")).toThrow(RangeError);
+        expect(() => createPetActivityRecord({ ...input, scheduleOccurrenceStart: undefined }, now, "a1")).toThrow(RangeError);
+        expect(() => createPetActivityRecord({ ...input, scheduleOccurrenceStart: "invalid" }, now, "a1")).toThrow(RangeError);
+    });
     it("creates a profile with a derived-only birth date and trimmed name", () => {
         const profile = createPetProfile({ name: "  Buddy  ", birthDate: new Date(2026, 0, 10, 9, 0) }, now, "p1");
         expect(profile.id).toBe("p1");

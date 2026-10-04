@@ -134,6 +134,72 @@ afterEach(() => {
 });
 
 describe("PetPage", () => {
+    it("fulfills a due-now fixed item from its schedule card", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([fixedItem("meal", "feeding", "Meal", "15:00")]);
+        render(wrap(data));
+        await screen.findByText("due now");
+        fireEvent.click(screen.getByRole("button", { name: /Log meal/ }));
+        expect(screen.queryByText("due now")).toBeNull();
+        expect(screen.queryByRole("alert", { name: "Overdue care items" })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Show full day" }));
+        expect(screen.getByText("done at 3:00 PM")).toBeInTheDocument();
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([
+            expect.objectContaining({ activityType: "feeding", timestamp: NOW.toISOString(), scheduleItemId: "meal" }),
+        ]));
+    });
+
+    it.each([
+        ["card", "feeding"], ["banner", "feeding"],
+        ["card", "playtime"], ["banner", "playtime"],
+    ] as const)("fulfills a late fixed item from the %s after a later %s item starts", async (surface, laterType) => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePetProfile(profileRow());
+        await data.savePetScheduleItems([
+            fixedItem("breakfast", "feeding", "Breakfast", "08:00"),
+            fixedItem("later", laterType, "Later care", "12:00"),
+        ]);
+        const view = render(wrap(data));
+        await screen.findByText("Today's schedule");
+        const logBreakfast = () => {
+            const target = surface === "banner"
+                ? screen.getByRole("alert", { name: "Overdue care items" })
+                : screen.getByText("Breakfast").closest("article")!;
+            fireEvent.click(within(target).getByRole("button", { name: /Log breakfast/ }));
+        };
+        logBreakfast();
+        expect(screen.queryByRole("button", { name: /Log breakfast/ })).toBeNull();
+        expect(screen.getByRole("alert", { name: "Overdue care items" })).not.toHaveTextContent("Breakfast");
+        expect(screen.getByRole("alert", { name: "Overdue care items" })).toHaveTextContent("Later care");
+        expect(screen.getByText("Done today: 1 feeding")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Show full day" }));
+        expect(within(screen.getByText("Breakfast").closest("article")!).getByText("done at 3:00 PM")).toBeInTheDocument();
+        expect(within(screen.getByText("Later care").closest("article")!).queryByText(/done at/)).toBeNull();
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([
+            expect.objectContaining({
+                activityType: "feeding", timestamp: NOW.toISOString(),
+                scheduleItemId: "breakfast", scheduleOccurrenceStart: at(8).toISOString(),
+            }),
+        ]));
+
+        fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+        expect(screen.getByRole("alert", { name: "Overdue care items" })).toHaveTextContent("Breakfast");
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([]));
+        logBreakfast();
+        await waitFor(async () => expect(await data.loadPetActivityRecords()).toHaveLength(1));
+        view.unmount();
+        const reloaded = render(wrap(data));
+        await screen.findByText("Today's schedule");
+        expect(screen.queryByRole("button", { name: /Log breakfast/ })).toBeNull();
+        expect(screen.getByRole("alert", { name: "Overdue care items" })).toHaveTextContent("Later care");
+        reloaded.unmount();
+        vi.setSystemTime(new Date(2026, 8, 18, 15));
+        render(wrap(data));
+        await screen.findByText("Today's schedule");
+        expect(screen.getByRole("alert", { name: "Overdue care items" })).toHaveTextContent("Breakfast");
+    });
+
     it("waits for configured hours before rendering the Today schedule", async () => {
         vi.setSystemTime(at(23));
         const data = new InMemoryDataAccess(makeAppState());

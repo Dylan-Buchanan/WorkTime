@@ -333,6 +333,9 @@ function isPetActivityRecord(value: unknown): boolean {
         typeof value.timestamp === "string" &&
         (value.durationMinutes === undefined || (isFiniteNumber(value.durationMinutes) && value.durationMinutes >= 0)) &&
         (value.skillIds === undefined || (Array.isArray(value.skillIds) && value.skillIds.every((id) => typeof id === "string"))) &&
+        ((value.scheduleItemId === undefined && value.scheduleOccurrenceStart === undefined) ||
+            (typeof value.scheduleItemId === "string" && value.scheduleItemId.length > 0 &&
+                typeof value.scheduleOccurrenceStart === "string" && !Number.isNaN(Date.parse(value.scheduleOccurrenceStart)))) &&
         typeof value.createdAt === "string"
     );
 }

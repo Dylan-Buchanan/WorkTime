@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
 import { defaultAppState } from "../src/lib/engine";
+import { buildPetSchedule, createPetScheduleItem } from "../src/lib/pets";
 import type { PushPlan } from "../src/lib/data/sync/types";
 import { createLocalUser, localSupabaseConfig, type LocalUser } from "../tests/supabase/localSupabase";
 
@@ -336,6 +337,51 @@ describe("SupabaseDataAccess transport", () => {
         expect(snapshot.habitCompletions[COMPLETION_ID].id).toBe(COMPLETION_ID);
     });
 
+    it("preserves late fixed-time fulfillment through sync and keeps history after schedule deletion", async () => {
+        user = await createLocalUser();
+        const remote = new SupabaseDataAccess(user.client);
+        const start = new Date(2026, 8, 17, 8);
+        const now = new Date(2026, 8, 17, 15);
+        const breakfast = createPetScheduleItem({
+            activityType: "feeding", label: "Breakfast", flexibility: "fixed", recurrence: { mode: "fixed-time", time: "08:00" },
+        }, start, PET_SCHEDULE_ID);
+        const lunch = createPetScheduleItem({
+            activityType: "feeding", label: "Lunch", flexibility: "fixed", recurrence: { mode: "fixed-time", time: "12:00" },
+        }, start, PET_PROFILE_ID);
+        await remote.push(user.userId, {
+            ...emptyPlan(),
+            petScheduleUpserts: [breakfast, lunch].map((value) => ({ value, updatedAt: T0 })),
+            petActivityUpserts: [{ value: {
+                id: PET_ACTIVITY_ID, activityType: "feeding", timestamp: now.toISOString(), createdAt: now.toISOString(),
+                scheduleItemId: breakfast.id, scheduleOccurrenceStart: start.toISOString(),
+            }, updatedAt: T0 }],
+        });
+        let snapshot = await remote.pull(user.userId);
+        const schedule = buildPetSchedule({
+            now, scheduleItems: Object.values(snapshot.petScheduleItems).map(({ value }) => value),
+            activityRecords: Object.values(snapshot.petActivityRecords).map(({ value }) => value), naps: [],
+        });
+        expect(schedule.entries.map((entry) => entry.fulfilled)).toEqual([true, false]);
+        expect(schedule.entries[0].fulfilledAt).toEqual(now);
+        for (const reference of [
+            { schedule_item_id: breakfast.id },
+            { schedule_occurrence_start: start.toISOString() },
+        ]) {
+            const invalid = await user.client.from("pet_activity_records").insert({
+                id: PET_BAD_ACTIVITY_IDS[0], owner_id: user.userId, activity_type: "feeding",
+                occurred_at: now.toISOString(), created_at: T0, updated_at: T0, ...reference,
+            });
+            expect(invalid.error).toMatchObject({ code: "23514" });
+            expect(invalid.error?.message).toMatch(/pet_activity_records_schedule_occurrence_check/);
+        }
+        await remote.push(user.userId, {
+            ...emptyPlan(), petScheduleTombstones: [{ id: breakfast.id, deletedAt: LATER }],
+        });
+        snapshot = await remote.pull(user.userId);
+        expect(snapshot.petScheduleItems[breakfast.id]).toBeUndefined();
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.scheduleItemId).toBe(breakfast.id);
+    });
+
     it("round-trips pet rows, applies LWW tombstones, and preserves pets across a full wipe", async () => {
         user = await createLocalUser();
         const remote = new SupabaseDataAccess(user.client);
@@ -346,7 +392,7 @@ describe("SupabaseDataAccess transport", () => {
                 updatedAt: T0,
             },
             petActivityUpserts: [{
-                value: { id: PET_ACTIVITY_ID, activityType: "training", timestamp: T0, skillIds: [PET_SKILL_ID, "unknown-skill"], createdAt: T0 },
+                value: { id: PET_ACTIVITY_ID, activityType: "training", timestamp: T0, skillIds: [PET_SKILL_ID, "unknown-skill"], scheduleItemId: PET_SCHEDULE_ID, scheduleOccurrenceStart: T0, createdAt: T0 },
                 updatedAt: T0,
             }],
             petScheduleUpserts: [{ value: { id: PET_SCHEDULE_ID, activityType: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, isActive: true, createdAt: T0, updatedAt: T0 }, updatedAt: T0 }],
@@ -361,7 +407,9 @@ describe("SupabaseDataAccess transport", () => {
         expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).toMatchObject({
             activityType: "training",
             skillIds: [PET_SKILL_ID, "unknown-skill"],
+            scheduleItemId: PET_SCHEDULE_ID,
         });
+        expect(epoch(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.scheduleOccurrenceStart!)).toBe(epoch(T0));
         const validTags = await user.client.from("pet_activity_records").insert({
             id: PET_VALID_DIRECT_ACTIVITY_ID,
             owner_id: user.userId,
@@ -421,6 +469,7 @@ describe("SupabaseDataAccess transport", () => {
         snapshot = await remote.pull(user.userId);
         expect(snapshot.petProfile.value?.name).toBe("Buddy");
         expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.skillIds).toEqual([PET_SKILL_ID, "unknown-skill"]);
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value.scheduleItemId).toBe(PET_SCHEDULE_ID);
         expect(snapshot.petScheduleItems[PET_SCHEDULE_ID].value.label).toBe("Breakfast");
         expect(snapshot.petNapRecords[PET_NAP_ID].value.end).toBeNull();
         expect(snapshot.petWeightEntries[PET_WEIGHT_ID].value.weight).toBe(5.25);
@@ -438,6 +487,8 @@ describe("SupabaseDataAccess transport", () => {
         });
         snapshot = await remote.pull(user.userId);
         expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).not.toHaveProperty("skillIds");
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).not.toHaveProperty("scheduleItemId");
+        expect(snapshot.petActivityRecords[PET_ACTIVITY_ID].value).not.toHaveProperty("scheduleOccurrenceStart");
 
         const defaults = defaultAppState();
         await remote.push(user.userId, {

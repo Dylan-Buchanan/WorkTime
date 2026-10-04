@@ -951,6 +951,10 @@ describe("LocalStagingStore", () => {
             petActivityRecords: { activity: { value: value as never, updatedAt: "2026-01-02T00:00:00.000Z" } },
         });
         expect(isSyncSnapshot(withActivity(activity))).toBe(true);
+        expect(isSyncSnapshot(withActivity({ ...activity, scheduleItemId: "breakfast", scheduleOccurrenceStart: activity.timestamp }))).toBe(true);
+        expect(isSyncSnapshot(withActivity({ ...activity, scheduleItemId: "breakfast" }))).toBe(false);
+        expect(isSyncSnapshot(withActivity({ ...activity, scheduleOccurrenceStart: activity.timestamp }))).toBe(false);
+        expect(isSyncSnapshot(withActivity({ ...activity, scheduleItemId: "breakfast", scheduleOccurrenceStart: "invalid" }))).toBe(false);
         expect(isSyncSnapshot(withActivity({ ...activity, skillIds: ["sit", "unknown"] }))).toBe(true);
         expect(isSyncSnapshot(withActivity({ ...activity, skillIds: null }))).toBe(false);
         expect(isSyncSnapshot(withActivity({ ...activity, skillIds: "sit" }))).toBe(false);

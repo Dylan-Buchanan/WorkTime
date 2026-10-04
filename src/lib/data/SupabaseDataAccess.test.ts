@@ -274,7 +274,7 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         const rows = {
             pet_profiles: [{ id: "profile", name: "Mochi", birth_date: "2025-12-01", created_at: t, updated_at: t }],
             pet_activity_records: [
-                { id: "activity", activity_type: "training", occurred_at: t, duration_minutes: null, skill_ids: ["sit", "unknown"], created_at: t, updated_at: t },
+                { id: "activity", activity_type: "training", occurred_at: t, duration_minutes: null, skill_ids: ["sit", "unknown"], schedule_item_id: "schedule", schedule_occurrence_start: t, created_at: t, updated_at: t },
                 { id: "legacy-activity", activity_type: "training", occurred_at: t, duration_minutes: null, created_at: t, updated_at: t },
             ],
             pet_schedule_items: [{ id: "schedule", activity_type: "feeding", label: "Breakfast", flexibility: "fixed", priority: 0, recurrence: { mode: "fixed-time", time: "08:00", startMinutes: 480, endMinutes: 510 }, is_active: true, created_at: t, updated_at: t }],
@@ -291,6 +291,8 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         expect(snapshot.petProfile.value).toMatchObject({ id: "profile", name: "Mochi" });
         expect(snapshot.petActivityRecords.activity.value).toMatchObject({ activityType: "training", skillIds: ["sit", "unknown"] });
         expect(snapshot.petActivityRecords["legacy-activity"].value).not.toHaveProperty("skillIds");
+        expect(snapshot.petActivityRecords.activity.value).toMatchObject({ scheduleItemId: "schedule", scheduleOccurrenceStart: t });
+        expect(snapshot.petActivityRecords["legacy-activity"].value).not.toHaveProperty("scheduleItemId");
         expect(snapshot.petScheduleItems.schedule.value.recurrence).toMatchObject({ mode: "fixed-time", startMinutes: 480 });
         expect(snapshot.petNapRecords.nap.value.end).toBeNull();
         expect(snapshot.petWeightEntries.weight.value.weight).toBe(5.25);
@@ -311,6 +313,18 @@ describe("SupabaseDataAccess habit transport mapping", () => {
                 [table]: [{ id: "bad", created_at: t, updated_at: t }],
             })).pull(OWNER)).rejects.toThrow(new RegExp(table));
         }
+    });
+
+    it.each([
+        { schedule_item_id: "schedule" },
+        { schedule_occurrence_start: "2026-01-01T00:00:00.000Z" },
+        { schedule_item_id: "schedule", schedule_occurrence_start: "invalid" },
+    ])("rejects malformed schedule attribution: %j", async (reference) => {
+        const t = "2026-01-01T00:00:00.000Z";
+        const settings = { work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 };
+        await expect(new SupabaseDataAccess(pullClient(settings, {
+            pet_activity_records: [{ id: "bad", activity_type: "feeding", occurred_at: t, created_at: t, updated_at: t, ...reference }],
+        })).pull(OWNER)).rejects.toThrow(/pet_activity_records/);
     });
 
     it("rejects malformed skill_ids from pet activity rows", async () => {
@@ -338,7 +352,7 @@ describe("SupabaseDataAccess habit transport mapping", () => {
             petProfile: { value: { id: "profile", name: "Mochi", birthDate: "2025-12-01", createdAt: t, updatedAt: t }, updatedAt: t },
             petProfileTombstone: { id: "old-profile", deletedAt: t },
             petActivityUpserts: [
-                { value: { id: "activity", activityType: "training", timestamp: t, durationMinutes: 10, skillIds: ["sit"], createdAt: t }, updatedAt: t },
+                { value: { id: "activity", activityType: "training", timestamp: t, durationMinutes: 10, skillIds: ["sit"], scheduleItemId: "schedule", scheduleOccurrenceStart: t, createdAt: t }, updatedAt: t },
                 { value: { id: "untagged-activity", activityType: "training", timestamp: t, createdAt: t }, updatedAt: t },
                 { value: { id: "empty-tags-activity", activityType: "training", timestamp: t, skillIds: [], createdAt: t }, updatedAt: t },
             ],
@@ -360,6 +374,8 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         expect(args.p_pet_profile_upsert).toMatchObject({ id: "profile", birth_date: "2025-12-01", updated_at: t });
         expect(args.p_pet_profile_tombstone).toEqual({ id: "old-profile", deleted_at: t });
         expect(args.p_pet_activity_upserts[0]).toMatchObject({ id: "activity", activity_type: "training", duration_minutes: 10, skill_ids: ["sit"] });
+        expect(args.p_pet_activity_upserts[0]).toMatchObject({ schedule_item_id: "schedule", schedule_occurrence_start: t });
+        expect(args.p_pet_activity_upserts[1]).toMatchObject({ schedule_item_id: null, schedule_occurrence_start: null });
         expect(args.p_pet_activity_upserts[1]).not.toHaveProperty("skill_ids");
         expect(args.p_pet_activity_upserts[2]).not.toHaveProperty("skill_ids");
         expect(args.p_pet_schedule_upserts[0]).toMatchObject({ id: "schedule", activity_type: "feeding", is_active: true });

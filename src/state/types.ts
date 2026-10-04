@@ -230,6 +230,9 @@ export interface PetActivityRecord {
     durationMinutes?: number;
     /** Historical training-skill ids. Present only for tagged training records. */
     skillIds?: string[];
+    /** Explicit fixed-time occurrence selected by an inline Log action. Both fields are present together. */
+    scheduleItemId?: string;
+    scheduleOccurrenceStart?: string;
     createdAt: string;
 }
 

@@ -387,7 +387,7 @@ function buildEntry(
     };
 }
 
-/** First matching-type record inside `[entry.start, entry.windowEnd)`, or null. */
+/** Explicit fixed-time attribution wins; unassigned logs use the existing time window. */
 function firstMatchingRecord(entry: PetScheduleEntry, records: readonly PetActivityRecord[], nowMs: number): Date | null {
     const startMs = entry.start.getTime();
     const endMs = entry.windowEnd.getTime();
@@ -395,16 +395,20 @@ function firstMatchingRecord(entry: PetScheduleEntry, records: readonly PetActiv
     for (const record of records) {
         if (record.activityType !== entry.activityType) continue;
         const time = new Date(record.timestamp).getTime();
-        if (Number.isNaN(time) || time > nowMs || time < startMs || time >= endMs) continue;
+        if (Number.isNaN(time) || time > nowMs || time < startMs) continue;
+        if (record.scheduleItemId !== undefined || record.scheduleOccurrenceStart !== undefined) {
+            if (entry.mode !== "fixed-time" || record.scheduleItemId !== entry.itemId ||
+                Date.parse(record.scheduleOccurrenceStart ?? "") !== startMs) continue;
+        } else if (time >= endMs) continue;
         if (best === null || time < best) best = time;
     }
     return best === null ? null : new Date(best);
 }
 
 /**
- * Builds the configured schedule day for `now`. Fulfillment is decided by the agreed
- * `[item start, next item start)` window; overdue is always recomputed from the
- * log and never stored.
+ * Builds the configured schedule day for `now`. Fulfillment uses an explicit
+ * fixed-time occurrence reference or the `[item start, next item start)` window.
+ * Fulfillment and overdue are recomputed from the log and never stored.
  */
 export function buildPetSchedule(input: BuildPetScheduleInput): PetDaySchedule {
     const now = assertValidDate(input.now, "pet schedule now");

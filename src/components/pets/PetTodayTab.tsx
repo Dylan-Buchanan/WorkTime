@@ -138,8 +138,15 @@ export const PetTodayTab: React.FC = () => {
     };
 
     /** The single write path for every log action on this page. */
-    const logCareActivity = (activityType: PetScheduleEntry["activityType"]): void => {
-        const record = activity.logActivity({ activityType, timestamp: now });
+    const logCareActivity = (activityType: PetScheduleEntry["activityType"], entry?: PetScheduleEntry): void => {
+        const record = activity.logActivity({
+            activityType,
+            timestamp: now,
+            ...(entry?.mode === "fixed-time" ? {
+                scheduleItemId: entry.itemId,
+                scheduleOccurrenceStart: entry.start,
+            } : {}),
+        });
         if (activityType === "training") setTrainingTagPrompt({ recordId: record.id, skillIds: [] });
     };
 
@@ -226,7 +233,7 @@ export const PetTodayTab: React.FC = () => {
                                 />
                                 <PetHeroStatus name={profile.name} schedule={schedule} now={now} />
                             </div>
-                            <PetOverdueBanner entries={overdueEntries} onLog={(entry) => logCareActivity(entry.activityType)} />
+                            <PetOverdueBanner entries={overdueEntries} onLog={(entry) => logCareActivity(entry.activityType, entry)} />
                             <PetNapToggle
                                 napping={schedule.napping}
                                 activeNap={schedule.activeNap}
@@ -244,7 +251,7 @@ export const PetTodayTab: React.FC = () => {
                                 now={now}
                                 expanded={deckExpanded}
                                 onToggleExpanded={() => setDeckExpanded((value) => !value)}
-                                onCheck={(entry) => logCareActivity(entry.activityType)}
+                                onCheck={(entry) => logCareActivity(entry.activityType, entry)}
                                 onRemove={removeScheduleItem}
                             />
                             <PetScheduleItemForm submitLabel="Add schedule item" onAddItem={addScheduleItem} />

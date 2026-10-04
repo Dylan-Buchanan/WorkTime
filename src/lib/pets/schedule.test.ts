@@ -333,6 +333,43 @@ describe("buildPetSchedule nap reflow", () => {
 });
 
 describe("buildPetSchedule fulfillment and due reporting", () => {
+    it("attributes late logs only to the selected fixed occurrence and recomputes on undo", () => {
+        const input = {
+            now: at(15),
+            scheduleItems: [fixedItem("breakfast", "feeding", "08:00", "fixed"), fixedItem("lunch", "feeding", "12:00", "fixed")],
+            naps: [],
+        };
+        const record: PetActivityRecord = {
+            ...activity("late", at(15), "feeding"),
+            scheduleItemId: "breakfast", scheduleOccurrenceStart: at(8).toISOString(),
+        };
+        const schedule = buildPetSchedule({ ...input, activityRecords: [record] });
+        expect(schedule.entries.map((entry) => entry.fulfilled)).toEqual([true, false]);
+        expect(schedule.entries[0].fulfilledAt).toEqual(at(15));
+        expect(schedule.entries[0].overdueMinutes).toBe(0);
+        expect(nextDue(schedule)?.itemId).toBe("lunch");
+        expect(buildPetSchedule({ ...input, activityRecords: [] }).entries.map((entry) => entry.fulfilled)).toEqual([false, false]);
+    });
+
+    it.each([
+        { timestamp: at(16).toISOString() },
+        { timestamp: at(7).toISOString() },
+        { activityType: "playtime" as const },
+        { scheduleItemId: "deleted-item" },
+        { scheduleOccurrenceStart: new Date(2026, 8, 16, 8).toISOString() },
+    ])("does not fulfill another occurrence with an invalid attribution: %j", (overrides) => {
+        const schedule = buildPetSchedule({
+            now: at(15),
+            scheduleItems: [fixedItem("breakfast", "feeding", "08:00", "fixed"), fixedItem("lunch", "feeding", "12:00", "fixed")],
+            naps: [],
+            activityRecords: [{
+                ...activity("late", at(15), "feeding"),
+                scheduleItemId: "breakfast", scheduleOccurrenceStart: at(8).toISOString(), ...overrides,
+            }],
+        });
+        expect(schedule.entries.every((entry) => !entry.fulfilled)).toBe(true);
+    });
+
     it("matches fulfillment only inside [item start, next item start)", () => {
         const schedule = buildPetSchedule({
             now: at(16, 0),

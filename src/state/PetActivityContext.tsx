@@ -96,6 +96,12 @@ function normalizeActivityRecord(value: unknown): PetActivityRecord | null {
         if (!Array.isArray(value.skillIds) || !value.skillIds.every((id) => typeof id === "string")) return null;
         if (value.skillIds.length > 0) record.skillIds = [...value.skillIds];
     }
+    if (value.scheduleItemId !== undefined || value.scheduleOccurrenceStart !== undefined) {
+        if (typeof value.scheduleItemId !== "string" || !value.scheduleItemId ||
+            typeof value.scheduleOccurrenceStart !== "string" || Number.isNaN(Date.parse(value.scheduleOccurrenceStart))) return null;
+        record.scheduleItemId = value.scheduleItemId;
+        record.scheduleOccurrenceStart = value.scheduleOccurrenceStart;
+    }
     return record;
 }
 

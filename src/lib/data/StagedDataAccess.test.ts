@@ -823,19 +823,23 @@ describe("StagedDataAccess", () => {
         expect((await data.loadPetWeightEntries())[0].weight).not.toBe(99);
     });
 
-    it("round-trips skill tags and restages a tag-only change", async () => {
+    it("round-trips skill tags and occurrence attribution and restages a tag-only change", async () => {
         const { executor } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);
         let current = new Date("2026-01-02T00:00:00.000Z");
         const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => current });
 
-        await data.savePetActivityRecords([PA("pa1", "training", { skillIds: ["sit", "unknown"] })]);
+        const reference = { scheduleItemId: "training", scheduleOccurrenceStart: "2026-01-01T08:00:00.000Z" };
+        await data.savePetActivityRecords([PA("pa1", "training", { skillIds: ["sit", "unknown"], ...reference })]);
         expect((await data.loadPetActivityRecords())[0].skillIds).toEqual(["sit", "unknown"]);
+        const reloaded = new StagedDataAccess(OWNER_A, new LocalStagingStore(window.localStorage), executor);
+        expect((await reloaded.loadPetActivityRecords())[0]).toMatchObject(reference);
         expect(store.read(OWNER_A).petActivityUpdatedAt.pa1).toBe(current.toISOString());
 
         current = new Date("2026-01-03T00:00:00.000Z");
-        await data.savePetActivityRecords([PA("pa1", "training", { skillIds: ["stay"] })]);
+        await data.savePetActivityRecords([PA("pa1", "training", { skillIds: ["stay"], ...reference })]);
         expect(store.read(OWNER_A).petActivityRecords.pa1.skillIds).toEqual(["stay"]);
+        expect(store.read(OWNER_A).petActivityRecords.pa1).toMatchObject(reference);
         expect(store.read(OWNER_A).petActivityUpdatedAt.pa1).toBe(current.toISOString());
     });
 

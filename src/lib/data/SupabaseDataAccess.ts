@@ -105,6 +105,8 @@ function petActivityRow(value: PetActivityRecord, updatedAt: string) {
         occurred_at: value.timestamp,
         duration_minutes: value.durationMinutes ?? null,
         ...(value.skillIds?.length ? { skill_ids: value.skillIds } : {}),
+        schedule_item_id: value.scheduleItemId ?? null,
+        schedule_occurrence_start: value.scheduleOccurrenceStart ?? null,
         created_at: value.createdAt,
         updated_at: updatedAt,
     };
@@ -308,9 +310,14 @@ export class SupabaseDataAccess implements SyncRemote {
         this.validPetBase("pet_activity_records", row);
         const durationMissing = row.duration_minutes === null || row.duration_minutes === undefined;
         const skillIdsMissing = row.skill_ids === null || row.skill_ids === undefined;
+        const scheduleItemMissing = row.schedule_item_id === null || row.schedule_item_id === undefined;
+        const occurrenceMissing = row.schedule_occurrence_start === null || row.schedule_occurrence_start === undefined;
         if (!["potty", "training", "playtime", "feeding"].includes(row.activity_type) || typeof row.occurred_at !== "string" ||
             (!durationMissing && (typeof row.duration_minutes !== "number" || row.duration_minutes < 0)) ||
-            (!skillIdsMissing && (!Array.isArray(row.skill_ids) || !row.skill_ids.every((id: unknown) => typeof id === "string")))) {
+            (!skillIdsMissing && (!Array.isArray(row.skill_ids) || !row.skill_ids.every((id: unknown) => typeof id === "string"))) ||
+            scheduleItemMissing !== occurrenceMissing ||
+            (!scheduleItemMissing && (typeof row.schedule_item_id !== "string" || !row.schedule_item_id ||
+                typeof row.schedule_occurrence_start !== "string" || Number.isNaN(Date.parse(row.schedule_occurrence_start))))) {
             this.fail("pet_activity_records", new Error(`invalid row for ${row.id}`));
         }
         return {
@@ -319,6 +326,7 @@ export class SupabaseDataAccess implements SyncRemote {
             timestamp: row.occurred_at,
             ...(durationMissing ? {} : { durationMinutes: row.duration_minutes }),
             ...(skillIdsMissing || row.skill_ids.length === 0 ? {} : { skillIds: [...row.skill_ids] }),
+            ...(scheduleItemMissing ? {} : { scheduleItemId: row.schedule_item_id, scheduleOccurrenceStart: row.schedule_occurrence_start }),
             createdAt: row.created_at,
         };
     }

@@ -33,7 +33,7 @@ export function isSameLocalDay(left: Date, right: Date): boolean {
 }
 
 /**
- * Appends one minimal `{ activityType, timestamp, durationMinutes?, skillIds? }` record.
+ * Appends one activity record, retaining any explicit fixed-time occurrence reference.
  * `durationMinutes` is only accepted for training and playtime; potty and
  * feeding always stay one-tap records with no duration. Skill tags are kept
  * only for training records.
