@@ -21,6 +21,7 @@ permission:
         "Test-Path*": allow
 
         "gh issue list*": allow
+        "gh issue view*": allow
         "git status*": allow
         "git diff*": allow
         "git log*": allow
