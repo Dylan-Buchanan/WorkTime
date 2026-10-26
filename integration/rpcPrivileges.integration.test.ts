@@ -106,6 +106,19 @@ describe("security-definer RPC privileges", () => {
         }));
     });
 
+    it("denies anonymous Linear credential writes", async () => {
+        await expectPermissionDenied(anonymousClient().rpc("save_linear_settings", {
+            p_linear_token: "not-authorized", p_team_key: null,
+            p_included_statuses: [], p_default_project_id: null,
+        }));
+    });
+
+    it("denies anonymous Linear preference writes", async () => {
+        await expectPermissionDenied(anonymousClient().rpc("update_linear_preferences", {
+            p_team_key: null, p_included_statuses: [], p_default_project_id: null,
+        }));
+    });
+
     it("denies anonymous Google Calendar credential writes", async () => {
         const client = anonymousClient();
         await expectPermissionDenied(client.rpc("save_google_calendar_connection", {

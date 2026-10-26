@@ -1,6 +1,6 @@
 # Supabase foundation
 
-This directory contains the local Supabase CLI project, schema/RLS migrations, and the invite-signup, Shortcut, and Google Calendar Edge Functions. Docker and the Supabase CLI are required.
+This directory contains the local Supabase CLI project, schema/RLS migrations, and the invite-signup, Shortcut, Linear, GitHub, and Google Calendar Edge Functions. Docker and the Supabase CLI are required.
 
 ## Local setup
 
@@ -92,6 +92,63 @@ npx supabase functions deploy shortcut-sync
 
 No Shortcut token belongs in an environment file, log, `VITE_` variable, or committed source.
 
+## Linear sync function
+
+`public.linear_settings` stores one personal API key and connection per owner. Save or replace it through the public invoker RPC over the private, owner-derived definer:
+
+```ts
+await supabase.rpc("save_linear_settings", {
+    p_linear_token: token,
+    p_team_key: teamKey,                  // null or blank means all accessible teams
+    p_included_statuses: includedStatuses, // defaults to []
+    p_default_project_id: defaultProjectId,
+});
+
+await supabase.rpc("update_linear_preferences", {
+    p_team_key: teamKey,
+    p_included_statuses: includedStatuses,
+    p_default_project_id: defaultProjectId,
+});
+```
+
+The preference RPC never reads or replaces the stored key. Both RPCs derive the owner from `auth.uid()` and reject anonymous execution. Disconnect by deleting the owner's `linear_settings` row. `default_project_id` is a nullable text identifier for a project in `pm_state_v1`, with no relational foreign key. Blank team/project values become null. Team matching uses Linear's `eqIgnoreCase` comparator. `included_statuses` defaults to an empty array so the frontend imports nothing until names are selected; the sync itself returns assigned issues without a status filter so the frontend can explain empty results.
+
+Authenticated clients may select only `owner_id`, `team_key`, `included_statuses`, `default_project_id`, `last_synced_at`, and `updated_at`. The plaintext `linear_token` is writable but never selectable by authenticated clients; the service role and database administrators can read it. Both timestamps are read-only to authenticated clients. Keep `private` out of the exposed Data API schemas. No Linear token belongs in an environment file, log, `VITE_` variable, or committed source.
+
+Invoke `linear-sync` with an authenticated `POST`; it accepts no configuration overrides from the request body. Gateway JWT verification stays enabled, and the handler independently verifies the JWT and scopes both settings reads and timestamp writes to its owner. It sends the raw personal API key as `Authorization: <key>` to the fixed `https://api.linear.app/graphql` endpoint. A pasted `Bearer ` prefix is rejected with a clear `LINEAR_TOKEN_INVALID` message before an upstream request. Redirects are disabled, and cursors are GraphQL variables, never request URLs.
+
+The query is exported as `LINEAR_SYNC_QUERY` in `functions/linear-sync/linearApi.ts`. Its `issues` connection filters `assignee.isMe.eq = true`; the aliased `states: workflowStates` connection discovers workflow names independently of assigned issues, and `matchingTeams: teams` checks a configured team key on the first request. Both paginated connections request 50 records per page, with at most 20 requests per run (up to 1,000 issues and 1,000 workflow states). Completed connections are omitted from later requests. This deliberately small query has no nested paginated connections and does not request `estimate`. See [Linear authentication/error handling](https://linear.app/developers/graphql), [pagination](https://linear.app/developers/pagination), [filtering](https://linear.app/developers/filtering), and the [published schema](https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql). The implementation uses the documented baseline in `docs/research/issue-122-linear-spike.md`; live workspace behavior and measured query complexity remain unverified.
+
+The 50-record page size leaves substantial complexity headroom: using Linear's documented calculation, issue nodes cost roughly `50 × (1 + 7 × 0.1 + 1 + 0.1) = 140` points and workflow-state nodes roughly `50 × (1 + 0.1) = 55`, plus a small amount for connections, page info, and the optional team lookup. This is approximately 200 points per request against the documented 10,000-point ceiling; it is an estimate, not an observed `X-Complexity` value. See [Linear's complexity rules](https://linear.app/developers/rate-limiting#understanding-query-complexity).
+
+A successful response is `{ issues, states, synced_at, truncated }`:
+
+- Each issue has `id`, `identifier`, `title`, `description`, `url`, `dueDate`, `priority`, and `state: { name }`. These retain GraphQL field names; a null description becomes `""`, and `dueDate` remains a nullable string. Priority is Linear's integer scale 0–4. No estimate is returned.
+- Issues are deduplicated by `id`, retaining the first occurrence. `states` is a sorted, distinct array of workflow names in the selected team or all accessible teams, including names on fetched issues. It can contain names even when `issues` is empty.
+- `truncated` is true if either connection still has another page at the cap, so issues or state hints may be incomplete. Continuing cursors must be nonempty opaque strings and must not repeat or look like external URLs; terminal pages may have a repeated cursor.
+- `synced_at` is an ISO timestamp written to `last_synced_at` only after the entire bounded fetch succeeds. Truncated results count as a successful bounded fetch. A failed fetch never stamps the row; a failed timestamp write or a concurrently deleted connection returns an error.
+
+Sync failures use `{ error, code, retry_after_seconds? }`:
+
+| Code | HTTP | Meaning |
+| --- | --- | --- |
+| `LINEAR_NOT_CONFIGURED` | 409 | No saved connection |
+| `LINEAR_TOKEN_INVALID` | 401 | Missing, Bearer-prefixed, invalid, or revoked personal key |
+| `LINEAR_RATE_LIMITED` | 429 | HTTP 429 or GraphQL `RATELIMITED`; carries `retry_after_seconds` when `Retry-After` is available |
+| `LINEAR_TEAM_NOT_FOUND` | 404 | Team key was not found or is inaccessible; distinct from a known team with no assigned issues |
+| `LINEAR_INVALID_RESPONSE` | 502 | Malformed JSON/data or unsafe/repeated continuing cursor |
+| `LINEAR_UPSTREAM_ERROR` | 502 | Transport, HTTP, or GraphQL query failure |
+
+Any nonempty GraphQL `errors` array rejects partial data, including with HTTP 200. Upstream error text is never returned. General handler failures use `METHOD_NOT_ALLOWED`, `AUTH_REQUIRED`, `SYNC_UNAVAILABLE`, `SETTINGS_READ_FAILED`, `SYNC_STATE_UPDATE_FAILED`, or `SYNC_FAILED`. The frontend integration in #126 must allowlist the six Linear codes and preserve `issues`, `states`, and `truncated`.
+
+Deploy with JWT verification enabled:
+
+```sh
+npx supabase functions deploy linear-sync
+```
+
+`pnpm test:integration` resets the local database and covers the settings/grants/RLS, anonymous RPC denials, injected-fetcher API cases, and handler owner/timestamp behavior. API and handler tests use fake keys and require no Linear workspace. For a local function smoke check, run `pnpm supabase:reset`, then `pnpm supabase:serve`, and invoke with a local user's JWT: an unconfigured user gets 409 `LINEAR_NOT_CONFIGURED`; a configured user gets the response above after a successful fetch. A live success check requires a personal key supplied through the RPC without logging or committing it.
+
 ## GitHub OAuth App integration
 
 GitHub connection uses a classic GitHub OAuth App. Configure these values only in the ignored `supabase/.env.local` file for local development and as hosted Supabase secrets:
@@ -180,6 +237,8 @@ Use two temporary users and their JWTs with the local URL from `supabase status`
 | Owner B updates/deletes A’s IDs                                   | No affected rows                                                 |
 | B inserts or updates `owner_id=A`                                 | RLS denial                                                       |
 | Anon-key-only table access                                        | Denied or zero rows                                              |
+| Owner selects `linear_token` or `*` from `linear_settings`          | Permission denied; service role can read the token                |
+| Owner inserts/updates Linear sync timestamps                       | Permission denied; timestamps are server-authored                 |
 | Second `settings`, `timer_state`, or `pm_state` row for one owner | Primary-key conflict                                             |
 | Delete a task that has logs                                       | Task is removed and its historical logs remain                   |
 | Finalize a zero-progress task and persist it                      | A target of `0` is accepted, matching the domain engine          |

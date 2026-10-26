@@ -388,6 +388,9 @@ verify_jwt = false
 [functions.shortcut-sync]
 verify_jwt = true
 
+[functions.linear-sync]
+verify_jwt = true
+
 [functions.google-calendar-auth]
 verify_jwt = false
 
