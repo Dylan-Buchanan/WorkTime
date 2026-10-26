@@ -5,6 +5,7 @@ import { TimerPanel } from "./TimerPanel";
 import { AppStateProvider, useAppState } from "../state/AppStateContext";
 import { DataProvider } from "../state/DataContext";
 import { ProjectManagerProvider, usePM } from "../state/ProjectManagerContext";
+import { HabitProvider } from "../state/HabitContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
@@ -76,9 +77,11 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
                     <SyncProvider ownerId={OWNER}>
                         <AppStateProvider>
                             <ProjectManagerProvider>
-                                <SelectionProbe />
-                                {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
-                                <TimerPanel />
+                                <HabitProvider>
+                                    <SelectionProbe />
+                                    {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
+                                    <TimerPanel />
+                                </HabitProvider>
                             </ProjectManagerProvider>
                         </AppStateProvider>
                     </SyncProvider>
@@ -271,5 +274,63 @@ describe("TimerPanel projected finish", () => {
         );
         expect(card).toBeInTheDocument();
         expect(screen.getByText("READY")).toBeInTheDocument();
+    });
+});
+
+describe("TimerPanel today surface", () => {
+    it("renders the today surface below the projected-finish card", async () => {
+        await renderWithTasks({
+            today: makePMTask({ id: "today", title: "Due today", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
+        });
+
+        await waitFor(() => expect(screen.getByText("Daily projected finish")).toBeInTheDocument());
+        const projectionLabel = screen.getByText("Daily projected finish");
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        expect(projectionLabel.compareDocumentPosition(todayRegion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(screen.getByText("1 task · 1p left")).toBeInTheDocument();
+    });
+
+    it("selects a today task in the project manager and opens its details panel", async () => {
+        await renderWithTasks({
+            today: makePMTask({ id: "today", title: "Due today task", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
+        });
+
+        await waitFor(() => expect(screen.getByText("1 task · 1p left")).toBeInTheDocument());
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await screen.findByRole("button", { name: "Select Due today task" }));
+
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today"));
+        const details = document.getElementById("timer-task-details-panel");
+        expect(details).not.toBeNull();
+        await waitFor(() => expect(within(details!).getByText("Due today task")).toBeInTheDocument());
+    });
+
+    it("opens details for a selected today task even while another task is running", async () => {
+        const runningAppTask = makeAppTask("app-running", "Running application task");
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { [runningAppTask.id]: runningAppTask },
+            active_task: runningAppTask.id,
+            timer: makeActiveTimer({ task_id: runningAppTask.id }),
+        }));
+        await data.savePMState({
+            projects: {},
+            tasks: {
+                running: makePMTask({ id: "running", title: "Running project task", appTaskId: runningAppTask.id, estimatePomos: 1 }),
+                today: makePMTask({ id: "today", title: "Due today task", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
+            },
+            meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
+        });
+        render(wrap(data));
+
+        await waitFor(() => expect(screen.getByText("2 tasks · 2p left")).toBeInTheDocument());
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await screen.findByRole("button", { name: "Select Due today task" }));
+
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today"));
+        const details = document.getElementById("timer-task-details-panel");
+        await waitFor(() => expect(within(details!).getByText("Due today task")).toBeInTheDocument());
+        expect(within(details!).queryByText("Running project task")).not.toBeInTheDocument();
     });
 });

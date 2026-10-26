@@ -6,6 +6,7 @@ import { TaskInspector } from "./ProjectManager/TaskInspector";
 import {
     EPSILON,
     buildProjectionBacklogs,
+    collectEligibleProjectionTasks,
     computeElapsedSecs,
     formatDurationMinutes,
     formatMs,
@@ -13,11 +14,11 @@ import {
     getLocalWeekWindow,
     toLocalDateKey,
     type ProjectionBacklog,
-    type ProjectionBacklogTask,
 } from "../lib/timer";
 import { useOptionalTodos } from "../state/TodoContext";
 import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
 import { CalendarDays, CalendarRange, Check, Clock3, Coffee, Info, Target } from "lucide-react";
+import { TodaySurface } from "./TodaySurface";
 
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
@@ -226,6 +227,7 @@ export const TimerPanel: React.FC = () => {
     const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
+    const [todayDetailsTaskId, setTodayDetailsTaskId] = useState<string | null>(null);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
     const ms = remainingMs();
@@ -262,13 +264,13 @@ export const TimerPanel: React.FC = () => {
     }, [pmState.tasks, activeAppTaskId, activeAppTask?.name, activeIsTodoTask]);
     const linkedTaskId = linkedTask?.id ?? null;
 
-    const inspectorTaskId = linkedTaskId ?? pmSelectedId ?? null;
+    const inspectorTaskId = todayDetailsTaskId ?? linkedTaskId ?? pmSelectedId ?? null;
     const inspectorTask = inspectorTaskId && pmState.tasks[inspectorTaskId] ? pmState.tasks[inspectorTaskId] : null;
     const metadataTask = inspectorTask ?? linkedTask ?? null;
 
     const pmTaskProject = metadataTask?.projectId && pmState.projects[metadataTask.projectId] ? pmState.projects[metadataTask.projectId] : null;
     const unassigned = !!metadataTask && !pmTaskProject;
-    const canShowDetails = Boolean(pmSelectedId || linkedTaskId || activeAppTaskId);
+    const canShowDetails = Boolean(pmSelectedId || linkedTaskId || activeAppTaskId || todayDetailsTaskId);
 
     const openDetails = useCallback(() => {
         const targetId = linkedTaskId ?? pmSelectedId ?? null;
@@ -280,17 +282,27 @@ export const TimerPanel: React.FC = () => {
         } else {
             autoSelectedTaskRef.current = null;
         }
+        setTodayDetailsTaskId(null);
         setDetailsOpen(true);
     }, [pmSelectedId, linkedTaskId, setSelectedTask]);
 
     const closeDetails = useCallback(() => {
         const autoId = autoSelectedTaskRef.current;
         setDetailsOpen(false);
+        setTodayDetailsTaskId(null);
         if (autoId && (!pmSelectedId || pmSelectedId === autoId)) {
             setSelectedTask(null);
         }
         autoSelectedTaskRef.current = null;
     }, [pmSelectedId, setSelectedTask]);
+
+    /** Quick action from the today surface: select the task and reveal its details. */
+    const selectTaskFromToday = useCallback((taskId: string) => {
+        setSelectedTask(taskId);
+        autoSelectedTaskRef.current = null;
+        setTodayDetailsTaskId(taskId);
+        setDetailsOpen(true);
+    }, [setSelectedTask]);
 
     const handleToggleDetails = useCallback(() => {
         if (detailsOpen) {
@@ -315,6 +327,9 @@ export const TimerPanel: React.FC = () => {
 
     useEffect(() => {
         if (!detailsOpen) return;
+        // An explicit selection from the today surface owns the details panel
+        // until the user closes it or opens details through the normal button.
+        if (todayDetailsTaskId) return;
         if (!linkedTaskId) {
             if (autoSelectedTaskRef.current && (!pmSelectedId || pmSelectedId === autoSelectedTaskRef.current)) {
                 setSelectedTask(null);
@@ -327,7 +342,7 @@ export const TimerPanel: React.FC = () => {
         }
         setSelectedTask(linkedTaskId);
         autoSelectedTaskRef.current = linkedTaskId;
-    }, [detailsOpen, pmSelectedId, linkedTaskId, setSelectedTask]);
+    }, [detailsOpen, pmSelectedId, linkedTaskId, setSelectedTask, todayDetailsTaskId]);
 
     const kindBadge = timer ? (
         <span
@@ -358,31 +373,13 @@ export const TimerPanel: React.FC = () => {
         const longBreakMs = (settings.long_break_minutes || 0) * 60000;
         const segmentLength = Math.max(1, settings.segment_length || 1);
         const activeTimer = timer;
-        const eligibleTasks: ProjectionBacklogTask[] = [];
-
-        pmTasks.forEach((pmTask) => {
-            if (pmTask.isArchived) return;
-            if (pmTask.status === "Done") return;
-
-            const backendTask = pmTask.appTaskId ? backendTasks[pmTask.appTaskId] : undefined;
-            if (backendTask?.completed_at) return;
-            const estimate = typeof pmTask.estimatePomos === "number" ? pmTask.estimatePomos : (backendTask?.target_pomodoros ?? 0);
-            if (!Number.isFinite(estimate) || estimate <= EPSILON) return;
-
-            let worked = backendTask?.completed_pomodoros ?? 0;
-            if (pmTask.workedPomos !== undefined) {
-                worked = Math.max(worked, pmTask.workedPomos);
-            }
-
-            if (activeTimer?.kind === "Work" && pmTask.appTaskId && pmTask.appTaskId === activeTimer.task_id) {
-                worked = Math.max(worked, (backendTask?.completed_pomodoros ?? 0) + activeFractionComplete);
-            }
-
-            const estimatedRemaining = estimate - worked;
-            const remaining = estimatedRemaining > EPSILON ? estimatedRemaining : 1;
-            const projectId = pmTask.projectId && pmState.projects[pmTask.projectId] ? pmTask.projectId : null;
-            eligibleTasks.push({ dueDate: pmTask.dueDate, remainingPomodoros: remaining, projectId });
-        });
+        const eligibleTasks = collectEligibleProjectionTasks({
+            pmTasks,
+            backendTasks,
+            projects: pmState.projects,
+            activeWorkTaskId: activeTimer?.kind === "Work" ? activeTimer.task_id : null,
+            activeWorkFraction: activeFractionComplete,
+        }).map(({ dueDate, remainingPomodoros, projectId }) => ({ dueDate, remainingPomodoros, projectId }));
 
         const backlogs = buildProjectionBacklogs(eligibleTasks, projectionStart);
 
@@ -507,8 +504,8 @@ export const TimerPanel: React.FC = () => {
 
     return (
         <div className="w-full min-h-full flex">
-            <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6 text-center select-none relative">
-                <div className="flex flex-col items-center gap-6 max-w-md w-full">
+            <div className="flex-1 flex flex-col items-center p-4 sm:p-6 text-center select-none relative">
+                <div className="my-auto flex flex-col items-center gap-6 max-w-md w-full">
                     <div className="flex flex-col items-center gap-3">
                         <div className="relative w-52 h-52 sm:w-64 sm:h-64 md:w-72 md:h-72">
                             {/* Progress ring */}
@@ -644,6 +641,7 @@ export const TimerPanel: React.FC = () => {
                     {finishProjections && (
                         <ProjectionSwitcher projections={finishProjections} />
                     )}
+                    <TodaySurface onSelectTask={selectTaskFromToday} />
                     {/* Accessible linear progress */}
                     {/* Removed redundant bottom progress bar */}
                 </div>

@@ -1,4 +1,4 @@
-import { ActiveTimer } from "../state/types";
+import { ActiveTimer, PMTask, Project, Task } from "../state/types";
 
 export const EPSILON = 1e-3;
 
@@ -49,6 +49,94 @@ export interface ProjectionBacklogTask {
     projectId: string | null;
 }
 
+export type DueScope = "due" | "unscheduled" | "thisWeek" | "future";
+
+export interface ProjectionEligibilityInput {
+    pmTasks: readonly PMTask[];
+    backendTasks: Readonly<Record<string, Task>>;
+    projects: Readonly<Record<string, Project>>;
+    /** Backend task id of the work timer currently running, if any. */
+    activeWorkTaskId?: string | null;
+    /** Fraction (0-1) of the running work timer already elapsed. */
+    activeWorkFraction?: number;
+}
+
+export interface EligibleProjectionTask {
+    task: PMTask;
+    dueDate: string | null;
+    dueKey: string | null;
+    projectId: string | null;
+    estimatePomos: number;
+    workedPomos: number;
+    remainingPomodoros: number;
+    isActive: boolean;
+}
+
+/**
+ * The single definition of which project-manager tasks carry actionable work.
+ * The projected-finish card and the today surface both build from this list so
+ * their notion of "in scope" cannot drift apart.
+ */
+export function collectEligibleProjectionTasks(input: ProjectionEligibilityInput): EligibleProjectionTask[] {
+    const activeFractionRaw = input.activeWorkFraction;
+    const activeFraction = typeof activeFractionRaw === "number" && Number.isFinite(activeFractionRaw)
+        ? Math.min(1, Math.max(0, activeFractionRaw))
+        : 0;
+    const eligible: EligibleProjectionTask[] = [];
+
+    for (const pmTask of input.pmTasks) {
+        if (pmTask.isArchived) continue;
+        if (pmTask.status === "Done") continue;
+
+        const backendTask = pmTask.appTaskId ? input.backendTasks[pmTask.appTaskId] : undefined;
+        if (backendTask?.completed_at) continue;
+        const estimate = typeof pmTask.estimatePomos === "number" ? pmTask.estimatePomos : (backendTask?.target_pomodoros ?? 0);
+        if (!Number.isFinite(estimate) || estimate <= EPSILON) continue;
+
+        let worked = backendTask?.completed_pomodoros ?? 0;
+        if (pmTask.workedPomos !== undefined) {
+            worked = Math.max(worked, pmTask.workedPomos);
+        }
+
+        const isActive = Boolean(pmTask.appTaskId) && pmTask.appTaskId === input.activeWorkTaskId;
+        if (isActive) {
+            worked = Math.max(worked, (backendTask?.completed_pomodoros ?? 0) + activeFraction);
+        }
+
+        const estimatedRemaining = estimate - worked;
+        const remaining = estimatedRemaining > EPSILON ? estimatedRemaining : 1;
+        const projectId = pmTask.projectId && input.projects[pmTask.projectId] ? pmTask.projectId : null;
+        eligible.push({
+            task: pmTask,
+            dueDate: pmTask.dueDate ?? null,
+            dueKey: parseDueDateKey(pmTask.dueDate),
+            projectId,
+            estimatePomos: estimate,
+            workedPomos: worked,
+            remainingPomodoros: remaining,
+            isActive,
+        });
+    }
+
+    return eligible;
+}
+
+function dueScopeFor(dueKey: string | null, todayKey: string, weekEndKey: string): DueScope {
+    if (!dueKey) return "unscheduled";
+    if (dueKey <= todayKey) return "due";
+    if (dueKey <= weekEndKey) return "thisWeek";
+    return "future";
+}
+
+/** Classify a due date into the same buckets `buildProjectionBacklogs` uses. */
+export function classifyDueScope(dueDate: string | null | undefined, reference: Date): DueScope {
+    return dueScopeFor(
+        parseDueDateKey(dueDate),
+        toLocalDateKey(reference),
+        getLocalWeekWindow(reference).endKey,
+    );
+}
+
 export interface ProjectionBacklog {
     totalPomodoros: number;
     dueTodayOrOverduePomodoros: number;
@@ -94,14 +182,14 @@ export function buildProjectionBacklogs(tasks: ProjectionBacklogTask[], referenc
 
     for (const task of tasks) {
         if (!Number.isFinite(task.remainingPomodoros) || task.remainingPomodoros <= EPSILON) continue;
-        const dueKey = parseDueDateKey(task.dueDate);
-        if (!dueKey) {
+        const scope = dueScopeFor(parseDueDateKey(task.dueDate), todayKey, weekEndKey);
+        if (scope === "unscheduled") {
             addToBacklog(daily, task, "unscheduled");
             addToBacklog(weekly, task, "unscheduled");
-        } else if (dueKey <= todayKey) {
+        } else if (scope === "due") {
             addToBacklog(daily, task, "due");
             addToBacklog(weekly, task, "due");
-        } else if (dueKey <= weekEndKey) {
+        } else if (scope === "thisWeek") {
             daily.excludedFuturePomodoros += task.remainingPomodoros;
             addToBacklog(weekly, task, "thisWeek");
         } else {
