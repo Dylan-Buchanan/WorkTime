@@ -27,6 +27,7 @@ import { PetActivityProvider } from "./state/PetActivityContext";
 import { PetReminderProvider } from "./state/PetReminderContext";
 import { PetProvider } from "./state/PetContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
+import { SupabaseLinearDataAccess } from "./lib/data/LinearDataAccess";
 import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataAccess";
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
 import { supabase } from "./lib/supabase";
@@ -111,6 +112,10 @@ const AuthenticatedIntegrationsRoute: React.FC = () => {
         () => new SupabaseShortcutDataAccess(supabase, session!.user.id),
         [session?.user.id],
     );
+    const linearDataAccess = useMemo(
+        () => new SupabaseLinearDataAccess(supabase, session!.user.id),
+        [session?.user.id],
+    );
     const googleCalendarDataAccess = useMemo(
         () => new SupabaseGoogleCalendarDataAccess(supabase, session!.user.id),
         [session?.user.id],
@@ -123,6 +128,7 @@ const AuthenticatedIntegrationsRoute: React.FC = () => {
     const projects = useMemo(() => Object.values(state.projects), [state.projects]);
     return <IntegrationsPage
         shortcut={{ dataAccess, currentTasks, projects, createTask }}
+        linear={{ dataAccess: linearDataAccess, currentTasks, projects, createTask }}
         googleCalendar={{ dataAccess: googleCalendarDataAccess }}
         github={{ dataAccess: githubDataAccess, currentTasks, projects, createTask }}
     />;

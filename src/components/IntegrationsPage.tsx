@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CalendarDays, GitPullRequest, Milestone, type LucideIcon } from "lucide-react";
+import { CalendarDays, GitPullRequest, Milestone, Workflow, type LucideIcon } from "lucide-react";
 import {
     integrationRegistry,
     type IntegrationAuthFlow,
@@ -7,6 +7,7 @@ import {
     type IntegrationIcon,
 } from "../lib/integrations";
 import { ShortcutIntegrationCard, type ShortcutIntegrationCardProps } from "./ShortcutIntegrationCard";
+import { LinearIntegrationCard, type LinearIntegrationCardProps } from "./LinearIntegrationCard";
 import { GoogleCalendarIntegrationCard, type GoogleCalendarIntegrationCardProps } from "./GoogleCalendarIntegrationCard";
 import { GithubIntegrationCard, type GithubIntegrationCardProps } from "./GithubIntegrationCard";
 
@@ -14,6 +15,7 @@ const ICONS: Record<IntegrationIcon, LucideIcon> = {
     calendar: CalendarDays,
     github: GitPullRequest,
     shortcut: Milestone,
+    linear: Workflow,
 };
 
 const AUTH_FLOW_LABELS: Record<IntegrationAuthFlow, string> = {
@@ -25,6 +27,7 @@ export interface IntegrationsPageProps {
     integrations?: readonly IntegrationDefinition[];
     renderActions?: (integration: IntegrationDefinition) => ReactNode;
     shortcut?: ShortcutIntegrationCardProps;
+    linear?: LinearIntegrationCardProps;
     googleCalendar?: GoogleCalendarIntegrationCardProps;
     github?: GithubIntegrationCardProps;
 }
@@ -33,6 +36,7 @@ export const IntegrationsPage = ({
     integrations = integrationRegistry,
     renderActions,
     shortcut,
+    linear,
     googleCalendar,
     github,
 }: IntegrationsPageProps) => (
@@ -47,6 +51,8 @@ export const IntegrationsPage = ({
                 <section className="grid gap-3 sm:grid-cols-2" aria-label="Available integrations">
                     {integrations.map((integration) => integration.id === "shortcut" && shortcut ? (
                         <ShortcutIntegrationCard key={integration.id} {...shortcut} />
+                    ) : integration.id === "linear" && linear ? (
+                        <LinearIntegrationCard key={integration.id} {...linear} />
                     ) : integration.id === "google-calendar" && googleCalendar ? (
                         <GoogleCalendarIntegrationCard key={integration.id} {...googleCalendar} />
                     ) : integration.id === "github" && github ? (

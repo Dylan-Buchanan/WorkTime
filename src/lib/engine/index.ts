@@ -48,6 +48,22 @@ export type {
     ShortcutStoryPayload,
     ShortcutTaskProposal,
 } from "./shortcutClassification";
+export {
+    buildLinearTaskProposal,
+    classifyLinearIssues,
+    describeLinearEmptyResult,
+    LINEAR_TAG_PREFIX,
+    linearIssueTag,
+    linearPriorityToTaskPriority,
+    normalizeLinearUrl,
+} from "./linearClassification";
+export type {
+    ClassifyLinearIssuesInput,
+    LinearClassificationCounts,
+    LinearClassificationResult,
+    LinearIssuePayload,
+    LinearTaskProposal,
+} from "./linearClassification";
 export type {
     StartOfDayPlanItem,
     StartOfDayPlanIssue,

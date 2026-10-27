@@ -7,6 +7,7 @@ describe("integrationRegistry", () => {
             "google-calendar",
             "github",
             "shortcut",
+            "linear",
         ]);
         expect(new Set(integrationRegistry.map((integration) => integration.id)).size).toBe(integrationRegistry.length);
     });
@@ -15,7 +16,7 @@ describe("integrationRegistry", () => {
         for (const integration of integrationRegistry) {
             expect(integration.name).not.toBe("");
             expect(integration.description).not.toBe("");
-            expect(["calendar", "github", "shortcut"]).toContain(integration.icon);
+            expect(["calendar", "github", "shortcut", "linear"]).toContain(integration.icon);
             expect(["oauth2", "api-token"]).toContain(integration.authFlow);
         }
         expect(integrationRegistry.filter((integration) => integration.isPlaceholder).map((integration) => integration.id)).toEqual([]);

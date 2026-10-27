@@ -9,13 +9,13 @@ describe("IntegrationsPage", () => {
 
         expect(screen.getByRole("heading", { name: "Integrations" })).toBeInTheDocument();
         const list = screen.getByRole("region", { name: "Available integrations" });
-        for (const name of ["GitHub", "Google Calendar", "Shortcut"]) {
+        for (const name of ["GitHub", "Google Calendar", "Shortcut", "Linear"]) {
             const card = within(list).getByRole("article", { name });
             expect(within(card).queryByText("Coming soon")).not.toBeInTheDocument();
             expect(within(card).getByText("Not connected")).toBeInTheDocument();
         }
         expect(within(list).getAllByText("OAuth 2.0")).toHaveLength(2);
-        expect(within(list).getByText("API token")).toBeInTheDocument();
+        expect(within(list).getAllByText("API token")).toHaveLength(2);
     });
 
     it("renders the bound Shortcut workflow in place of the generic card", async () => {
@@ -25,6 +25,16 @@ describe("IntegrationsPage", () => {
         render(<IntegrationsPage shortcut={{ dataAccess, currentTasks: [], projects: [], createTask: vi.fn() }} />);
 
         expect(await screen.findByLabelText("Shortcut API token")).toBeInTheDocument();
+        expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
+    });
+
+    it("renders the bound Linear workflow in place of the generic card", async () => {
+        const dataAccess = {
+            loadSettings: vi.fn().mockResolvedValue(null), connect: vi.fn(), updatePreferences: vi.fn(), disconnect: vi.fn(), sync: vi.fn(),
+        };
+        render(<IntegrationsPage linear={{ dataAccess, currentTasks: [], projects: [], createTask: vi.fn() }} />);
+
+        expect(await screen.findByLabelText("Linear API token")).toBeInTheDocument();
         expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
     });
 

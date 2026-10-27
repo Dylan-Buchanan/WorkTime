@@ -1,6 +1,6 @@
 export type IntegrationAuthFlow = "oauth2" | "api-token";
 
-export type IntegrationIcon = "calendar" | "github" | "shortcut";
+export type IntegrationIcon = "calendar" | "github" | "shortcut" | "linear";
 
 export interface IntegrationDefinition {
     id: string;
@@ -33,6 +33,14 @@ export const integrationRegistry = [
         name: "Shortcut",
         description: "Link stories and iterations to projects so planned work stays aligned with your team.",
         icon: "shortcut",
+        authFlow: "api-token",
+        isPlaceholder: false,
+    },
+    {
+        id: "linear",
+        name: "Linear",
+        description: "Bring issues assigned to you in Linear into your WorkTime backlog with a reviewed preview.",
+        icon: "linear",
         authFlow: "api-token",
         isPlaceholder: false,
     },
