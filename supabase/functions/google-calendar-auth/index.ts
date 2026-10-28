@@ -1,11 +1,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { GoogleCalendarScopeLevel } from "../_shared/googleCalendarTypes.ts";
+import { authorizeGoogleConnection } from "./googleConnectionAuthorization.ts";
 import {
     buildGoogleAuthorizationUrl,
     createCodeChallenge,
     createCodeVerifier,
     createOAuthState,
-    exchangeGoogleAuthorizationCode,
     GoogleOAuthError,
     hashOAuthState,
     validateReturnUrl,
@@ -73,10 +73,24 @@ Deno.serve(async (request) => {
         if (userError || !userData.user) return jsonResponse({ error: "Authentication required", code: "AUTH_REQUIRED" }, 401);
 
         let body: Record<string, unknown>;
-        try { body = await request.json(); } catch { body = {}; }
+        try {
+            const parsed = await request.json();
+            body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch { body = {}; }
         const requestedScope = scopeLevel(body.scope_level);
         if (body.action !== "start" || !requestedScope || typeof body.return_to !== "string") {
             return jsonResponse({ error: "Invalid authorization request", code: "INVALID_REQUEST" }, 400);
+        }
+        let connectionId: string | null = null;
+        if (body.connection_id !== undefined) {
+            if (typeof body.connection_id !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(body.connection_id)) {
+                return jsonResponse({ error: "Invalid connection ID", code: "INVALID_REQUEST" }, 400);
+            }
+            const { data: connection, error } = await supabase.from("google_calendar_connections").select("id")
+                .eq("owner_id", userData.user.id).eq("id", body.connection_id).maybeSingle();
+            if (error) return jsonResponse({ error: "Unable to load Google connection", code: "INTEGRATION_UNAVAILABLE" }, 500);
+            if (!connection) return jsonResponse({ error: "Google connection was not found", code: "GOOGLE_CONNECTION_NOT_FOUND" }, 404);
+            connectionId = connection.id;
         }
         let returnTo: URL;
         try { returnTo = validateReturnUrl(body.return_to, env.allowedOrigins); }
@@ -106,6 +120,7 @@ Deno.serve(async (request) => {
         const { error: stateError } = await supabase.from("google_calendar_oauth_states").insert({
             state_hash: stateHash,
             owner_id: userData.user.id,
+            connection_id: connectionId,
             code_verifier: verifier,
             requested_scope_level: requestedScope,
             return_to: returnTo.toString(),
@@ -134,7 +149,7 @@ Deno.serve(async (request) => {
         .from("google_calendar_oauth_states")
         .delete()
         .eq("state_hash", stateHash)
-        .select("owner_id, code_verifier, requested_scope_level, return_to, pending_task_id, pending_scheduled_start, expires_at")
+        .select("owner_id, connection_id, code_verifier, requested_scope_level, return_to, pending_task_id, pending_scheduled_start, expires_at")
         .maybeSingle();
     if (stateError || !oauthState) return jsonResponse({ error: "OAuth state is invalid or expired", code: "INVALID_REQUEST" }, 400);
     const returnTo = String(oauthState.return_to);
@@ -147,36 +162,53 @@ Deno.serve(async (request) => {
     const code = requestUrl.searchParams.get("code");
     if (!code) return redirectWith(returnTo, { google_calendar_error: "OAUTH_CODE_MISSING" });
 
-    const { data: existing } = await supabase
-        .from("google_calendar_settings")
-        .select("refresh_token")
-        .eq("owner_id", oauthState.owner_id)
-        .maybeSingle();
     try {
-        const token = await exchangeGoogleAuthorizationCode({
+        const { data: connections, error: connectionsError } = await supabase.from("google_calendar_connections")
+            .select("*").eq("owner_id", oauthState.owner_id).order("connected_at").order("id");
+        if (connectionsError) throw new GoogleOAuthError("CONNECTION_SAVE_FAILED", 500, "Unable to load Google connections");
+        const { token, connectionId, identity, primaryCalendarId } = await authorizeGoogleConnection({
+            connections: connections ?? [], targetConnectionId: oauthState.connection_id,
+            persistIdentity: async (connection) => {
+                const { error } = await supabase.from("google_calendar_connections").update({
+                    primary_calendar_id: connection.primary_calendar_id, identity_source: connection.identity_source,
+                }).eq("owner_id", oauthState.owner_id).eq("id", connection.id).is("google_account_id", null);
+                if (error) throw new GoogleOAuthError("CONNECTION_SAVE_FAILED", 500, "Unable to save legacy identity");
+            },
             code,
             codeVerifier: String(oauthState.code_verifier),
             clientId: env.clientId,
             clientSecret: env.clientSecret,
             redirectUri: env.redirectUri,
-            existingRefreshToken: typeof existing?.refresh_token === "string" ? existing.refresh_token : null,
         });
-        const { error: saveError } = await supabase.rpc("save_google_calendar_connection", {
+        const { data: savedId, error: saveError } = await supabase.rpc("save_google_calendar_connection", {
             p_owner_id: oauthState.owner_id,
+            p_connection_id: connectionId,
+            p_google_account_id: identity.sub,
+            p_google_account_email: identity.email,
+            p_primary_calendar_id: primaryCalendarId,
             p_refresh_token: token.refreshToken,
             p_scope_level: token.scopeLevel,
         });
-        if (saveError) return redirectWith(returnTo, { google_calendar_error: "CONNECTION_SAVE_FAILED" });
+        if (saveError) {
+            const code = ["GOOGLE_ACCOUNT_LIMIT_REACHED", "GOOGLE_CONNECTION_NOT_FOUND", "GOOGLE_ACCOUNT_MISMATCH"]
+                .find((value) => saveError.message === value) ?? "CONNECTION_SAVE_FAILED";
+            return redirectWith(returnTo, { google_calendar_error: code });
+        }
+        if (typeof savedId !== "string" || !savedId.trim()) {
+            throw new GoogleOAuthError("CONNECTION_SAVE_FAILED", 500, "Google connection was not saved");
+        }
         if (oauthState.requested_scope_level === "schedule" && token.scopeLevel !== "schedule") {
             return redirectWith(returnTo, {
                 google_calendar: "connected",
                 google_calendar_scope: token.scopeLevel,
+                connection_id: String(savedId),
                 google_calendar_error: "SCHEDULE_SCOPE_DENIED",
             });
         }
         return redirectWith(returnTo, {
             google_calendar: "connected",
             google_calendar_scope: token.scopeLevel,
+            connection_id: String(savedId),
             pending_task_id: oauthState.pending_task_id ?? undefined,
             pending_scheduled_start: oauthState.pending_scheduled_start
                 ? new Date(oauthState.pending_scheduled_start).toISOString()

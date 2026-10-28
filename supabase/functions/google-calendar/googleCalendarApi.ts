@@ -19,7 +19,7 @@ export class GoogleCalendarApiError extends Error {
     }
 }
 
-interface GoogleCalendarRecord {
+export interface GoogleCalendarRecord {
     id: string;
     summary: string;
     description?: string;
@@ -253,14 +253,31 @@ export async function fetchGoogleCalendarEvents(input: {
     return events.sort((left, right) => left.start.localeCompare(right.start) || left.title.localeCompare(right.title));
 }
 
+// Strict compatibility wrapper used by API contract tests; production fan-out uses per-calendar results.
 export async function fetchGoogleBusyIntervals(input: {
     accessToken: string;
     calendarIds: readonly string[];
     timeMin: string;
     timeMax: string;
 }, fetcher: Fetcher = fetch): Promise<GoogleCalendarInterval[]> {
+    const results = await fetchGoogleBusyCalendars(input, fetcher);
+    const intervals = [...results.values()].flatMap((result) => {
+        if (result.error) throw result.error;
+        return result.intervals;
+    });
+    return mergeIntervals(intervals, input.timeMin, input.timeMax);
+}
+
+// Keep a rejected calendar separate from its siblings so the connection fan-out
+// can retry it with a different credential without discarding successful reads.
+export async function fetchGoogleBusyCalendars(input: {
+    accessToken: string;
+    calendarIds: readonly string[];
+    timeMin: string;
+    timeMax: string;
+}, fetcher: Fetcher = fetch): Promise<Map<string, { intervals: GoogleCalendarInterval[]; error?: unknown }>> {
     const calendarIds = [...new Set(input.calendarIds.map((value) => value.trim()).filter(Boolean))];
-    if (calendarIds.length === 0) return [];
+    if (calendarIds.length === 0) return new Map();
     if (calendarIds.length > 50) throw new GoogleCalendarApiError("GOOGLE_CALENDAR_SELECTION_INVALID", 400, "Select at most 50 calendars");
     const freeBusy = await responseJson(await googleRequest(input.accessToken, "/freeBusy", {
         method: "POST",
@@ -275,19 +292,22 @@ export async function fetchGoogleBusyIntervals(input: {
         ? freeBusy.calendars as Record<string, unknown>
         : null;
     if (!calendars) throw new GoogleCalendarApiError("GOOGLE_INVALID_RESPONSE", 502, "Google returned invalid free/busy data");
-    const calendarsWithBusy = calendarIds.filter((id) => {
-        const entry = calendars[id];
-        if (!entry || typeof entry !== "object") throw new GoogleCalendarApiError("GOOGLE_CALENDAR_SELECTION_INVALID", 409, "A selected calendar is unavailable");
-        const record = entry as Record<string, unknown>;
-        if (Array.isArray(record.errors) && record.errors.length) {
-            throw new GoogleCalendarApiError("GOOGLE_CALENDAR_SELECTION_INVALID", 409, "A selected calendar is unavailable");
+    return new Map(await Promise.all(calendarIds.map(async (id): Promise<[string, { intervals: GoogleCalendarInterval[]; error?: unknown }]> => {
+        try {
+            const entry = calendars[id];
+            if (!entry || typeof entry !== "object") throw new GoogleCalendarApiError("GOOGLE_CALENDAR_SELECTION_INVALID", 409, "A selected calendar is unavailable");
+            const record = entry as Record<string, unknown>;
+            if (Array.isArray(record.errors) && record.errors.length) {
+                throw new GoogleCalendarApiError("GOOGLE_CALENDAR_SELECTION_INVALID", 409, "A selected calendar is unavailable");
+            }
+            if (!Array.isArray(record.busy)) throw new GoogleCalendarApiError("GOOGLE_INVALID_RESPONSE", 502, "Google returned invalid free/busy data");
+            const intervals = record.busy.length
+                ? await listTimedBusyEvents(input.accessToken, id, input.timeMin, input.timeMax, fetcher) : [];
+            return [id, { intervals: mergeIntervals(intervals, input.timeMin, input.timeMax) }];
+        } catch (error) {
+            return [id, { intervals: [], error }];
         }
-        return Array.isArray(record.busy) && record.busy.length > 0;
-    });
-    const intervals = (await Promise.all(calendarsWithBusy.map((calendarId) =>
-        listTimedBusyEvents(input.accessToken, calendarId, input.timeMin, input.timeMax, fetcher)
-    ))).flat();
-    return mergeIntervals(intervals, input.timeMin, input.timeMax);
+    })));
 }
 
 export async function getGoogleCalendar(

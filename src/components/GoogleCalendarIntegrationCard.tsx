@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarDays, ChevronDown, RefreshCw, X } from "lucide-react";
 import type {
     GoogleCalendarChoice,
+    GoogleCalendarConnection,
     GoogleCalendarDataAccess,
     GoogleCalendarEvent,
     GoogleCalendarSettings,
@@ -55,6 +56,8 @@ export const GoogleCalendarIntegrationCard = ({
     dataAccess,
     navigateTo = (url) => window.location.assign(url),
 }: GoogleCalendarIntegrationCardProps) => {
+    const [connections, setConnections] = useState<GoogleCalendarConnection[]>([]);
+    const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
     const [settings, setSettings] = useState<GoogleCalendarSettings | null>(null);
     const [calendars, setCalendars] = useState<GoogleCalendarChoice[]>([]);
     const [events, setEvents] = useState<GoogleCalendarEvent[]>([]);
@@ -67,6 +70,8 @@ export const GoogleCalendarIntegrationCard = ({
     const [errorCode, setErrorCode] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const rootRef = useRef<HTMLDivElement>(null);
+    const preferenceConnection = connections.find((connection) => connection.connectionId === editingConnectionId) ?? settings;
+    const visibleCalendars = calendars.filter((calendar) => !preferenceConnection?.connectionId || calendar.connectionId === preferenceConnection.connectionId);
     const now = new Date();
     const week = currentWeek(now);
 
@@ -102,7 +107,8 @@ export const GoogleCalendarIntegrationCard = ({
         const returned = consumeGoogleCalendarOAuthReturn();
         if (returned?.errorCode) setNotice(`Google authorization did not complete (${returned.errorCode}).`);
         else if (returned?.connected) setNotice("Google Calendar connected.");
-        void dataAccess.loadSettings().then((value) => {
+        void Promise.all([dataAccess.loadSettings(), dataAccess.loadConnections()]).then(([value, accounts]) => {
+            setConnections(accounts ?? []);
             if (!active) return;
             setSettings(value);
             setSelected(value?.selectedCalendarIds ?? []);
@@ -136,13 +142,13 @@ export const GoogleCalendarIntegrationCard = ({
         };
     }, [open]);
 
-    async function connect() {
+    async function connect(addAccount = false, account = settings) {
         setBusy(true);
         setError(null);
         setErrorCode(null);
         try {
             const returnTo = `${window.location.origin}${window.location.pathname}`;
-            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", returnTo }));
+            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: addAccount ? "readonly" : account?.scopeLevel ?? "readonly", ...(!addAccount && account?.connectionId ? { connectionId: account.connectionId } : {}), returnTo }));
         } catch (reason) {
             setError(message(reason));
             setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
@@ -156,8 +162,10 @@ export const GoogleCalendarIntegrationCard = ({
         setErrorCode(null);
         setNotice(null);
         try {
-            await dataAccess.updateSelectedCalendars(selected);
-            const next = await dataAccess.loadSettings();
+            if (preferenceConnection?.connectionId) await dataAccess.updateSelectedCalendars(selected, preferenceConnection.connectionId);
+            else await dataAccess.updateSelectedCalendars(selected);
+            const [next, accounts] = await Promise.all([dataAccess.loadSettings(), dataAccess.loadConnections()]);
+            setConnections(accounts ?? []);
             setSettings(next);
             setSelected(next?.selectedCalendarIds ?? []);
             setNotice("Calendar selection saved.");
@@ -170,22 +178,54 @@ export const GoogleCalendarIntegrationCard = ({
         finally { setBusy(false); }
     }
 
-    async function disconnect() {
-        if (!window.confirm("Disconnect Google Calendar? Existing WorkTime calendar events will remain in Google.")) return;
+    async function refreshAccounts() {
+        const [next, accounts] = await Promise.all([dataAccess.loadSettings(), dataAccess.loadConnections()]);
+        setSettings(next);
+        setConnections(accounts ?? []);
+        setSelected(next?.selectedCalendarIds ?? []);
+        setEditingConnectionId(next?.connectionId ?? null);
+        setOpen(false);
+        if (next) { await loadCalendars(); await loadEvents(); }
+        else { setCalendars([]); setEvents([]); }
+    }
+
+    async function disconnect(connectionId?: string) {
+        if (!window.confirm(connectionId
+            ? "Disconnect this Google account? Existing WorkTime calendar events will remain in Google."
+            : "Disconnect ALL Google accounts? Existing WorkTime calendar events will remain in Google.")) return;
         setBusy(true);
         setError(null);
         setErrorCode(null);
         try {
-            await dataAccess.disconnect();
-            setSettings(null);
-            setCalendars([]);
-            setEvents([]);
-            setSelected([]);
-            setNotice("Google Calendar disconnected. Existing Google events were left in place.");
-        } catch (reason) {
-            setError(message(reason));
-            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
-        }
+            await dataAccess.disconnect(connectionId);
+            await refreshAccounts();
+            setNotice("Google account disconnected. Existing Google events were left in place.");
+        } catch (reason) { setError(message(reason)); }
+        finally { setBusy(false); }
+    }
+
+    async function switchTarget(connectionId: string) {
+        setBusy(true);
+        setError(null);
+        try { await dataAccess.setSchedulingConnection(connectionId); await refreshAccounts(); }
+        catch (reason) { setError(message(reason)); }
+        finally { setBusy(false); }
+    }
+
+    async function openPicker(connectionId?: string) {
+        if (open && !connectionId) { setOpen(false); return; }
+        setBusy(true);
+        setError(null);
+        try {
+            const [next, accounts] = await Promise.all([dataAccess.loadSettings(), dataAccess.loadConnections()]);
+            setSettings(next);
+            setConnections(accounts ?? []);
+            const account = connectionId ? accounts?.find((value) => value.connectionId === connectionId) : next;
+            if (!account) throw new Error("Google account was disconnected. Refresh and try again.");
+            setEditingConnectionId(account.connectionId ?? null);
+            setSelected(account.selectedCalendarIds);
+            setOpen(true);
+        } catch (reason) { setError(message(reason)); }
         finally { setBusy(false); }
     }
 
@@ -206,7 +246,7 @@ export const GoogleCalendarIntegrationCard = ({
                     </div>
                     <p className="mt-1 text-[11px] leading-relaxed text-neutral-400">Selected calendars shape your Start-of-Day budget. WorkTime schedules a task only when you explicitly push it.</p>
                 </div>
-                {settings && <button type="button" aria-label="Disconnect Google Calendar" onClick={() => void disconnect()} disabled={busy} className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200 disabled:opacity-50"><X size={15} /></button>}
+                {settings && <button type="button" aria-label="Disconnect all Google accounts" onClick={() => void disconnect()} disabled={busy} className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200 disabled:opacity-50"><X size={15} /></button>}
             </div>
 
             {loading ? <p role="status" className="mt-5 text-[10px] text-neutral-500">Loading Google Calendar…</p> : !settings ? (
@@ -215,6 +255,16 @@ export const GoogleCalendarIntegrationCard = ({
                 </div>
             ) : (
                 <div className="mt-4 border-t border-neutral-800 pt-3">
+                    <ul aria-label="Connected Google accounts" className="mb-3 space-y-2 text-[10px] text-neutral-300">
+                        {connections.map((account) => <li key={account.connectionId} className="flex flex-wrap items-center gap-2">
+                            <span>{account.accountEmail ?? account.primaryCalendarId ?? "Legacy Google account"}</span>
+                            {account.isSchedulingTarget ? <span>Scheduling account</span> : <button type="button" disabled={busy} onClick={() => void switchTarget(account.connectionId)}>Use for scheduling</button>}
+                            <button type="button" disabled={busy} onClick={() => void openPicker(account.connectionId)}>Calendars</button>
+                            <button type="button" disabled={busy} onClick={() => void connect(false, account)}>Reconnect account</button>
+                            <button type="button" disabled={busy} onClick={() => void disconnect(account.connectionId)}>Disconnect account</button>
+                        </li>)}
+                    </ul>
+                    <button type="button" disabled={busy || connections.length >= 5} onClick={() => void connect(true)} className="mb-3 text-[10px] text-neutral-200">Add Google account</button>
                     <div className="mb-3 flex items-center justify-between gap-2">
                         <div>
                             <p className="text-[10px] font-medium text-neutral-200">This week</p>
@@ -239,7 +289,7 @@ export const GoogleCalendarIntegrationCard = ({
                                         {dateEvents.map((event) => {
                                             const eventPassed = eventHasPassed(event, now);
                                             return (
-                                                <article key={event.id} data-past={eventPassed || undefined} className={`rounded border px-1.5 py-1 ${eventPassed ? "border-neutral-800 bg-neutral-950/70 opacity-55" : "border-neutral-700 bg-neutral-900"}`}>
+                                                <article key={`${event.connectionId ?? ""}:${event.id}`} data-past={eventPassed || undefined} className={`rounded border px-1.5 py-1 ${eventPassed ? "border-neutral-800 bg-neutral-950/70 opacity-55" : "border-neutral-700 bg-neutral-900"}`}>
                                                     <p className={`truncate text-[9px] font-medium ${eventPassed ? "text-neutral-500 line-through decoration-neutral-700" : "text-neutral-200"}`} title={event.title}>{event.title}</p>
                                                     <p className={`mt-0.5 truncate text-[8px] ${eventPassed ? "text-neutral-700" : "text-neutral-500"}`}>{eventTime(event)}</p>
                                                 </article>
@@ -255,7 +305,7 @@ export const GoogleCalendarIntegrationCard = ({
                     <div ref={rootRef} className="relative">
                         <button
                             type="button"
-                            onClick={() => setOpen((value) => !value)}
+                            onClick={() => void openPicker()}
                             aria-haspopup="dialog"
                             aria-expanded={open}
                             aria-controls="google-calendar-picker"
@@ -278,15 +328,15 @@ export const GoogleCalendarIntegrationCard = ({
                                     <button type="button" onClick={() => void loadCalendars()} disabled={busy} aria-label="Refresh calendar list" className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-50"><RefreshCw size={11} /></button>
                                 </div>
                                 <div className="max-h-40 overflow-y-auto pr-0.5">
-                                    {calendars.length === 0 ? <p className="px-2 py-3 text-[10px] text-neutral-500">No readable calendars found.</p> : calendars.map((calendar) => (
-                                        <label key={calendar.id} className="flex min-w-0 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[10px] hover:bg-neutral-800/70">
+                                    {visibleCalendars.length === 0 ? <p className="px-2 py-3 text-[10px] text-neutral-500">No readable calendars found.</p> : visibleCalendars.map((calendar) => (
+                                        <label key={`${calendar.connectionId ?? ""}:${calendar.id}`} className="flex min-w-0 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[10px] hover:bg-neutral-800/70">
                                             <input type="checkbox" checked={selected.includes(calendar.id)} onChange={() => toggle(calendar.id)} disabled={busy || (!selected.includes(calendar.id) && selected.length >= 50)} />
                                             <span className="truncate">{calendar.summary}{calendar.primary ? " (primary)" : ""}</span>
                                         </label>
                                     ))}
                                 </div>
                                 <div className="mt-1.5 flex items-center justify-end gap-2 border-t border-neutral-800 pt-1.5">
-                                    <button type="button" onClick={() => { setOpen(false); setSelected(settings.selectedCalendarIds); }} disabled={busy} className="rounded px-2 py-1 text-[10px] text-neutral-400 hover:text-neutral-100 disabled:opacity-50">Cancel</button>
+                                    <button type="button" onClick={() => { setOpen(false); setSelected(preferenceConnection?.selectedCalendarIds ?? []); }} disabled={busy} className="rounded px-2 py-1 text-[10px] text-neutral-400 hover:text-neutral-100 disabled:opacity-50">Cancel</button>
                                     <button type="button" onClick={() => void saveSelection()} disabled={busy} className="rounded bg-neutral-100 px-3 py-1 text-[10px] font-medium text-neutral-950 disabled:opacity-50">{busy ? "Saving…" : "Save"}</button>
                                 </div>
                             </div>

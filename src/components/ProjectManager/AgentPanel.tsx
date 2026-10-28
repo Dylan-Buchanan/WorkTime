@@ -288,7 +288,7 @@ export const AgentPanel: React.FC<{
         try {
             const settings = await googleCalendarDataAccess.loadSettings();
             const returnTo = `${window.location.origin}${window.location.pathname}`;
-            navigateTo(await googleCalendarDataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", returnTo }));
+            navigateTo(await googleCalendarDataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", ...(settings?.connectionId ? { connectionId: settings.connectionId } : {}), returnTo }));
         } catch (error) {
             showGenerationError(error instanceof Error ? error.message : "Unable to begin Google authorization.", error);
             setCalendarReconnecting(false);

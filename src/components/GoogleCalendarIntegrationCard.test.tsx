@@ -6,6 +6,7 @@ import { GoogleCalendarIntegrationCard } from "./GoogleCalendarIntegrationCard";
 
 function access(overrides: Partial<GoogleCalendarDataAccess> = {}): GoogleCalendarDataAccess {
     return {
+        loadConnections: vi.fn().mockResolvedValue([]), setSchedulingConnection: vi.fn(),
         loadSettings: vi.fn().mockResolvedValue(null),
         beginAuthorization: vi.fn().mockResolvedValue("https://accounts.google.com/o/oauth2/v2/auth?state=safe"),
         listCalendars: vi.fn().mockResolvedValue([]),
@@ -64,7 +65,7 @@ describe("GoogleCalendarIntegrationCard", () => {
             ]),
         });
         render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
-        expect(await screen.findByText("Connected — can schedule")).toBeInTheDocument();
+        expect(await screen.findByText(/Connected.*can schedule/)).toBeInTheDocument();
         expect(screen.queryByLabelText(/Team/)).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /busy-time calendars/i }));
         fireEvent.click(await screen.findByLabelText(/Team/));
@@ -132,11 +133,54 @@ describe("GoogleCalendarIntegrationCard", () => {
             ]),
         });
         render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
-        await screen.findByText("Connected — read only");
+        await screen.findByText(/Connected.*read only/);
         fireEvent.click(screen.getByRole("button", { name: /busy-time calendars/i }));
         expect(await screen.findByLabelText(/Personal/)).toBeInTheDocument();
         fireEvent.keyDown(document, { key: "Escape" });
-        expect(screen.queryByLabelText(/Personal/)).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByLabelText(/Personal/)).not.toBeInTheDocument());
         expect(dataAccess.updateSelectedCalendars).not.toHaveBeenCalled();
+    });
+    it("manages two accounts and keeps shared calendar selection scoped to the chosen account", async () => {
+        const base = { scopeLevel: "schedule" as const, selectedCalendarIds: ["shared"], worktimeCalendarId: null,
+            connectedAt: "2026-01-01", updatedAt: "2026-01-01", accountId: "sub", primaryCalendarId: "primary", identitySource: "userinfo" as const };
+        const a = { ...base, connectionId: "a", accountEmail: "a@example.com", isSchedulingTarget: true };
+        const b = { ...base, connectionId: "b", accountEmail: "b@example.com", isSchedulingTarget: false, selectedCalendarIds: [] };
+        const dataAccess = access({ loadSettings: vi.fn().mockResolvedValue(a), loadConnections: vi.fn().mockResolvedValue([a, b]),
+            listCalendars: vi.fn().mockResolvedValue([
+                { id: "shared", connectionId: "a", summary: "Shared via A", primary: false, selected: true, accessRole: "owner" },
+                { id: "shared", connectionId: "b", summary: "Shared via B", primary: false, selected: true, accessRole: "reader" },
+            ]) });
+        const navigateTo = vi.fn();
+        render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} navigateTo={navigateTo} />);
+        await screen.findByText("b@example.com");
+        fireEvent.click(screen.getAllByRole("button", { name: "Calendars" })[1]);
+        const checkbox = await screen.findByLabelText("Shared via B");
+        expect(checkbox).not.toBeChecked();
+        expect(screen.queryByLabelText("Shared via A")).not.toBeInTheDocument();
+        fireEvent.click(checkbox);
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(dataAccess.updateSelectedCalendars).toHaveBeenCalledWith(["shared"], "b"));
+        await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: "Use for scheduling" }));
+        await waitFor(() => expect(dataAccess.setSchedulingConnection).toHaveBeenCalledWith("b"));
+        await waitFor(() => expect(screen.getByRole("button", { name: "Add Google account" })).toBeEnabled());
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        fireEvent.click(screen.getAllByRole("button", { name: "Disconnect account" })[1]);
+        await waitFor(() => expect(dataAccess.disconnect).toHaveBeenCalledWith("b"));
+        await waitFor(() => expect(screen.getByRole("button", { name: "Add Google account" })).toBeEnabled());
+        fireEvent.click(screen.getByRole("button", { name: "Add Google account" }));
+        await waitFor(() => expect(dataAccess.beginAuthorization).toHaveBeenCalledWith({ scopeLevel: "readonly", returnTo: expect.any(String) }));
+    });
+
+    it("refreshes the scheduling account before opening its preferences", async () => {
+        const base = { scopeLevel: "readonly" as const, selectedCalendarIds: [], worktimeCalendarId: null, connectedAt: "2026-01-01", updatedAt: "2026-01-01" };
+        const dataAccess = access({ loadSettings: vi.fn().mockResolvedValueOnce({ ...base, connectionId: "old" }).mockResolvedValue({ ...base, connectionId: "new" }),
+            listCalendars: vi.fn().mockResolvedValue([{ id: "new-calendar", connectionId: "new", summary: "New account calendar", primary: false, selected: true, accessRole: "owner" }]) });
+        render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
+        await screen.findByText(/Connected.*read only/);
+        fireEvent.click(screen.getByRole("button", { name: /busy-time calendars/i }));
+        fireEvent.click(await screen.findByLabelText("New account calendar"));
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(dataAccess.updateSelectedCalendars).toHaveBeenCalledWith(["new-calendar"], "new"));
     });
 });

@@ -102,6 +102,7 @@ describe("security-definer RPC privileges", () => {
     it("denies anonymous Google Calendar preference writes", async () => {
         const client = anonymousClient();
         await expectPermissionDenied(client.rpc("update_google_calendar_preferences", {
+            p_connection_id: "00000000-0000-0000-0000-000000000000",
             p_selected_calendar_ids: ["primary"],
         }));
     });
@@ -123,6 +124,10 @@ describe("security-definer RPC privileges", () => {
         const client = anonymousClient();
         await expectPermissionDenied(client.rpc("save_google_calendar_connection", {
             p_owner_id: "00000000-0000-0000-0000-000000000000",
+            p_connection_id: null,
+            p_google_account_id: "not-authorized",
+            p_google_account_email: null,
+            p_primary_calendar_id: null,
             p_refresh_token: "not-authorized",
             p_scope_level: "readonly",
         }));
@@ -134,6 +139,11 @@ describe("security-definer RPC privileges", () => {
             p_token: "not-authorized",
             p_github_username: "not-authorized",
         }));
+    });
+
+    it("denies anonymous Google target changes and connection deletion", async () => {
+        await expectPermissionDenied(anonymousClient().rpc("set_google_calendar_scheduling_connection", { p_connection_id: "00000000-0000-0000-0000-000000000000" }));
+        await expectPermissionDenied(anonymousClient().rpc("delete_google_calendar_connections", { p_owner_id: "00000000-0000-0000-0000-000000000000", p_connection_id: null }));
     });
 
     it("denies anonymous GitHub repository preference writes", async () => {

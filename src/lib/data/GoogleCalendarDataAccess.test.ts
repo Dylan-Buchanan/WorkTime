@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { SupabaseGoogleCalendarDataAccess } from "./GoogleCalendarDataAccess";
 
 function clientMock(options: { settings?: unknown; link?: unknown; invokeData?: unknown; invokeError?: unknown } = {}) {
-    const settingsSingle = vi.fn().mockResolvedValue({ data: options.settings ?? null, error: null });
+    const settingsSingle = vi.fn().mockResolvedValue({ data: Array.isArray(options.settings) ? options.settings : options.settings ? [options.settings] : [], error: null });
     const linkSingle = vi.fn().mockResolvedValue({ data: options.link ?? null, error: null });
-    const settingsEq = vi.fn(() => ({ maybeSingle: settingsSingle }));
+    const settingsEq = vi.fn(() => ({ order: () => ({ order: settingsSingle }) }));
     const taskEq = vi.fn(() => ({ maybeSingle: linkSingle }));
     const ownerEq = vi.fn(() => ({ eq: taskEq, maybeSingle: settingsSingle }));
     const select = vi.fn((columns: string) => ({ eq: columns.includes("scope_level") ? settingsEq : ownerEq }));
@@ -16,6 +16,7 @@ function clientMock(options: { settings?: unknown; link?: unknown; invokeData?: 
 }
 
 const linkRow = {
+    connection_id: "connection-1",
     task_id: "task-1", calendar_id: "calendar-1", event_id: "event-1",
     scheduled_start: "2026-08-29T14:00:00.000Z", scheduled_end: "2026-08-29T15:15:00.000Z",
     estimate_pomos: 3, work_minutes: 25, updated_at: "2026-08-29T13:00:00.000Z",
@@ -24,14 +25,54 @@ const linkRow = {
 describe("SupabaseGoogleCalendarDataAccess", () => {
     it("loads only public settings fields for the bound owner", async () => {
         const mocks = clientMock({ settings: {
+            id: "connection-1", google_account_id: "sub-1", google_account_email: "a@example.com", primary_calendar_id: "primary",
+            identity_source: "userinfo", is_scheduling_target: true,
             scope_level: "readonly", selected_calendar_ids: ["primary"], worktime_calendar_id: null,
             connected_at: "2026-08-29T12:00:00.000Z", updated_at: "2026-08-29T12:00:00.000Z",
         } });
         const access = new SupabaseGoogleCalendarDataAccess(mocks.client, "owner-1");
         await expect(access.loadSettings()).resolves.toMatchObject({ scopeLevel: "readonly", selectedCalendarIds: ["primary"] });
-        expect(mocks.select).toHaveBeenCalledWith("scope_level, selected_calendar_ids, worktime_calendar_id, connected_at, updated_at");
+        expect(mocks.select).toHaveBeenCalledWith("id, google_account_id, google_account_email, primary_calendar_id, scope_level, selected_calendar_ids, worktime_calendar_id, is_scheduling_target, identity_source, connected_at, updated_at");
         expect(mocks.select.mock.calls[0][0]).not.toContain("refresh_token");
         expect(mocks.settingsEq).toHaveBeenCalledWith("owner_id", "owner-1");
+    });
+
+    it("uses the scheduling connection for the existing settings/preferences contract", async () => {
+        const base = { google_account_id: null, google_account_email: null, primary_calendar_id: null, identity_source: "legacy",
+            scope_level: "readonly", selected_calendar_ids: [], worktime_calendar_id: null, connected_at: "2026-01-01", updated_at: "2026-01-01" };
+        const mocks = clientMock({ settings: [{ ...base, id: "oldest", is_scheduling_target: false }, { ...base, id: "target", is_scheduling_target: true }] });
+        const access = new SupabaseGoogleCalendarDataAccess(mocks.client, "owner-1");
+        await expect(access.loadConnections()).resolves.toHaveLength(2);
+        await expect(access.loadSettings()).resolves.toMatchObject({ connectionId: "target" });
+        await access.updateSelectedCalendars([" primary ", "primary"]);
+        expect(mocks.rpc).toHaveBeenCalledWith("update_google_calendar_preferences", { p_connection_id: "target", p_selected_calendar_ids: ["primary"] });
+        await access.updateSelectedCalendars(["team"], "oldest");
+        expect(mocks.rpc).toHaveBeenCalledWith("update_google_calendar_preferences", { p_connection_id: "oldest", p_selected_calendar_ids: ["team"] });
+        await access.setSchedulingConnection("oldest");
+        expect(mocks.rpc).toHaveBeenCalledWith("set_google_calendar_scheduling_connection", { p_connection_id: "oldest" });
+    });
+
+    it("passes targeted upgrades/disconnects and preserves busy source attribution", async () => {
+        const mocks = clientMock({ invokeData: { authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?state=safe" } });
+        const access = new SupabaseGoogleCalendarDataAccess(mocks.client, "owner-1");
+        await access.beginAuthorization({ scopeLevel: "schedule", connectionId: "connection-1", returnTo: "https://worktime.test/" });
+        expect(mocks.invoke).toHaveBeenCalledWith("google-calendar-auth", { method: "POST", body: expect.objectContaining({ connection_id: "connection-1" }) });
+        await access.disconnect("connection-1");
+        expect(mocks.invoke).toHaveBeenCalledWith("google-calendar", { method: "POST", body: { action: "disconnect", connection_id: "connection-1" } });
+        const bounds = { start: "2026-10-27T14:00:00.000Z", end: "2026-10-27T14:30:00.000Z" };
+        mocks.invoke.mockResolvedValue({ error: null, data: { intervals: [bounds], refreshed_at: bounds.start,
+            blocks: [{ ...bounds, connection_id: "connection-1", account_email: null, calendar_id: "primary" }],
+            sources: [{ connection_id: "connection-1", account_email: null, calendar_count: 1, busy_minutes: 30, error_code: null }],
+        } });
+        await expect(access.fetchBusyIntervals({ timeMin: bounds.start, timeMax: bounds.end })).resolves.toMatchObject({
+            blocks: [{ ...bounds, connectionId: "connection-1", accountEmail: null, calendarId: "primary" }],
+            sources: [{ connectionId: "connection-1", busyMinutes: 30, calendarCount: 1, errorCode: null }],
+        });
+    });
+
+    it.each(["GOOGLE_CONNECTION_NOT_FOUND", "GOOGLE_ACCOUNT_LIMIT_REACHED", "GOOGLE_ACCOUNT_MISMATCH", "GOOGLE_SCHEDULING_ACCOUNT_REQUIRED"])("preserves the %s server error", async (code) => {
+        const mocks = clientMock({ invokeError: { context: { json: async () => ({ code, error: "Calendar request failed" }) } } });
+        await expect(new SupabaseGoogleCalendarDataAccess(mocks.client, "owner-1").disconnect()).rejects.toMatchObject({ code });
     });
 
     it("starts same-window authorization with pending metadata and rejects untrusted URLs", async () => {
@@ -75,4 +116,11 @@ describe("SupabaseGoogleCalendarDataAccess", () => {
             .resolves.toEqual([expect.objectContaining({ title: "Team planning", allDay: false })]);
         expect(mocks.invoke).toHaveBeenCalledWith("google-calendar", { method: "POST", body: expect.objectContaining({ action: "list_events" }) });
     });
+    it.each([null, 42, "invalid"])("rejects malformed source %s with the domain error", async (source) => {
+        const mocks = clientMock({ invokeData: { intervals: [], refreshed_at: "2026-10-27T12:00:00Z", sources: [source] } });
+        const access = new SupabaseGoogleCalendarDataAccess(mocks.client, "owner-1");
+        await expect(access.fetchBusyIntervals({ timeMin: "2026-10-27T08:00Z", timeMax: "2026-10-27T18:00Z" }))
+            .rejects.toMatchObject({ code: "GOOGLE_INVALID_RESPONSE" });
+    });
+
 });

@@ -52,8 +52,8 @@ export async function hashOAuthState(state: string): Promise<string> {
 
 export function scopesForLevel(level: GoogleCalendarScopeLevel): string[] {
     return level === "schedule"
-        ? [GOOGLE_CALENDAR_READONLY_SCOPE, GOOGLE_CALENDAR_SCHEDULE_SCOPE]
-        : [GOOGLE_CALENDAR_READONLY_SCOPE];
+        ? ["openid", "email", GOOGLE_CALENDAR_READONLY_SCOPE, GOOGLE_CALENDAR_SCHEDULE_SCOPE]
+        : ["openid", "email", GOOGLE_CALENDAR_READONLY_SCOPE];
 }
 
 export function scopeLevelFromGrantedScopes(scope: string): GoogleCalendarScopeLevel | null {
@@ -80,7 +80,7 @@ export function validateReturnUrl(value: string, allowedOrigins: readonly string
     }
     for (const key of [
         "google_calendar", "google_calendar_scope", "google_calendar_error",
-        "pending_task_id", "pending_scheduled_start",
+        "pending_task_id", "pending_scheduled_start", "connection_id",
     ]) url.searchParams.delete(key);
     url.hash = "";
     return url;
@@ -100,7 +100,7 @@ export function buildGoogleAuthorizationUrl(input: {
     url.searchParams.set("scope", scopesForLevel(input.scopeLevel).join(" "));
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("include_granted_scopes", "true");
-    url.searchParams.set("prompt", "consent");
+    url.searchParams.set("prompt", "select_account consent");
     url.searchParams.set("state", input.state);
     url.searchParams.set("code_challenge", input.codeChallenge);
     url.searchParams.set("code_challenge_method", "S256");
@@ -156,6 +156,8 @@ export async function exchangeGoogleAuthorizationCode(input: {
     clientSecret: string;
     redirectUri: string;
     existingRefreshToken?: string | null;
+    // Resolve identity before allowing a stored token to fill an omitted token.
+    resolveExistingRefreshToken?: (accessToken: string) => Promise<string | null>;
 }, fetcher: typeof fetch = fetch): Promise<{
     accessToken: string;
     refreshToken: string;
@@ -170,14 +172,33 @@ export async function exchangeGoogleAuthorizationCode(input: {
         grant_type: "authorization_code",
     }), fetcher);
     const accessToken = typeof result.access_token === "string" ? result.access_token : "";
+    const scopeLevel = typeof result.scope === "string" ? scopeLevelFromGrantedScopes(result.scope) : null;
+    if (!accessToken || !scopeLevel) {
+        throw new GoogleOAuthError("GOOGLE_OAUTH_INVALID_RESPONSE", 502, "Google authorization returned incomplete credentials");
+    }
+    const existingRefreshToken = input.resolveExistingRefreshToken
+        ? await input.resolveExistingRefreshToken(accessToken) : input.existingRefreshToken;
     const refreshToken = typeof result.refresh_token === "string" && result.refresh_token.trim()
         ? result.refresh_token.trim()
-        : input.existingRefreshToken?.trim() ?? "";
-    const scopeLevel = typeof result.scope === "string" ? scopeLevelFromGrantedScopes(result.scope) : null;
-    if (!accessToken || !refreshToken || !scopeLevel) {
+        : existingRefreshToken?.trim() ?? "";
+    if (!refreshToken) {
         throw new GoogleOAuthError("GOOGLE_OAUTH_INVALID_RESPONSE", 502, "Google authorization returned incomplete credentials");
     }
     return { accessToken, refreshToken, scopeLevel };
+}
+
+export async function fetchGoogleIdentity(accessToken: string, fetcher: typeof fetch = fetch): Promise<{ sub: string; email: string | null }> {
+    let response: Response;
+    try {
+        response = await fetcher("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
+    } catch { throw new GoogleOAuthError("GOOGLE_OAUTH_UNAVAILABLE", 502, "Google identity is unavailable"); }
+    if (!response.ok) throw new GoogleOAuthError("GOOGLE_OAUTH_INVALID_RESPONSE", 502, "Google identity could not be resolved");
+    let value;
+    try { value = await response.json(); } catch { value = null; }
+    if (!value || typeof value.sub !== "string" || !value.sub.trim()) {
+        throw new GoogleOAuthError("GOOGLE_OAUTH_INVALID_RESPONSE", 502, "Google identity returned an invalid response");
+    }
+    return { sub: value.sub, email: typeof value.email === "string" && value.email.trim() ? value.email.trim() : null };
 }
 
 export async function refreshGoogleAccessToken(input: {

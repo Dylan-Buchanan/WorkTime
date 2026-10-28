@@ -155,6 +155,7 @@ export const GoogleCalendarTaskSection = ({
             try {
                 const returnTo = `${window.location.origin}${window.location.pathname}`;
                 navigateTo(await dataAccess.beginAuthorization({
+                    ...(settings?.connectionId ? { connectionId: settings.connectionId } : {}),
                     scopeLevel: "schedule",
                     returnTo,
                     pendingTaskId: task.id,
@@ -197,7 +198,7 @@ export const GoogleCalendarTaskSection = ({
         setErrorCode(null);
         try {
             const returnTo = `${window.location.origin}${window.location.pathname}`;
-            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", returnTo }));
+            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", ...(settings?.connectionId ? { connectionId: settings.connectionId } : {}), returnTo }));
         } catch (reason) {
             setError(errorMessage(reason));
             setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);

@@ -20,7 +20,9 @@ const linked: GoogleCalendarTaskLink = {
 
 function access(scopeLevel: "readonly" | "schedule", overrides: Partial<GoogleCalendarDataAccess> = {}): GoogleCalendarDataAccess {
     return {
+        loadConnections: vi.fn(), setSchedulingConnection: vi.fn(),
         loadSettings: vi.fn().mockResolvedValue({
+            connectionId: "scheduling-connection",
             scopeLevel, selectedCalendarIds: ["primary"], worktimeCalendarId: "calendar-1",
             connectedAt: "2026-08-29T12:00:00.000Z", updatedAt: "2026-08-29T12:00:00.000Z",
         }),
@@ -39,7 +41,7 @@ describe("GoogleCalendarTaskSection", () => {
         render(<MemoryRouter><GoogleCalendarTaskSection task={task} workMinutes={25} dataAccess={dataAccess} navigateTo={navigateTo} /></MemoryRouter>);
         fireEvent.click(await screen.findByRole("button", { name: "Push to Google" }));
         await waitFor(() => expect(dataAccess.beginAuthorization).toHaveBeenCalledOnce());
-        expect(dataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule", pendingTaskId: "task-1", pendingScheduledStart: expect.any(String) }));
+        expect(dataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule", connectionId: "scheduling-connection", pendingTaskId: "task-1", pendingScheduledStart: expect.any(String) }));
         expect(dataAccess.beginAuthorization).not.toHaveBeenCalledWith(expect.objectContaining({ title: expect.anything() }));
         expect(dataAccess.pushTask).not.toHaveBeenCalled();
         expect(navigateTo).toHaveBeenCalledOnce();
