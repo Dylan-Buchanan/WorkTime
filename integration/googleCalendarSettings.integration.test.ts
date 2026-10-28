@@ -47,8 +47,9 @@ describe("Google Calendar connection storage", () => {
         const owner = await user(); const other = await user();
         const a = await save(owner, "a"); const b = await save(owner, "b");
         const browser = new SupabaseGoogleCalendarDataAccess(owner.client, owner.userId);
-        expect(await browser.loadConnections()).toHaveLength(2);
-        expect(await browser.loadSettings()).toMatchObject({ connectionId: a });
+        const connections = await browser.loadConnections();
+        expect(connections).toHaveLength(2);
+        expect(connections.find((connection) => connection.isSchedulingTarget)).toMatchObject({ connectionId: a });
         expect((await owner.client.rpc("update_google_calendar_preferences", { p_connection_id: a, p_selected_calendar_ids: [" team ", "primary", "team"] })).error).toBeNull();
         expect((await owner.client.from("google_calendar_connections").select("selected_calendar_ids").eq("id", a).single()).data?.selected_calendar_ids).toEqual(["primary", "team"]);
         for (const selected of [null, [""], [null], Array.from({ length: 51 }, (_, i) => String(i))]) {

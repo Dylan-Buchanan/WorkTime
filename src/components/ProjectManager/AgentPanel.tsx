@@ -25,6 +25,7 @@ import { useHabits } from "../../state/HabitContext";
 import type { TaskChange } from "../../lib/engine/diffEngine";
 import { AgentApprovalCard } from "./AgentApprovalCard";
 import { GoogleCalendarIntegrationError, type GoogleCalendarDataAccess, type GoogleCalendarInterval } from "../../lib/data/GoogleCalendarDataAccess";
+import { googleAccountLabel } from "../../lib/integrations";
 import { resolvePlannerWorkUntil } from "../../lib/engine/plannerContext";
 
 const MODES: { id: AgentMode; label: string; description: string }[] = [
@@ -44,6 +45,12 @@ const PHASE_LABELS: Record<StartOfDayPhase, string> = {
     completed: "Plan ready",
 };
 const PROGRESS_STEPS = ["Context", "Plan", "Write", "Finalize"] as const;
+
+interface CalendarWarning {
+    connectionId: string;
+    label: string;
+    code: string;
+}
 
 const StartOfDayPlanPreview: React.FC<{ plan: StartOfDayWorkflowResult }> = ({ plan }) => (
     <section aria-label="Today's recommended order" className="mb-3 rounded-xl border border-violet-400/30 bg-violet-500/10 p-3">
@@ -197,6 +204,7 @@ export const AgentPanel: React.FC<{
     const [calendarRefreshing, setCalendarRefreshing] = useState(false);
     const [calendarReconnecting, setCalendarReconnecting] = useState(false);
     const [calendarFeedback, setCalendarFeedback] = useState<string | null>(null);
+    const [calendarWarnings, setCalendarWarnings] = useState<CalendarWarning[]>([]);
     const [progressEvents, setProgressEvents] = useState<StartOfDayProgressEvent[]>([]);
     const [planPreview, setPlanPreview] = useState<StartOfDayWorkflowResult | null>(null);
     const [endOfDayPreview, setEndOfDayPreview] = useState<EndOfDayWorkflowResult | null>(null);
@@ -248,25 +256,38 @@ export const AgentPanel: React.FC<{
 
     const fetchCalendarBusy = async (now: Date, selectedWorkUntil: string, report: boolean): Promise<GoogleCalendarInterval[]> => {
         if (!googleCalendarDataAccess) return [];
+        setCalendarWarnings([]);
         const absoluteWorkUntil = resolvePlannerWorkUntil(now, selectedWorkUntil);
         if (!absoluteWorkUntil || absoluteWorkUntil <= now) return [];
-        const settings = await googleCalendarDataAccess.loadSettings();
-        if (!settings) {
-            if (report) setCalendarFeedback("Connect Google Calendar in Integrations to include busy time.");
+        const connections = await googleCalendarDataAccess.loadConnections();
+        if (connections.length === 0) {
+            if (report) setCalendarFeedback("Connect a Google account in Integrations to include busy time.");
             return [];
         }
-        if (settings.selectedCalendarIds.length === 0) {
-            if (report) setCalendarFeedback("Select at least one busy-time calendar in Integrations.");
+        if (!connections.some((connection) => connection.selectedCalendarIds.length > 0)) {
+            if (report) setCalendarFeedback("Select busy-time calendars for at least one account in Integrations.");
             return [];
         }
         const result = await googleCalendarDataAccess.fetchBusyIntervals({
             timeMin: now.toISOString(),
             timeMax: absoluteWorkUntil.toISOString(),
         });
+        setCalendarWarnings((result.sources ?? []).flatMap((source) => {
+            if (!source.errorCode) return [];
+            const connection = connections.find((value) => value.connectionId === source.connectionId);
+            return [{
+                connectionId: source.connectionId,
+                label: googleAccountLabel(connection ?? { accountEmail: source.accountEmail, primaryCalendarId: null }),
+                code: source.errorCode,
+            }];
+        }));
         if (report) {
             const minutes = Math.round(result.intervals.reduce((sum, interval) =>
                 sum + new Date(interval.end).getTime() - new Date(interval.start).getTime(), 0) / 60_000);
-            setCalendarFeedback(`Calendar refreshed: ${minutes} busy minute${minutes === 1 ? "" : "s"}.`);
+            const accounts = result.sources && result.sources.length > 0
+                ? result.sources.filter((source) => source.calendarCount > 0).length
+                : connections.length;
+            setCalendarFeedback(`Calendar refreshed: ${minutes} busy minute${minutes === 1 ? "" : "s"} across ${accounts} account${accounts === 1 ? "" : "s"}.`);
         }
         return result.intervals;
     };
@@ -281,14 +302,20 @@ export const AgentPanel: React.FC<{
         finally { setCalendarRefreshing(false); }
     };
 
-    const reconnectGoogleCalendar = async () => {
+    const reconnectGoogleCalendar = async (connectionId?: string) => {
         if (!googleCalendarDataAccess || calendarReconnecting) return;
         setCalendarReconnecting(true);
         clearGenerationError();
         try {
-            const settings = await googleCalendarDataAccess.loadSettings();
+            const connections = await googleCalendarDataAccess.loadConnections();
+            const connection = connectionId
+                ? connections.find((value) => value.connectionId === connectionId)
+                : connections.find((value) => value.isSchedulingTarget) ?? connections[0];
+            if (!connection) throw new Error(connectionId
+                ? "Google account was disconnected. Refresh and try again."
+                : "No Google account is connected.");
             const returnTo = `${window.location.origin}${window.location.pathname}`;
-            navigateTo(await googleCalendarDataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", ...(settings?.connectionId ? { connectionId: settings.connectionId } : {}), returnTo }));
+            navigateTo(await googleCalendarDataAccess.beginAuthorization({ scopeLevel: connection.scopeLevel, connectionId: connection.connectionId, returnTo }));
         } catch (error) {
             showGenerationError(error instanceof Error ? error.message : "Unable to begin Google authorization.", error);
             setCalendarReconnecting(false);
@@ -569,6 +596,15 @@ export const AgentPanel: React.FC<{
                                     <button type="button" disabled={generating || !workUntil} onClick={() => void handleStartOfDay()} className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-500 disabled:opacity-50">{generating ? "Planning…" : "Generate plan"}</button>
                                 </div>
                                 {calendarFeedback && <p role="status" className="mt-2 text-[10px] text-sky-300">{calendarFeedback}</p>}
+                                {calendarWarnings.length > 0 && <div role="status" className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[10px] text-amber-200">
+                                    <p>Some Google accounts could not be read; any busy time from them was left out of this plan.</p>
+                                    <ul className="mt-1 space-y-1">
+                                        {calendarWarnings.map((warning) => <li key={`${warning.connectionId}:${warning.code}`} className="flex flex-wrap items-center gap-1">
+                                            <span>{warning.code === "GOOGLE_TOKEN_INVALID" ? `${warning.label} needs reconnecting.` : `${warning.label} could not be read (${warning.code}).`}</span>
+                                            {warning.code === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void reconnectGoogleCalendar(warning.connectionId)} disabled={calendarReconnecting} className="underline underline-offset-2 disabled:opacity-50">Reconnect {warning.label}</button>}
+                                        </li>)}
+                                    </ul>
+                                </div>}
                                 {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Building and validating your day plan…</p>}
                                 {generationErrorAlert}
                             </div>

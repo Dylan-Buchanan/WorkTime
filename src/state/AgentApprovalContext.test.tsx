@@ -17,7 +17,7 @@ import { setAgentApiKey } from "../lib/agent/apiKey";
 import type { StartOfDayWorkflowInput, StartOfDayWorkflowResult } from "../lib/agent/startOfDayWorkflow";
 import type { EndOfDayWorkflowInput, EndOfDayWorkflowResult } from "../lib/agent/endOfDayWorkflow";
 import type { ChatWorkflowInput } from "../lib/agent/chatWorkflow";
-import { GoogleCalendarIntegrationError, type GoogleCalendarDataAccess } from "../lib/data/GoogleCalendarDataAccess";
+import { GoogleCalendarIntegrationError, type GoogleCalendarConnection, type GoogleCalendarDataAccess } from "../lib/data/GoogleCalendarDataAccess";
 
 const OWNER = "agent-owner";
 const guardrails = {
@@ -40,6 +40,23 @@ function task(title: string) {
         id: "t1", title, projectId: "p1", status: "Backlog" as const, priority: "Medium" as const,
         timeSpentMinutes: 0, workedPomos: 0, description: "", tags: [], links: [], checklist: [], relatedTo: [],
         sortOrder: 0, isArchived: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+}
+
+function googleConnection(connectionId: string, overrides: Partial<GoogleCalendarConnection> = {}): GoogleCalendarConnection {
+    return {
+        connectionId,
+        accountId: "sub",
+        accountEmail: `${connectionId}@example.com`,
+        primaryCalendarId: "primary",
+        isSchedulingTarget: false,
+        identitySource: "userinfo",
+        scopeLevel: "schedule",
+        selectedCalendarIds: ["primary"],
+        worktimeCalendarId: null,
+        connectedAt: "2026-08-07T12:00:00.000Z",
+        updatedAt: "2026-08-07T12:00:00.000Z",
+        ...overrides,
     };
 }
 
@@ -205,10 +222,7 @@ describe("AgentApprovalProvider", () => {
             refreshedAt: "2026-08-07T13:00:00.000Z",
         });
         const googleCalendarDataAccess = {
-            loadSettings: vi.fn().mockResolvedValue({
-                scopeLevel: "readonly", selectedCalendarIds: ["primary"], worktimeCalendarId: null,
-                connectedAt: "2026-08-07T12:00:00.000Z", updatedAt: "2026-08-07T12:00:00.000Z",
-            }),
+            loadConnections: vi.fn().mockResolvedValue([googleConnection("scheduling-connection", { isSchedulingTarget: true, scopeLevel: "readonly" })]),
             fetchBusyIntervals,
         } as unknown as GoogleCalendarDataAccess;
         const PanelProbe = () => {
@@ -221,7 +235,7 @@ describe("AgentApprovalProvider", () => {
         fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
         fireEvent.change(screen.getByLabelText("Work until"), { target: { value: "23:59" } });
         fireEvent.click(screen.getByRole("button", { name: "Refresh calendar" }));
-        expect(await screen.findByText("Calendar refreshed: 30 busy minutes.")).toBeInTheDocument();
+        expect(await screen.findByText("Calendar refreshed: 30 busy minutes across 1 account.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
         await screen.findByLabelText("Update task proposal");
         expect(screen.getByLabelText("Today's recommended order")).toHaveTextContent("1");
@@ -252,12 +266,8 @@ describe("AgentApprovalProvider", () => {
     it("offers an in-place reconnect when Calendar busy-time refresh reports an invalid token", async () => {
         const data = await dataWithProject();
         setAgentApiKey("test-key");
-        const settings = {
-            scopeLevel: "schedule" as const, selectedCalendarIds: ["primary"], worktimeCalendarId: "worktime",
-            connectedAt: "2026-08-07T12:00:00.000Z", updatedAt: "2026-08-07T12:00:00.000Z",
-        };
         const googleCalendarDataAccess = {
-            loadSettings: vi.fn().mockResolvedValue(settings),
+            loadConnections: vi.fn().mockResolvedValue([googleConnection("scheduling-connection", { isSchedulingTarget: true })]),
             fetchBusyIntervals: vi.fn().mockRejectedValue(new GoogleCalendarIntegrationError("GOOGLE_TOKEN_INVALID", "Google Calendar must be reconnected")),
             beginAuthorization: vi.fn().mockResolvedValue("https://accounts.google.com/o/oauth2/v2/auth?state=safe"),
         } as unknown as GoogleCalendarDataAccess;
@@ -271,8 +281,76 @@ describe("AgentApprovalProvider", () => {
         const alert = await screen.findByRole("alert");
         expect(alert).toHaveTextContent("Google Calendar must be reconnected");
         fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
-        await waitFor(() => expect(googleCalendarDataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule" })));
+        await waitFor(() => expect(googleCalendarDataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule", connectionId: "scheduling-connection" })));
         expect(navigateTo).toHaveBeenCalledOnce();
+    });
+
+    it("reports merged busy minutes across every contributing account", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const googleCalendarDataAccess = {
+            loadConnections: vi.fn().mockResolvedValue([
+                googleConnection("a", { isSchedulingTarget: true, accountEmail: "a@example.com" }),
+                googleConnection("b", { accountEmail: "b@example.com", selectedCalendarIds: ["team"] }),
+            ]),
+            fetchBusyIntervals: vi.fn().mockResolvedValue({
+                intervals: [{ start: "2026-08-07T14:00:00.000Z", end: "2026-08-07T14:30:00.000Z" }],
+                refreshedAt: "2026-08-07T13:00:00.000Z",
+                sources: [
+                    { connectionId: "a", accountEmail: "a@example.com", calendarCount: 1, busyMinutes: 10, errorCode: null },
+                    { connectionId: "b", accountEmail: "b@example.com", calendarCount: 2, busyMinutes: 20, errorCode: null },
+                ],
+            }),
+        } as unknown as GoogleCalendarDataAccess;
+
+        render(wrap(data, <MemoryRouter><AgentPanel googleCalendarDataAccess={googleCalendarDataAccess} navigateTo={vi.fn()} /></MemoryRouter>));
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.change(screen.getByLabelText("Work until"), { target: { value: "23:59" } });
+        fireEvent.click(screen.getByRole("button", { name: "Refresh calendar" }));
+
+        expect(await screen.findByText("Calendar refreshed: 30 busy minutes across 2 accounts.")).toBeInTheDocument();
+        expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument();
+    });
+
+    it("merges busy minutes across accounts and warns about the account that failed", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const connections = [
+            googleConnection("a", { isSchedulingTarget: true, accountEmail: "a@example.com" }),
+            googleConnection("b", { accountEmail: "b@example.com", selectedCalendarIds: ["team"] }),
+        ];
+        const intervals = [{ start: "2026-08-07T14:00:00.000Z", end: "2026-08-07T14:30:00.000Z" }];
+        const fetchBusyIntervals = vi.fn().mockResolvedValue({
+            intervals, refreshedAt: "2026-08-07T13:00:00.000Z",
+            sources: [
+                { connectionId: "a", accountEmail: "a@example.com", calendarCount: 1, busyMinutes: 30, errorCode: null },
+                { connectionId: "b", accountEmail: "b@example.com", calendarCount: 0, busyMinutes: 0, errorCode: "GOOGLE_TOKEN_INVALID" },
+            ],
+        });
+        const beginAuthorization = vi.fn().mockResolvedValue("https://accounts.google.com/o/oauth2/v2/auth?state=safe");
+        const googleCalendarDataAccess = {
+            loadConnections: vi.fn().mockResolvedValue(connections),
+            fetchBusyIntervals,
+            beginAuthorization,
+        } as unknown as GoogleCalendarDataAccess;
+        const runStartOfDay = vi.fn(async (_input: StartOfDayWorkflowInput) => workflowResult());
+        const navigateTo = vi.fn();
+
+        render(wrap(data, <MemoryRouter><AgentPanel runStartOfDay={runStartOfDay} googleCalendarDataAccess={googleCalendarDataAccess} navigateTo={navigateTo} /></MemoryRouter>));
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.change(screen.getByLabelText("Work until"), { target: { value: "23:59" } });
+        fireEvent.click(screen.getByRole("button", { name: "Refresh calendar" }));
+
+        expect(await screen.findByText("Calendar refreshed: 30 busy minutes across 1 account.")).toBeInTheDocument();
+        expect(screen.getByText("b@example.com needs reconnecting.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect b@example.com" }));
+        await waitFor(() => expect(beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule", connectionId: "b" })));
+        expect(navigateTo).toHaveBeenCalledOnce();
+
+        fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
+        await waitFor(() => expect(runStartOfDay).toHaveBeenCalledWith(expect.objectContaining({ busyIntervals: intervals })));
     });
 
     it("launches End-of-Day, previews tomorrow, and applies the approved priority order", async () => {

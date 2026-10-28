@@ -51,6 +51,11 @@ export interface GoogleCalendarChoice {
     accessRole: string;
 }
 
+export interface GoogleCalendarCalendarList {
+    calendars: GoogleCalendarChoice[];
+    sources: GoogleCalendarSource[];
+}
+
 export interface GoogleCalendarInterval {
     start: string;
     end: string;
@@ -68,6 +73,7 @@ export interface GoogleCalendarEvent {
 
 export interface GoogleCalendarTaskLink {
     connectionId?: string;
+    accountEmail?: string | null;
     taskId: string;
     calendarId: string;
     eventId: string;
@@ -122,7 +128,6 @@ export class GoogleCalendarIntegrationError extends Error {
 export interface GoogleCalendarDataAccess {
     loadConnections(): Promise<GoogleCalendarConnection[]>;
     setSchedulingConnection(connectionId: string): Promise<void>;
-    loadSettings(): Promise<GoogleCalendarSettings | null>;
     beginAuthorization(input: {
         scopeLevel: GoogleCalendarScopeLevel;
         connectionId?: string;
@@ -130,11 +135,11 @@ export interface GoogleCalendarDataAccess {
         pendingTaskId?: string;
         pendingScheduledStart?: string;
     }): Promise<string>;
-    listCalendars(): Promise<GoogleCalendarChoice[]>;
-    updateSelectedCalendars(calendarIds: readonly string[], connectionId?: string): Promise<void>;
+    listCalendars(): Promise<GoogleCalendarCalendarList>;
+    updateSelectedCalendars(connectionId: string, calendarIds: readonly string[]): Promise<void>;
     fetchEvents(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarEvent[]>;
     fetchBusyIntervals(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarBusyResult>;
-    loadTaskLink(taskId: string): Promise<GoogleCalendarTaskLink | null>;
+    loadTaskLink(taskId: string, connections?: readonly GoogleCalendarConnection[]): Promise<GoogleCalendarTaskLink | null>;
     pushTask(input: GoogleCalendarPushInput): Promise<GoogleCalendarTaskLink>;
     resyncTask(input: GoogleCalendarPushInput): Promise<GoogleCalendarTaskLink>;
     unpushTask(taskId: string): Promise<void>;
@@ -179,6 +184,7 @@ function link(value: unknown): GoogleCalendarTaskLink | null {
     ) return null;
     return {
         ...(typeof record.connection_id === "string" ? { connectionId: record.connection_id } : {}),
+        ...(typeof record.account_email === "string" ? { accountEmail: record.account_email } : {}),
         taskId: record.task_id,
         calendarId: record.calendar_id,
         eventId: record.event_id,
@@ -218,12 +224,22 @@ function transportError(message: string, cause: unknown): GoogleCalendarIntegrat
         : new GoogleCalendarIntegrationError("NETWORK_ERROR", message);
 }
 
+const RPC_ERROR_CODES = new Set<GoogleCalendarIntegrationErrorCode>([
+    "GOOGLE_CONNECTION_NOT_FOUND",
+    "GOOGLE_CALENDAR_SELECTION_INVALID",
+    "GOOGLE_SCHEDULING_ACCOUNT_REQUIRED",
+]);
+
+// PostgREST surfaces an RPC's raised exception in `message` with no
+// machine-readable code, so preserve the domain codes the SQL functions use.
+function rpcError(error: unknown): GoogleCalendarIntegrationErrorCode | null {
+    const message = (error as { message?: unknown } | null)?.message;
+    if (typeof message !== "string") return null;
+    return [...RPC_ERROR_CODES].find((code) => message.includes(code)) ?? null;
+}
+
 export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAccess {
     constructor(private readonly client: SupabaseClient, private readonly ownerId: string) {}
-
-    async loadSettings(): Promise<GoogleCalendarSettings | null> {
-        return (await this.loadConnections()).find((connection) => connection.isSchedulingTarget) ?? null;
-    }
 
     async loadConnections(): Promise<GoogleCalendarConnection[]> {
         let response;
@@ -244,6 +260,7 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
                 || !["legacy", "calendar_list", "userinfo"].includes(String(row.identity_source))
                 || (row.scope_level !== "readonly" && row.scope_level !== "schedule")
                 || !Array.isArray(row.selected_calendar_ids)
+                || !row.selected_calendar_ids.every((value) => typeof value === "string")
                 || (row.worktime_calendar_id !== null && typeof row.worktime_calendar_id !== "string")
                 || !validDateString(row.connected_at)
                 || !validDateString(row.updated_at)
@@ -256,7 +273,7 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
                 isSchedulingTarget: row.is_scheduling_target,
                 identitySource: row.identity_source as GoogleCalendarConnection["identitySource"],
                 scopeLevel: row.scope_level,
-                selectedCalendarIds: row.selected_calendar_ids.filter((value): value is string => typeof value === "string"),
+                selectedCalendarIds: row.selected_calendar_ids as string[],
                 worktimeCalendarId: typeof row.worktime_calendar_id === "string" ? row.worktime_calendar_id : null,
                 connectedAt: new Date(row.connected_at).toISOString(),
                 updatedAt: new Date(row.updated_at).toISOString(),
@@ -286,10 +303,10 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
         return parsed.toString();
     }
 
-    async listCalendars(): Promise<GoogleCalendarChoice[]> {
+    async listCalendars(): Promise<GoogleCalendarCalendarList> {
         const data = await this.invoke({ action: "list_calendars" });
         if (!Array.isArray(data.calendars)) throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned an invalid calendar list.");
-        return data.calendars.map((value) => {
+        const calendars = data.calendars.map((value) => {
             if (!value || typeof value !== "object") throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned an invalid calendar list.");
             const row = value as Record<string, unknown>;
             if (typeof row.id !== "string" || typeof row.summary !== "string" || typeof row.access_role !== "string") {
@@ -299,24 +316,27 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
                 connectionId: typeof row.connection_id === "string" ? row.connection_id : undefined,
                 accountEmail: typeof row.account_email === "string" ? row.account_email : null };
         });
+        return { calendars, sources: this.sources(data.sources) };
     }
 
-    async updateSelectedCalendars(calendarIds: readonly string[], connectionId?: string): Promise<void> {
+    async updateSelectedCalendars(connectionId: string, calendarIds: readonly string[]): Promise<void> {
+        const id = connectionId.trim();
+        if (!id) throw new GoogleCalendarIntegrationError("GOOGLE_CONNECTION_NOT_FOUND", "Choose a Google account.");
         const selected = [...new Set(calendarIds.map((value) => value.trim()).filter(Boolean))];
         if (selected.length > 50) throw new GoogleCalendarIntegrationError("GOOGLE_CALENDAR_SELECTION_INVALID", "Select at most 50 calendars.");
-        const id = connectionId ?? (await this.loadSettings())?.connectionId;
-        if (!id) throw new GoogleCalendarIntegrationError("GOOGLE_SCHEDULING_ACCOUNT_REQUIRED", "Choose a Google scheduling account.");
         let response;
         try { response = await this.client.rpc("update_google_calendar_preferences", { p_connection_id: id, p_selected_calendar_ids: selected }); }
         catch (error) { throw transportError("Unable to save Google Calendar preferences.", error); }
-        if (response.error) throw new GoogleCalendarIntegrationError("UNKNOWN_ERROR", "Unable to save Google Calendar preferences.");
+        if (response.error) throw new GoogleCalendarIntegrationError(
+            rpcError(response.error) ?? "UNKNOWN_ERROR", "Unable to save Google Calendar preferences.");
     }
 
     async setSchedulingConnection(connectionId: string): Promise<void> {
         let response;
         try { response = await this.client.rpc("set_google_calendar_scheduling_connection", { p_connection_id: connectionId }); }
         catch (error) { throw transportError("Unable to change Google scheduling account.", error); }
-        if (response.error) throw new GoogleCalendarIntegrationError("GOOGLE_CONNECTION_NOT_FOUND", "Unable to change Google scheduling account.");
+        if (response.error) throw new GoogleCalendarIntegrationError(
+            rpcError(response.error) ?? "UNKNOWN_ERROR", "Unable to change Google scheduling account.");
     }
 
     async fetchBusyIntervals(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarBusyResult> {
@@ -353,7 +373,7 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
         });
     }
 
-    async loadTaskLink(taskId: string): Promise<GoogleCalendarTaskLink | null> {
+    async loadTaskLink(taskId: string, connections?: readonly GoogleCalendarConnection[]): Promise<GoogleCalendarTaskLink | null> {
         let response;
         try {
             response = await this.client.from("google_calendar_task_links")
@@ -364,7 +384,11 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
         if (!response.data) return null;
         const parsed = link(response.data);
         if (!parsed) throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google task status returned an invalid response.");
-        return parsed;
+        if (!parsed.connectionId || parsed.accountEmail !== undefined) return parsed;
+        // The link row has no account email column, so attribute it from the
+        // owning connection. Callers that already hold the list avoid a read.
+        const owner = (connections ?? await this.loadConnections()).find((connection) => connection.connectionId === parsed.connectionId);
+        return { ...parsed, accountEmail: owner?.accountEmail ?? null };
     }
 
     pushTask(input: GoogleCalendarPushInput): Promise<GoogleCalendarTaskLink> { return this.writeTask("push_task", input); }

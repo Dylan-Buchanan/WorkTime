@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type {
+    GoogleCalendarConnection,
     GoogleCalendarDataAccess,
     GoogleCalendarPushInput,
-    GoogleCalendarSettings,
     GoogleCalendarTaskLink,
 } from "../../lib/data/GoogleCalendarDataAccess";
 import { GoogleCalendarIntegrationError } from "../../lib/data/GoogleCalendarDataAccess";
-import type { GoogleCalendarOAuthReturn } from "../../lib/integrations";
+import { googleAccountLabel, type GoogleCalendarOAuthReturn } from "../../lib/integrations";
 import type { PMTask } from "../../state/types";
 
 export interface GoogleCalendarTaskSectionProps {
@@ -57,7 +57,7 @@ export const GoogleCalendarTaskSection = ({
     const initial = useMemo(() => suggestedStart(task), [task.id]);
     const [dateDraft, setDateDraft] = useState(() => localDate(initial));
     const [timeDraft, setTimeDraft] = useState(() => localTime(initial));
-    const [settings, setSettings] = useState<GoogleCalendarSettings | null>(null);
+    const [connections, setConnections] = useState<GoogleCalendarConnection[]>([]);
     const [link, setLink] = useState<GoogleCalendarTaskLink | null>(null);
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
@@ -66,6 +66,14 @@ export const GoogleCalendarTaskSection = ({
     const [notice, setNotice] = useState<string | null>(null);
     const [conflict, setConflict] = useState<{ action: "push" | "resync"; input: GoogleCalendarPushInput; intervals: Array<{ start: string; end: string }> } | null>(null);
     const resumedRef = useRef<string | null>(null);
+    const schedulingConnection = connections.find((connection) => connection.isSchedulingTarget) ?? null;
+    const linkConnection = link?.connectionId
+        ? connections.find((connection) => connection.connectionId === link.connectionId) ?? null
+        : null;
+    const linkLabel = linkConnection
+        ? googleAccountLabel(linkConnection)
+        : link?.accountEmail?.trim() || "Unidentified";
+    const anyCalendarsSelected = connections.some((connection) => connection.selectedCalendarIds.length > 0);
 
     useEffect(() => {
         const value = suggestedStart(task);
@@ -78,36 +86,41 @@ export const GoogleCalendarTaskSection = ({
     }, [task.id]);
 
     const reload = async () => {
-        const [nextSettings, nextLink] = await Promise.all([dataAccess.loadSettings(), dataAccess.loadTaskLink(task.id)]);
-        setSettings(nextSettings);
+        const accounts = await dataAccess.loadConnections();
+        const nextLink = await dataAccess.loadTaskLink(task.id, accounts);
+        setConnections(accounts);
         setLink(nextLink);
         if (nextLink) {
             const start = new Date(nextLink.scheduledStart);
             setDateDraft(localDate(start));
             setTimeDraft(localTime(start));
         }
-        return { settings: nextSettings, link: nextLink };
+        return { connections: accounts, link: nextLink };
     };
 
     useEffect(() => {
         let active = true;
         setLoading(true);
-        void Promise.all([dataAccess.loadSettings(), dataAccess.loadTaskLink(task.id)]).then(([nextSettings, nextLink]) => {
-            if (!active) return;
-            setSettings(nextSettings);
-            setLink(nextLink);
-            if (nextLink) {
-                const start = new Date(nextLink.scheduledStart);
-                setDateDraft(localDate(start));
-                setTimeDraft(localTime(start));
+        void (async () => {
+            try {
+                const accounts = await dataAccess.loadConnections();
+                const nextLink = await dataAccess.loadTaskLink(task.id, accounts);
+                if (!active) return;
+                setConnections(accounts);
+                setLink(nextLink);
+                if (nextLink) {
+                    const start = new Date(nextLink.scheduledStart);
+                    setDateDraft(localDate(start));
+                    setTimeDraft(localTime(start));
+                }
+                setLoading(false);
+            } catch (reason) {
+                if (!active) return;
+                setError(errorMessage(reason));
+                setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+                setLoading(false);
             }
-            setLoading(false);
-        }).catch((reason) => {
-            if (!active) return;
-            setError(errorMessage(reason));
-            setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
-            setLoading(false);
-        });
+        })();
         return () => { active = false; };
     }, [dataAccess, task.id]);
 
@@ -122,7 +135,7 @@ export const GoogleCalendarTaskSection = ({
         return { taskId: task.id, title: task.title, scheduledStart: start.toISOString(), estimatePomos: estimate, workMinutes };
     }
 
-    async function write(action: "push" | "resync", input: GoogleCalendarPushInput, allowConflict = false) {
+    async function write(action: "push" | "resync", input: GoogleCalendarPushInput, allowConflict = false): Promise<GoogleCalendarTaskLink | null> {
         setBusy(true);
         setError(null);
         setErrorCode(null);
@@ -134,6 +147,7 @@ export const GoogleCalendarTaskSection = ({
                 : await dataAccess.resyncTask({ ...input, allowConflict });
             setLink(next);
             setNotice(action === "push" ? "Task scheduled in Google Calendar." : "Google Calendar event resynced.");
+            return next;
         } catch (reason) {
             if (reason instanceof GoogleCalendarIntegrationError && reason.code === "CALENDAR_CONFLICT") {
                 setConflict({ action, input, intervals: reason.conflicts });
@@ -150,12 +164,16 @@ export const GoogleCalendarTaskSection = ({
         if (!input) return;
         setError(null);
         setErrorCode(null);
-        if (settings?.scopeLevel === "readonly") {
+        if (!schedulingConnection) {
+            setError("Choose a Google account for focus events in Integrations.");
+            return;
+        }
+        if (schedulingConnection.scopeLevel === "readonly") {
             setBusy(true);
             try {
                 const returnTo = `${window.location.origin}${window.location.pathname}`;
                 navigateTo(await dataAccess.beginAuthorization({
-                    ...(settings?.connectionId ? { connectionId: settings.connectionId } : {}),
+                    connectionId: schedulingConnection.connectionId,
                     scopeLevel: "schedule",
                     returnTo,
                     pendingTaskId: task.id,
@@ -192,13 +210,20 @@ export const GoogleCalendarTaskSection = ({
         finally { setBusy(false); }
     }
 
-    async function reconnect() {
+    async function reconnect(connectionId?: string) {
+        const connection = connectionId
+            ? connections.find((value) => value.connectionId === connectionId)
+            : linkConnection ?? schedulingConnection;
         setBusy(true);
         setError(null);
         setErrorCode(null);
         try {
             const returnTo = `${window.location.origin}${window.location.pathname}`;
-            navigateTo(await dataAccess.beginAuthorization({ scopeLevel: settings?.scopeLevel ?? "readonly", ...(settings?.connectionId ? { connectionId: settings.connectionId } : {}), returnTo }));
+            navigateTo(await dataAccess.beginAuthorization({
+                scopeLevel: connection?.scopeLevel ?? "readonly",
+                ...(connection ? { connectionId: connection.connectionId } : {}),
+                returnTo,
+            }));
         } catch (reason) {
             setError(errorMessage(reason));
             setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
@@ -214,10 +239,18 @@ export const GoogleCalendarTaskSection = ({
         void (async () => {
             try {
                 const refreshed = await reload();
-                if (refreshed.settings?.scopeLevel !== "schedule") throw new Error("Google scheduling permission was not granted.");
+                const target = refreshed.connections.find((connection) => connection.isSchedulingTarget);
+                if (!target) throw new Error("Choose a Google account for focus events in Integrations.");
+                if (resume.connectionId && target.connectionId !== resume.connectionId) {
+                    throw new Error("The Google account used for focus events changed. Push the task again.");
+                }
+                if (target.scopeLevel !== "schedule") throw new Error("Google scheduling permission was not granted.");
                 const input = buildInput(resume.pendingScheduledStart!);
                 if (!input) throw new Error("The pending task can no longer be scheduled.");
-                await write("push", input);
+                const written = await write("push", input);
+                if (resume.connectionId && written?.connectionId && written.connectionId !== resume.connectionId) {
+                    throw new Error("Google Calendar saved the focus event to a different account. Remove it and try again.");
+                }
             } catch (reason) {
                 if (!(reason instanceof GoogleCalendarIntegrationError && reason.code === "CALENDAR_CONFLICT")) {
                     setError(errorMessage(reason));
@@ -230,7 +263,7 @@ export const GoogleCalendarTaskSection = ({
     }, [resume?.connected, resume?.pendingTaskId, resume?.pendingScheduledStart, task.id]);
 
     if (loading) return <p role="status" className="text-[10px] text-neutral-500">Loading Google Calendar status…</p>;
-    if (!settings) return <p className="text-[10px] text-neutral-500">Connect Google Calendar in <Link to="/integrations" className="text-violet-300 underline">Integrations</Link> to schedule focus time.</p>;
+    if (connections.length === 0) return <p className="text-[10px] text-neutral-500">Connect a Google account in <Link to="/integrations" className="text-violet-300 underline">Integrations</Link> to schedule focus time.</p>;
 
     const outOfSync = link && (link.estimatePomos !== Number(task.estimatePomos) || link.workMinutes !== workMinutes);
     return (
@@ -238,11 +271,16 @@ export const GoogleCalendarTaskSection = ({
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                     <p className="text-[10px] font-medium text-neutral-300">Google focus time</p>
-                    <p className="text-[9px] text-neutral-500">{settings.scopeLevel === "schedule" ? "Connected — can schedule" : "Connected — read only"}</p>
+                    <p className="text-[9px] text-neutral-500">
+                        {schedulingConnection
+                            ? `Focus events use ${googleAccountLabel(schedulingConnection)} — ${schedulingConnection.scopeLevel === "schedule" ? "can schedule" : "read only"}`
+                            : "Choose a Google account for focus events in Integrations."}
+                    </p>
                 </div>
                 {link && <span className={`rounded px-2 py-0.5 text-[9px] ${outOfSync ? "bg-amber-950 text-amber-300" : "bg-emerald-950 text-emerald-300"}`}>{outOfSync ? "Out of sync" : "Scheduled"}</span>}
             </div>
-            {settings.selectedCalendarIds.length === 0 && <p className="text-[9px] text-amber-300">Select busy-time calendars in Integrations for conflict warnings and planner shaping.</p>}
+            {link && <p className="text-[9px] text-neutral-500">Event owned by {linkLabel}.</p>}
+            {!anyCalendarsSelected && <p className="text-[9px] text-amber-300">Select busy-time calendars for at least one account in Integrations for conflict warnings and planner shaping.</p>}
             <div className="flex flex-wrap items-center gap-2">
                 <input aria-label="Focus date" type="date" value={dateDraft} onChange={(event) => setDateDraft(event.target.value)} disabled={busy || Boolean(link)} className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px]" />
                 <input aria-label="Focus time" type="time" value={timeDraft} onChange={(event) => setTimeDraft(event.target.value)} disabled={busy || Boolean(link)} className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px]" />
@@ -260,7 +298,7 @@ export const GoogleCalendarTaskSection = ({
             {notice && <p role="status" className="text-[9px] text-emerald-300">{notice}</p>}
             {error && <div className="text-[9px] text-red-300">
                 <p role="alert">{error}</p>
-                {errorCode === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void reconnect()} disabled={busy} className="mt-1 underline underline-offset-2 disabled:opacity-50">{busy ? "Opening Googleâ€¦" : "Reconnect"}</button>}
+                {errorCode === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void reconnect()} disabled={busy} className="mt-1 underline underline-offset-2 disabled:opacity-50">{busy ? "Opening Google…" : "Reconnect"}</button>}
             </div>}
         </div>
     );

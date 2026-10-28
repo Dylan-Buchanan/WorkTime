@@ -14,6 +14,10 @@ const RETURN_KEYS = [
     "pending_task_id", "pending_scheduled_start", "connection_id",
 ] as const;
 
+// Never written by this client, but if a stale or forged return URL carries
+// Google account identity it must not survive consumption in the address bar.
+const PURGED_IDENTITY_KEYS = ["account_email", "google_account_email", "google_account_id"] as const;
+
 export function parseGoogleCalendarOAuthReturn(url: URL): GoogleCalendarOAuthReturn | null {
     if (!["google_calendar", "google_calendar_error"].some((key) => url.searchParams.has(key))) return null;
     const scope = url.searchParams.get("google_calendar_scope");
@@ -38,7 +42,7 @@ export function consumeGoogleCalendarOAuthReturn(
     const url = new URL(href);
     const result = parseGoogleCalendarOAuthReturn(url);
     if (!result) return null;
-    for (const key of RETURN_KEYS) url.searchParams.delete(key);
+    for (const key of [...RETURN_KEYS, ...PURGED_IDENTITY_KEYS]) url.searchParams.delete(key);
     replace(`${url.pathname}${url.search}${url.hash}`);
     return result;
 }

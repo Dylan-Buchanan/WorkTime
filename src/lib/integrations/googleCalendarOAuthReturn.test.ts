@@ -29,4 +29,22 @@ describe("Google Calendar OAuth return", () => {
         expect(replace).not.toHaveBeenCalled();
     });
 
+    it("never reads Google account identity and purges it during consumption", () => {
+        const replace = vi.fn();
+        const result = consumeGoogleCalendarOAuthReturn(
+            "https://worktime.test/integrations?keep=yes&google_calendar=connected&connection_id=internal-id&account_email=secret%40example.com&google_account_id=google-sub",
+            replace,
+        );
+        expect(result).toEqual({
+            connectionId: "internal-id",
+            connected: true,
+            scopeLevel: null,
+            errorCode: null,
+            pendingTaskId: null,
+            pendingScheduledStart: null,
+        });
+        expect(result).not.toHaveProperty("accountEmail");
+        expect(replace).toHaveBeenCalledWith("/integrations?keep=yes");
+    });
+
 });
