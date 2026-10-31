@@ -1,10 +1,12 @@
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { Outlet } from "react-router-dom";
 import App from "./App";
 import { InMemoryDataAccess } from "./lib/data/InMemoryDataAccess";
 import { makeAppState } from "./test/mockTauri";
+import { createDefaultDataAccess } from "./lib/data/defaultDataAccess";
+
+const auth = vi.hoisted(() => ({ session: { user: { id: "pet-route-owner" } } as { user: { id: string } } | null }));
 
 // Route-level test: /pet must render PetPage inside the authenticated shell
 // and TopNav must expose a Pet link. Auth is stubbed so the shell mounts with
@@ -14,26 +16,19 @@ import { makeAppState } from "./test/mockTauri";
 vi.mock("./auth/AuthContext", () => ({
     AuthProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
     useAuth: () => ({
-        session: { user: { id: "pet-route-owner" } },
+        session: auth.session,
         loading: false,
         signOut: vi.fn(async () => {}),
     }),
 }));
 
-vi.mock("./auth/RequireAuth", () => ({
-    RequireAuth: () => <Outlet />,
-    AuthLoading: () => null,
-}));
-
-vi.mock("./auth/RedirectIfAuthenticated", () => ({
-    RedirectIfAuthenticated: () => <Outlet />,
-}));
-
 vi.mock("./lib/supabase", () => ({ supabase: {} }));
 
 vi.mock("./lib/data/defaultDataAccess", () => ({
-    createDefaultDataAccess: () => new InMemoryDataAccess(makeAppState()),
+    createDefaultDataAccess: vi.fn(() => new InMemoryDataAccess(makeAppState())),
 }));
+
+beforeEach(() => { auth.session = { user: { id: "pet-route-owner" } }; vi.mocked(createDefaultDataAccess).mockClear(); });
 
 describe("App /pet routing", () => {
     it("registers the lazy /pet route behind the authenticated shell", async () => {
@@ -51,5 +46,33 @@ describe("App /pet routing", () => {
 
         const petLink = await screen.findByRole("link", { name: "Pet" });
         expect(petLink).toHaveAttribute("href", "/pet");
+    });
+});
+
+describe("App /goals routing", () => {
+    it("registers the lazy goals page and nav inside the authenticated provider graph", async () => {
+        const load = vi.spyOn(InMemoryDataAccess.prototype, "loadGoals");
+        window.history.pushState({}, "", "/goals");
+        render(<App />);
+        expect(await screen.findByRole("heading", { name: "Goals" })).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: "Goals" })).toHaveAttribute("href", "/goals");
+        await waitFor(() => expect(screen.getByRole("button", { name: "Add tracker" })).toBeEnabled());
+        expect(load).toHaveBeenCalled();
+    });
+
+    it.each([
+        ["/login", "Sign in"],
+        ["/signup", "Create an account"],
+        ["/reset-password", "Reset link unavailable"],
+        ["/goals", "Sign in"],
+    ])("never constructs authenticated data or reads goals for public/unauthenticated %s", async (path, heading) => {
+        auth.session = null;
+        const load = vi.spyOn(InMemoryDataAccess.prototype, "loadGoals");
+        window.history.pushState({}, "", path);
+        render(<App />);
+        expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+        expect(createDefaultDataAccess).not.toHaveBeenCalled();
+        expect(load).not.toHaveBeenCalled();
+        expect(screen.queryByRole("link", { name: "Goals" })).not.toBeInTheDocument();
     });
 });
