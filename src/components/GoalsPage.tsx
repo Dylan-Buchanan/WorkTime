@@ -5,7 +5,14 @@ import { CSS } from "@dnd-kit/utilities";
 import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
+import { isGoalDateKey } from "../lib/goals/factories";
+import { dueState, goalGrid, periodLabel } from "../lib/goals/periods";
+import { slipSummary } from "../lib/goals/slips";
 import { localDateKey } from "../lib/todos/calendar";
+import type { LocalDateKey } from "../lib/todos/types";
+import { GoalDueNudge } from "./goals/GoalDueNudge";
+import { GoalSlipBadge } from "./goals/GoalSlipBadge";
+import { TrackerDueBadge } from "./goals/TrackerDueBadge";
 
 const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const control = "rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs";
@@ -13,10 +20,18 @@ const button = `${control} hover:bg-neutral-800 disabled:opacity-50`;
 const primary = "rounded bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-indigo-500";
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
+/** One clock read per render; the optional prop is a test-only seam. */
+const pageToday = (today?: LocalDateKey): LocalDateKey => {
+    if (today !== undefined) return today;
+    const key = localDateKey(new Date());
+    if (!isGoalDateKey(key)) throw new RangeError("Invalid goal date");
+    return key;
+};
 
-export const GoalsPage: React.FC = () => {
+export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp }) => {
     const goals = useGoals();
     const { state, hydrated } = goals;
+    const today = pageToday(todayProp);
     const [trackerForm, setTrackerForm] = useState<GoalTracker | "new" | null>(null);
     const [showArchived, setShowArchived] = useState(false);
     const [lifecycle, setLifecycle] = useState<Goal["lifecycle"] | "all">("active");
@@ -31,6 +46,13 @@ export const GoalsPage: React.FC = () => {
     const allGoals = tracker ? ordered(Object.values(state.goals).filter(row => row.trackerId === tracker.id)) : [];
     const visible = allGoals.filter(row => lifecycle === "all" || row.lifecycle === lifecycle);
     const edit = editingGoal ? state.goals[editingGoal] : null;
+    const due = tracker ? dueState(goalGrid(tracker), today) : null;
+    const dueTracker = due !== null && due.kind === "due" ? due : null;
+    const currentPeriodStart = due !== null && (due.kind === "due" || due.kind === "not-due") ? due.current.periodStart : null;
+    const slipCount = (goalId: string) => {
+        if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
+        return slipSummary(goalId, Object.values(state.checkIns), currentPeriodStart).consecutiveSlips;
+    };
 
     function attempt(action: () => void) {
         try { action(); setError(null); } catch (error) { setError(errorMessage(error)); }
@@ -82,7 +104,9 @@ export const GoalsPage: React.FC = () => {
                         <header className="flex flex-wrap items-center gap-3">
                             <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: tracker.color }} />
                             <div><h2 className="text-sm font-semibold">{tracker.name}</h2><p className="text-neutral-400">{tracker.purpose}</p></div>
-                            <div data-goals-slot="tracker-due" data-tracker-id={tracker.id} />
+                            <div data-goals-slot="tracker-due" data-tracker-id={tracker.id}>
+                                <TrackerDueBadge due={dueTracker !== null} periodLabel={dueTracker ? periodLabel(dueTracker.mostRecentCompleted) : null} />
+                            </div>
                             <button className={`${button} ml-auto`} onClick={() => setTrackerForm(tracker)}>Edit tracker</button>
                             {tracker.isArchived
                                 ? <button className={button} onClick={() => attempt(() => goals.archiveTracker(tracker.id, false))}>Reactivate tracker</button>
@@ -94,7 +118,7 @@ export const GoalsPage: React.FC = () => {
                             ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
                             : `Every ${tracker.cadence.intervalWeeks} ${tracker.cadence.intervalWeeks === 1 ? "week" : "weeks"} on ${weekdays[tracker.cadence.weekday]}`}</p>
                         <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id}>
-                            {tracker.cadenceAnchorAt > localDateKey(new Date())
+                            {tracker.cadenceAnchorAt > today
                                 ? <p>No open period. First period starts on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>
                                 : <p>First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>}
                         </div>
@@ -115,7 +139,7 @@ export const GoalsPage: React.FC = () => {
                     <DndContext sensors={sensors} onDragEnd={reorder}>
                         <SortableContext items={visible.map(row => row.id)} strategy={verticalListSortingStrategy}>
                             <div className="space-y-2" aria-label="Goals list">
-                                {visible.map(row => <GoalRow key={row.id} goal={row} expanded={!!state.ui.expandedGoalIds[row.id]}
+                                {visible.map(row => <GoalRow key={row.id} goal={row} consecutiveSlips={slipCount(row.id)} expanded={!!state.ui.expandedGoalIds[row.id]}
                                     onExpand={() => goals.setGoalExpanded(row.id, !state.ui.expandedGoalIds[row.id])}
                                     onEdit={() => setEditingGoal(row.id)} onLifecycle={value => attempt(() => goals.setGoalLifecycle(row.id, value))} />)}
                             </div>
@@ -130,7 +154,7 @@ export const GoalsPage: React.FC = () => {
         </main>
         <div data-goals-slot="check-in-wizard" />
         <div data-goals-slot="deck-preview" />
-        <div data-goals-slot="due-nudge" />
+        <div data-goals-slot="due-nudge"><GoalDueNudge today={today} /></div>
     </div>;
 };
 
@@ -198,14 +222,14 @@ function MetricBadge({ metric }: { metric: GoalMetric }) {
     return <span className="text-neutral-400">{metric.source === "manual" ? "Manual" : "Auto"}{metric.overridePinned ? " · Override" : ""}</span>;
 }
 
-function GoalRow({ goal, expanded, onExpand, onEdit, onLifecycle }: { goal: Goal; expanded: boolean; onExpand: () => void; onEdit: () => void; onLifecycle: (value: Goal["lifecycle"]) => void }) {
+function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecycle }: { goal: Goal; consecutiveSlips: number; expanded: boolean; onExpand: () => void; onEdit: () => void; onLifecycle: (value: Goal["lifecycle"]) => void }) {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id });
     return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className="rounded border border-neutral-800 bg-neutral-900/30 p-3" aria-label={goal.title}>
         <div className="flex flex-wrap items-center gap-3">
             <button className={button} {...attributes} {...listeners} aria-label={`Reorder ${goal.title}`}>⠿</button>
             <h3 className="flex-1 font-medium">{goal.title}</h3>
             <span className="text-neutral-400">{goal.lifecycle}</span>
-            <span data-goals-slot="goal-slip" data-goal-id={goal.id} />
+            <span data-goals-slot="goal-slip" data-goal-id={goal.id}><GoalSlipBadge consecutiveSlips={consecutiveSlips} /></span>
             <button className={button} onClick={onExpand} aria-expanded={expanded}>{expanded ? "Hide details" : "Show details"}</button>
             <button className={button} onClick={onEdit}>Edit goal</button>
             {goal.lifecycle === "active" ? <>

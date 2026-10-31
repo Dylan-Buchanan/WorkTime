@@ -10,7 +10,15 @@ import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
-import { buildGoalTrackerFixture, buildGoalFixture, buildGoalCheckInFixture } from "../lib/goals/testFixtures";
+import type { LocalDateKey } from "../lib/todos/types";
+import {
+    buildArchivedTrackerFixture,
+    buildCheckInHistoryFixture,
+    buildCleanCheckInHistoryFixture,
+    buildGoalCheckInFixture,
+    buildGoalFixture,
+    buildGoalTrackerFixture,
+} from "../lib/goals/testFixtures";
 
 const drag = vi.hoisted(() => ({ end: null as null | ((event: DragEndEvent) => void) }));
 vi.mock("@dnd-kit/core", async importOriginal => {
@@ -21,11 +29,11 @@ vi.mock("@dnd-kit/core", async importOriginal => {
     } };
 });
 
-function tree(data: InMemoryDataAccess) {
-    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><GoalProvider><GoalsPage /></GoalProvider></SyncProvider></DataProvider></TauriCloseProvider>;
+function tree(data: InMemoryDataAccess, today?: LocalDateKey) {
+    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><GoalProvider><GoalsPage today={today} /></GoalProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
-async function mount(data = new InMemoryDataAccess(makeAppState())) {
-    const view = render(tree(data));
+async function mount(data = new InMemoryDataAccess(makeAppState()), today?: LocalDateKey) {
+    const view = render(tree(data, today));
     await waitFor(() => expect(screen.getByRole("button", { name: "Add tracker" })).toBeEnabled());
     return { data, user: userEvent.setup(), ...view };
 }
@@ -217,5 +225,69 @@ describe("GoalsPage", () => {
         await waitFor(async () => expect((await data.loadGoals()).goals.find(row => row.id === last.id)?.sortOrder).toBe(0));
         const saved = (await data.loadGoals()).goals.sort((a, b) => a.sortOrder - b.sortOrder);
         expect(saved.map(row => row.id)).toEqual([last.id, hidden.id, first.id]);
+    });
+
+    it("shows the due badge with the completed period label, and clears it when that period is built", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const due = buildGoalTrackerFixture({ id: "due", name: "Due", sortOrder: 0 });
+        const built = buildGoalTrackerFixture({ id: "built", name: "Built", sortOrder: 1, lastBuiltPeriodStart: "2026-10-04" });
+        await data.saveGoals([due, built], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const slot = () => container.querySelector('[data-goals-slot="tracker-due"]') as HTMLElement;
+        expect(slot()).toHaveAttribute("data-tracker-id", due.id);
+        expect(slot()).toHaveTextContent("Deck due · October 2026");
+        // An equal build key permits a rebuild but no longer shows the badge.
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), built.id);
+        expect(slot()).toHaveAttribute("data-tracker-id", built.id);
+        expect(slot()).toBeEmptyDOMElement();
+    });
+
+    it("shows no due badge before the first boundary or for an archived tracker", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const active = buildGoalTrackerFixture({ id: "active", name: "Active", sortOrder: 0 });
+        const archived = buildArchivedTrackerFixture({ id: "archived", name: "Archived", sortOrder: 1 });
+        await data.saveGoals([active, archived], [], []);
+        const { user, container, unmount } = await mount(data, "2026-10-20");
+        const slot = () => container.querySelector('[data-goals-slot="tracker-due"]') as HTMLElement;
+        await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), archived.id);
+        expect(slot()).toHaveAttribute("data-tracker-id", archived.id);
+        expect(slot()).toBeEmptyDOMElement();
+
+        unmount();
+        const futureData = new InMemoryDataAccess(makeAppState());
+        const future = buildGoalTrackerFixture({ id: "future", name: "Future", cadenceAnchorAt: "2099-01-04" });
+        await futureData.saveGoals([future], [], []);
+        const futureView = await mount(futureData, "2026-10-20");
+        const futureSlot = futureView.container.querySelector('[data-goals-slot="tracker-due"]') as HTMLElement;
+        expect(futureSlot).toHaveAttribute("data-tracker-id", future.id);
+        expect(futureSlot).toBeEmptyDOMElement();
+    });
+
+    it("shows the slip counter only after two consecutive slipping transitions", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const slipping = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Slipping", sortOrder: 0 });
+        const clean = buildGoalFixture({ id: "goal-clean", trackerId: tracker.id, title: "Clean", sortOrder: 1 });
+        await data.saveGoals(
+            [tracker],
+            [slipping, clean],
+            [...buildCheckInHistoryFixture("goal-ship"), ...buildCleanCheckInHistoryFixture("goal-clean")],
+        );
+        await mount(data, "2026-11-02");
+        expect(within(screen.getByLabelText("Slipping")).getByText("Slipped 2×")).toBeInTheDocument();
+        expect(within(screen.getByLabelText("Clean")).queryByText(/Slipped/)).not.toBeInTheDocument();
+    });
+
+    it("shows no slip counter for a single slip or a clean history", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], [
+            buildGoalCheckInFixture({ id: "one-1", goalId: goal.id, periodStart: "2026-10-18", planned: [{ text: "Ship the migration", dueDate: null }] }),
+            buildGoalCheckInFixture({ id: "one-2", goalId: goal.id, periodStart: "2026-11-01", did: "Reviewed the spec" }),
+        ]);
+        const { container } = await mount(data, "2026-11-02");
+        expect(container.querySelector('[data-goals-slot="goal-slip"]')).toBeEmptyDOMElement();
     });
 });
