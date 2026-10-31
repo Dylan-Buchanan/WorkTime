@@ -54,6 +54,12 @@ describe("security-definer RPC privileges", () => {
             p_timer_new_generation: false,
             p_pm_data: null,
             p_pm_updated_at: null,
+            p_goal_tracker_upserts: null,
+            p_goal_tracker_tombstones: null,
+            p_goal_upserts: null,
+            p_goal_tombstones: null,
+            p_goal_check_in_upserts: null,
+            p_goal_check_in_tombstones: null,
             p_full_wipe: false,
         }));
     });

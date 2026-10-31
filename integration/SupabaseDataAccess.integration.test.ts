@@ -1,3 +1,4 @@
+import { createGoalTracker, createGoal, createGoalCheckIn } from "../src/lib/goals/factories";
 import { afterEach, describe, expect, it } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
@@ -571,5 +572,47 @@ describe("SupabaseDataAccess transport", () => {
         expect(timer.data).toBeNull();
         const logs = await client.from("pomodoro_logs").select("id");
         expect(logs.data).toHaveLength(0);
+    });
+});
+
+
+describe("goals RPC and RLS", () => {
+    it("round trips JSON rows, replays idempotently, LWW gates, preserves built keys and survives scoped wipe", async () => {
+        user = await createLocalUser(); const data = new SupabaseDataAccess(user.client);
+        const tracker = createGoalTracker({ name: "Work", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-01-04", lastBuiltPeriodStart: "2026-01-04" }, new Date(T0), "00000000-0000-4000-8000-100000000031");
+        const goal = createGoal({ trackerId: tracker.id, title: "Ship", metric: { label: "Pages", current: 1, target: 5, unit: "pages", source: "manual", overridePinned: false } }, new Date(T0), "00000000-0000-4000-8000-100000000032");
+        const check = createGoalCheckIn({ goalId: goal.id, periodStart: "2026-01-04", planned: [{ text: "Review", dueDate: "2026-01-05" }], evidenceTaskIds: [TASK_ID] }, new Date(T0), "00000000-0000-4000-8000-100000000033");
+        const plan = { ...emptyPlan(), goalTrackerUpserts: [{ value: tracker, updatedAt: T0 }], goalUpserts: [{ value: goal, updatedAt: T0 }], goalCheckInUpserts: [{ value: check, updatedAt: T0 }] };
+        await data.push(user.userId, plan); await data.push(user.userId, plan);
+        let pulled = await data.pull(user.userId);
+        expect(Object.keys(pulled.goalCheckIns)).toEqual([check.id]);
+        expect(pulled.goals[goal.id].value.metric).toEqual(goal.metric);
+        expect(pulled.goalCheckIns[check.id].value.planned).toEqual(check.planned);
+        expect(pulled.goalCheckIns[check.id].value.evidenceTaskIds).toEqual([TASK_ID]);
+        // A second UUID for the same natural key updates content, retaining the server UUID.
+        await data.push(user.userId, { ...emptyPlan(), goalCheckInUpserts: [{ value: { ...check, id: "00000000-0000-4000-8000-100000000034", did: "New" }, updatedAt: LATER }] });
+        await data.push(user.userId, { ...emptyPlan(), goalTrackerUpserts: [{ value: { ...tracker, name: "Renamed", lastBuiltPeriodStart: null }, updatedAt: LATER }], goalUpserts: [{ value: { ...goal, title: "New" }, updatedAt: LATER }] });
+        await data.push(user.userId, plan); // stale rows must not overwrite newer authored content
+        await data.push(user.userId, { ...emptyPlan(), fullWipe: true, settings: { value: defaultAppState().settings, updatedAt: LATER }, timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: LATER, newGeneration: true } });
+        pulled = await data.pull(user.userId);
+        expect(pulled.goalTrackers[tracker.id].value).toMatchObject({ name: "Renamed", lastBuiltPeriodStart: "2026-01-04" });
+        expect(pulled.goals[goal.id].value.title).toBe("New");
+        expect(Object.keys(pulled.goalCheckIns)).toEqual([check.id]); expect(pulled.goalCheckIns[check.id].value.did).toBe("New");
+        await expect(data.push(user.userId, { ...emptyPlan(), goalTombstones: [{ id: goal.id, deletedAt: LATER }] })).rejects.toThrow("GOALS_ARCHIVE_ONLY");
+        const config = localSupabaseConfig();
+        const anon = createClient(config.url, config.anonKey, { auth: { persistSession: false } });
+        for (const table of ["goal_trackers", "goals", "goal_check_ins"]) {
+            const response = await anon.from(table).select("id"); expect(response.error).not.toBeNull();
+            const wrongOwner = await user.client.from(table).select("id").eq("owner_id", FOREIGN_OWNER); expect(wrongOwner.data).toEqual([]);
+            const deniedDelete = await user.client.from(table).delete().eq("owner_id", user.userId); expect(deniedDelete.error?.code).toBe("42501");
+        }
+        const other = await createLocalUser();
+        try {
+            for (const table of ["goal_trackers", "goals", "goal_check_ins"]) expect((await other.client.from(table).select("id")).data).toEqual([]);
+            const foreignChild = await other.client.from("goals").insert({ id: "00000000-0000-4000-8000-100000000035", tracker_id: tracker.id, title: "Foreign", notes: "", project_id: null, metric: null, lifecycle: "active", achieved_at: null, dropped_at: null, sort_order: 0 });
+            expect(foreignChild.error?.code).toBe("23503");
+            const spoof = await other.client.from("goal_trackers").insert({ id: "00000000-0000-4000-8000-100000000036", owner_id: user.userId, name: "Spoof", purpose: "", cadence: tracker.cadence, cadence_anchor_at: tracker.cadenceAnchorAt, color: "", sort_order: 0, is_archived: false });
+            expect(spoof.error?.code).toBe("42501");
+        } finally { await other.cleanup(); }
     });
 });

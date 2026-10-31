@@ -29,6 +29,15 @@ export class MergeError extends Error {
 
 /** Baseline used for the first pull, when no server state has been observed yet. */
 const EMPTY_SNAPSHOT: SyncSnapshot = {
+    goalTrackers: {},
+    goalTrackerUpdatedAt: {},
+    goalTrackerTombstones: {},
+    goals: {},
+    goalUpdatedAt: {},
+    goalTombstones: {},
+    goalCheckIns: {},
+    goalCheckInUpdatedAt: {},
+    goalCheckInTombstones: {},
     tasks: {},
     logs: {},
     habits: {},
@@ -818,6 +827,13 @@ function countVersionedDeltas<T>(
     return count;
 }
 
+function countGoalDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
+    let count = countVersionedDeltas(record.goalTrackers, record.goalTrackerUpdatedAt, record.goalTrackerTombstones, base.goalTrackers);
+    count += countVersionedDeltas(record.goals, record.goalUpdatedAt, record.goalTombstones, base.goals);
+    count += countVersionedDeltas(record.goalCheckIns, record.goalCheckInUpdatedAt, record.goalCheckInTombstones, base.goalCheckIns);
+    return count;
+}
+
 function countPetDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
     let count = countVersionedDeltas(record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
     count += countVersionedDeltas(record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
@@ -830,6 +846,41 @@ function countPetDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
         record.petProfileUpdatedAt, base.petProfile.updatedAt, record.petProfile, base.petProfile.value,
     )) count += 1;
     return count;
+}
+
+function mergeGoalPatch(record: StagedOwnerRecord, base: SyncSnapshot, remote: SyncSnapshot, now: Date): Partial<StagedOwnerRecord> {
+    const goalTrackers = mergeVersionedCollection("goalTrackers", record.goalTrackers, record.goalTrackerUpdatedAt, record.goalTrackerTombstones, base.goalTrackers, remote.goalTrackers);
+    const goals = mergeVersionedCollection("goals", record.goals, record.goalUpdatedAt, record.goalTombstones, base.goals, remote.goals);
+    const goalCheckIns = mergeVersionedCollection("goalCheckIns", record.goalCheckIns, record.goalCheckInUpdatedAt, record.goalCheckInTombstones, base.goalCheckIns, remote.goalCheckIns);
+    for (const [id, tracker] of Object.entries(goalTrackers.values)) {
+        const localKey = record.goalTrackers[id]?.lastBuiltPeriodStart;
+        const remoteKey = remote.goalTrackers[id]?.value.lastBuiltPeriodStart;
+        let latest = tracker.lastBuiltPeriodStart;
+        for (const key of [localKey, remoteKey]) if (key && (!latest || key > latest)) latest = key;
+        if (latest !== tracker.lastBuiltPeriodStart) {
+            goalTrackers.values[id] = { ...tracker, lastBuiltPeriodStart: latest };
+            goalTrackers.stamps[id] = new Date(Math.max(
+                now.getTime(),
+                timestampMs(remote.goalTrackers[id]?.updatedAt ?? tracker.updatedAt) + 1,
+                timestampMs(record.goalTrackerUpdatedAt[id] ?? tracker.updatedAt),
+            )).toISOString();
+        }
+    }
+    // A server id owns the natural key, regardless of the losing local row's stamp.
+    const periodOwner = new Map<string, string>();
+    for (const [id, row] of Object.entries(remote.goalCheckIns)) periodOwner.set(JSON.stringify([row.value.goalId, row.value.periodStart]), id);
+    for (const id of Object.keys(goalCheckIns.values).sort()) {
+        const row = goalCheckIns.values[id]; const key = JSON.stringify([row.goalId, row.periodStart]);
+        const owner = periodOwner.get(key);
+        if (owner && owner !== id) {
+            delete goalCheckIns.values[id]; delete goalCheckIns.stamps[id]; delete goalCheckIns.tombstones[id];
+        } else periodOwner.set(key, id);
+    }
+    return {
+        goalTrackers: goalTrackers.values, goalTrackerUpdatedAt: goalTrackers.stamps, goalTrackerTombstones: goalTrackers.tombstones,
+        goals: goals.values, goalUpdatedAt: goals.stamps, goalTombstones: goals.tombstones,
+        goalCheckIns: goalCheckIns.values, goalCheckInUpdatedAt: goalCheckIns.stamps, goalCheckInTombstones: goalCheckIns.tombstones,
+    };
 }
 
 function mergePetPatch(record: StagedOwnerRecord, base: SyncSnapshot, remote: SyncSnapshot, now: Date): Partial<StagedOwnerRecord> {
@@ -950,6 +1001,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
         count += countTodoDeltas(record, base);
         count += countTodoCompletionDeltas(record, base);
         count += countPetDeltas(record, base);
+        count += countGoalDeltas(record, base);
         return count;
     }
 
@@ -1005,6 +1057,7 @@ function countPending(record: StagedOwnerRecord, base: SyncSnapshot): number {
     count += countTodoDeltas(record, base);
     count += countTodoCompletionDeltas(record, base);
     count += countPetDeltas(record, base);
+    count += countGoalDeltas(record, base);
 
     return count;
 }
@@ -1059,6 +1112,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             todoCompletions: todoCompletions.todoCompletions,
             todoCompletionTombstones: todoCompletions.tombstones,
             ...pets,
+            ...mergeGoalPatch(record, base, remote, now),
             unbootstrapped: false,
         };
         return { record: merged, remoteBaseline: remote, pendingCount: countPending(merged, remote) };
@@ -1135,6 +1189,7 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         todoCompletions: todoCompletions.todoCompletions,
         todoCompletionTombstones: todoCompletions.tombstones,
         ...pets,
+        ...mergeGoalPatch(record, base, remote, now),
         unbootstrapped: false,
     };
 
@@ -1296,6 +1351,29 @@ function versionedCollectionDeltas<T>(
     return { upserts, upsertAcks, tombstones, tombstoneAcks };
 }
 
+function goalDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
+    const goalTrackers = versionedCollectionDeltas("goalTrackers", record.goalTrackers, record.goalTrackerUpdatedAt, record.goalTrackerTombstones, base.goalTrackers);
+    const goals = versionedCollectionDeltas("goals", record.goals, record.goalUpdatedAt, record.goalTombstones, base.goals);
+    const goalCheckIns = versionedCollectionDeltas("goalCheckIns", record.goalCheckIns, record.goalCheckInUpdatedAt, record.goalCheckInTombstones, base.goalCheckIns);
+    return { goalTrackers, goals, goalCheckIns };
+}
+
+function goalPlanFields(goals: ReturnType<typeof goalDeltasOf>) {
+    return {
+        goalTrackerUpserts: goals.goalTrackers.upserts, goalTrackerTombstones: goals.goalTrackers.tombstones,
+        goalUpserts: goals.goals.upserts, goalTombstones: goals.goals.tombstones,
+        goalCheckInUpserts: goals.goalCheckIns.upserts, goalCheckInTombstones: goals.goalCheckIns.tombstones,
+    };
+}
+
+function goalAckFields(goals: ReturnType<typeof goalDeltasOf>) {
+    return {
+        goalTrackerUpserts: goals.goalTrackers.upsertAcks, goalTrackerTombstones: goals.goalTrackers.tombstoneAcks,
+        goalUpserts: goals.goals.upsertAcks, goalTombstones: goals.goals.tombstoneAcks,
+        goalCheckInUpserts: goals.goalCheckIns.upsertAcks, goalCheckInTombstones: goals.goalCheckIns.tombstoneAcks,
+    };
+}
+
 function petDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
     const activity = versionedCollectionDeltas("Pet activity", record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
     const schedule = versionedCollectionDeltas("Pet schedule item", record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
@@ -1412,6 +1490,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         const todos = todoDeltasOf(record, base);
         const todoCompletions = todoCompletionDeltasOf(record, base);
         const pets = petDeltasOf(record, base);
+        const goals = goalDeltasOf(record, base);
         return {
             baseRevision: record.revision,
             taskUpserts: [],
@@ -1427,6 +1506,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             todoCompletionUpserts: todoCompletions.upserts,
             todoCompletionTombstones: todoCompletions.tombstones,
             ...petPlanFields(pets),
+            ...goalPlanFields(goals),
             settings,
             timerState,
             pmState,
@@ -1442,6 +1522,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
                 todoCompletionUpserts: todoCompletions.upsertAcks,
                 todoCompletionTombstones: todoCompletions.tombstoneAcks,
                 ...petAckFields(pets),
+                ...goalAckFields(goals),
                 settings,
                 timerState,
                 pmState,
@@ -1539,6 +1620,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
     const todos = todoDeltasOf(record, base);
     const todoCompletions = todoCompletionDeltasOf(record, base);
     const pets = petDeltasOf(record, base);
+    const goals = goalDeltasOf(record, base);
 
     return {
         baseRevision: record.revision,
@@ -1555,6 +1637,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
         todoCompletionUpserts: todoCompletions.upserts,
         todoCompletionTombstones: todoCompletions.tombstones,
         ...petPlanFields(pets),
+        ...goalPlanFields(goals),
         settings,
         timerState,
         pmState,
@@ -1574,6 +1657,7 @@ export function buildPushPlan(record: StagedOwnerRecord): PushPlan {
             todoCompletionUpserts: todoCompletions.upsertAcks,
             todoCompletionTombstones: todoCompletions.tombstoneAcks,
             ...petAckFields(pets),
+            ...goalAckFields(goals),
         },
     };
 }
@@ -1702,6 +1786,9 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
     }
     next = { ...next, todoCompletionTombstones };
 
+    const goalTrackers = clearAcknowledgedCollection(next.goalTrackers, next.goalTrackerUpdatedAt, next.goalTrackerTombstones, ack.goalTrackerUpserts, ack.goalTrackerTombstones);
+    const goals = clearAcknowledgedCollection(next.goals, next.goalUpdatedAt, next.goalTombstones, ack.goalUpserts, ack.goalTombstones);
+    const goalCheckIns = clearAcknowledgedCollection(next.goalCheckIns, next.goalCheckInUpdatedAt, next.goalCheckInTombstones, ack.goalCheckInUpserts, ack.goalCheckInTombstones);
     const petActivity = clearAcknowledgedCollection(next.petActivityRecords, next.petActivityUpdatedAt, next.petActivityTombstones, ack.petActivityUpserts, ack.petActivityTombstones);
     const petSchedule = clearAcknowledgedCollection(next.petScheduleItems, next.petScheduleUpdatedAt, next.petScheduleTombstones, ack.petScheduleUpserts, ack.petScheduleTombstones);
     const petNaps = clearAcknowledgedCollection(next.petNapRecords, next.petNapUpdatedAt, next.petNapTombstones, ack.petNapUpserts, ack.petNapTombstones);
@@ -1711,6 +1798,9 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
     const petEvents = clearAcknowledgedCollection(next.petNotableEvents, next.petNotableEventUpdatedAt, next.petNotableEventTombstones, ack.petNotableEventUpserts, ack.petNotableEventTombstones);
     next = {
         ...next,
+        goalTrackerUpdatedAt: goalTrackers.stamps, goalTrackerTombstones: goalTrackers.tombstones,
+        goalUpdatedAt: goals.stamps, goalTombstones: goals.tombstones,
+        goalCheckInUpdatedAt: goalCheckIns.stamps, goalCheckInTombstones: goalCheckIns.tombstones,
         petActivityUpdatedAt: petActivity.stamps, petActivityTombstones: petActivity.tombstones,
         petScheduleUpdatedAt: petSchedule.stamps, petScheduleTombstones: petSchedule.tombstones,
         petNapUpdatedAt: petNaps.stamps, petNapTombstones: petNaps.tombstones,

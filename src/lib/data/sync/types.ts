@@ -1,3 +1,4 @@
+import type { GoalTracker, Goal, GoalCheckIn } from "../../../state/types";
 import type {
     ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetFixation, PetNapRecord,
     PetNotableEvent, PetProfile, PetScheduleItem, PetTrainingSkill, PetWeightEntry,
@@ -43,6 +44,12 @@ export interface SyncRemote {
  * was acknowledged.
  */
 export interface AcknowledgedChanges {
+    goalTrackerUpserts?: Record<string, { value: GoalTracker; updatedAt: string }>;
+    goalTrackerTombstones?: Record<string, { deletedAt: string }>;
+    goalUpserts?: Record<string, { value: Goal; updatedAt: string }>;
+    goalTombstones?: Record<string, { deletedAt: string }>;
+    goalCheckInUpserts?: Record<string, { value: GoalCheckIn; updatedAt: string }>;
+    goalCheckInTombstones?: Record<string, { deletedAt: string }>;
     taskUpserts: Record<string, { value: Task; updatedAt: string }>;
     taskTombstones: Record<string, { deletedAt: string }>;
     logUpserts: Record<string, PomodoroLogEntry>;
@@ -84,6 +91,12 @@ export interface AcknowledgedChanges {
  * be detected when the commit runs.
  */
 export interface PushPlan {
+    goalTrackerUpserts?: Array<{ value: GoalTracker; updatedAt: string }>;
+    goalTrackerTombstones?: Array<{ id: string; deletedAt: string }>;
+    goalUpserts?: Array<{ value: Goal; updatedAt: string }>;
+    goalTombstones?: Array<{ id: string; deletedAt: string }>;
+    goalCheckInUpserts?: Array<{ value: GoalCheckIn; updatedAt: string }>;
+    goalCheckInTombstones?: Array<{ id: string; deletedAt: string }>;
     baseRevision: number;
     taskUpserts: Array<{ value: Task; updatedAt: string }>;
     taskTombstones: Array<{ id: string; deletedAt: string }>;

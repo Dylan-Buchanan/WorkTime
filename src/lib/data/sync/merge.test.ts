@@ -105,6 +105,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T1, completed: false },
         pmState: { value: null, updatedAt: null },
         petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
+        goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
         petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
@@ -114,7 +115,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 8,
+        schemaVersion: 9,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -173,6 +174,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         petFixations: {},
         petFixationUpdatedAt: {},
         petFixationTombstones: {},
+        goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
         petNotableEvents: {},
         petNotableEventUpdatedAt: {},
         petNotableEventTombstones: {},
@@ -182,7 +184,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 8,
+        schemaVersion: 9,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
@@ -232,6 +234,7 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         petFixations: {},
         petFixationUpdatedAt: {},
         petFixationTombstones: {},
+        goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
         petNotableEvents: {},
         petNotableEventUpdatedAt: {},
         petNotableEventTombstones: {},

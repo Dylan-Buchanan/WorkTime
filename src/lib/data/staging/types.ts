@@ -1,3 +1,5 @@
+import { isGoalTracker, isGoal, isGoalCheckIn } from "../../goals/factories";
+import type { GoalTracker, Goal, GoalCheckIn } from "../../../state/types";
 import type {
     ActiveTimer,
     AppStateData,
@@ -51,6 +53,15 @@ export interface VersionedValue<T> {
  * default application values.
  */
 export interface SyncSnapshot {
+    goalTrackers: Record<string, { value: GoalTracker; updatedAt: string }>;
+    goalTrackerUpdatedAt: Record<string, string>;
+    goalTrackerTombstones: Record<string, { id: string; deletedAt: string }>;
+    goals: Record<string, { value: Goal; updatedAt: string }>;
+    goalUpdatedAt: Record<string, string>;
+    goalTombstones: Record<string, { id: string; deletedAt: string }>;
+    goalCheckIns: Record<string, { value: GoalCheckIn; updatedAt: string }>;
+    goalCheckInUpdatedAt: Record<string, string>;
+    goalCheckInTombstones: Record<string, { id: string; deletedAt: string }>;
     tasks: Record<string, { value: Task; updatedAt: string }>;
     logs: Record<string, PomodoroLogEntry>;
     habits: Record<string, { value: Habit; updatedAt: string }>;
@@ -110,7 +121,16 @@ export interface TodoCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
-    schemaVersion: 8;
+    goalTrackers: Record<string, GoalTracker>;
+    goalTrackerUpdatedAt: Record<string, string>;
+    goalTrackerTombstones: Record<string, { id: string; deletedAt: string }>;
+    goals: Record<string, Goal>;
+    goalUpdatedAt: Record<string, string>;
+    goalTombstones: Record<string, { id: string; deletedAt: string }>;
+    goalCheckIns: Record<string, GoalCheckIn>;
+    goalCheckInUpdatedAt: Record<string, string>;
+    goalCheckInTombstones: Record<string, { id: string; deletedAt: string }>;
+    schemaVersion: 9;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -192,7 +212,7 @@ export interface StagedOwnerRecord {
     petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 8 as const;
+export const STAGING_SCHEMA_VERSION = 9 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -533,6 +553,12 @@ export function isSyncSnapshot(value: unknown): value is SyncSnapshot {
     if (!isObject(value) || !isObject(value.timerState)) return false;
     const timerState = value.timerState;
     return (
+        isVersionedEntityMap(value.goalTrackers, isGoalTracker) &&
+        isStringMap(value.goalTrackerUpdatedAt) && isTombstoneMap(value.goalTrackerTombstones) &&
+        isVersionedEntityMap(value.goals, isGoal) &&
+        isStringMap(value.goalUpdatedAt) && isTombstoneMap(value.goalTombstones) &&
+        isVersionedEntityMap(value.goalCheckIns, isGoalCheckIn) &&
+        isStringMap(value.goalCheckInUpdatedAt) && isTombstoneMap(value.goalCheckInTombstones) &&
         isObject(value.tasks) &&
         Object.values(value.tasks).every(
             (row) => isObject(row) && isTask(row.value) && typeof row.updatedAt === "string",
@@ -583,6 +609,15 @@ function isPendingCompletion(value: unknown): boolean {
 }
 
 const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) => boolean]> = [
+    ["goalTrackers", (v): boolean => isObject(v) && Object.values(v).every(isGoalTracker)],
+    ["goalTrackerUpdatedAt", isStringMap],
+    ["goalTrackerTombstones", isTombstoneMap],
+    ["goals", (v): boolean => isObject(v) && Object.values(v).every(isGoal)],
+    ["goalUpdatedAt", isStringMap],
+    ["goalTombstones", isTombstoneMap],
+    ["goalCheckIns", (v): boolean => isObject(v) && Object.values(v).every(isGoalCheckIn)],
+    ["goalCheckInUpdatedAt", isStringMap],
+    ["goalCheckInTombstones", isTombstoneMap],
     ["ownerId", (v): boolean => typeof v === "string"],
     ["revision", (v): boolean => typeof v === "number"],
     ["initialized", (v): boolean => typeof v === "boolean"],
@@ -641,7 +676,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `8` are accepted; records at the unchanged v1 key migrate in memory
+ * through `9` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -650,6 +685,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * absent so previously stored records keep loading. The v6 -> v7 migration
  * installs the pet domain and its remote mirrors atomically. The v7 -> v8
  * migration backfills start_of_day in both local state and the sync baseline.
+ * The v8 -> v9 migration installs all nine goal fields in both shapes.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -669,7 +705,8 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         parsed.schemaVersion !== 5 &&
         parsed.schemaVersion !== 6 &&
         parsed.schemaVersion !== 7 &&
-        parsed.schemaVersion !== 8
+        parsed.schemaVersion !== 8 &&
+        parsed.schemaVersion !== 9
     ) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
@@ -807,6 +844,18 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
               }
             : record.lastSynced;
         record = { ...record, schemaVersion: 8, state, lastSynced };
+    }
+    // Install all nine goal fields in both local state and the pull baseline atomically.
+    if (record.schemaVersion === 8) {
+        const goals = {
+            goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {},
+            goals: {}, goalUpdatedAt: {}, goalTombstones: {},
+            goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
+        };
+        record = {
+            ...record, ...goals, schemaVersion: 9,
+            lastSynced: record.lastSynced === null ? null : { ...(record.lastSynced as Record<string, unknown>), ...goals },
+        };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

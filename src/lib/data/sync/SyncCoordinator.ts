@@ -37,6 +37,9 @@ export function isPlanNonEmpty(plan: PushPlan): boolean {
         (plan.petTrainingSkillUpserts?.length ?? 0) > 0 || (plan.petTrainingSkillTombstones?.length ?? 0) > 0 ||
         (plan.petFixationUpserts?.length ?? 0) > 0 || (plan.petFixationTombstones?.length ?? 0) > 0 ||
         (plan.petNotableEventUpserts?.length ?? 0) > 0 || (plan.petNotableEventTombstones?.length ?? 0) > 0 ||
+        (plan.goalTrackerUpserts?.length ?? 0) > 0 || (plan.goalTrackerTombstones?.length ?? 0) > 0 ||
+        (plan.goalUpserts?.length ?? 0) > 0 || (plan.goalTombstones?.length ?? 0) > 0 ||
+        (plan.goalCheckInUpserts?.length ?? 0) > 0 || (plan.goalCheckInTombstones?.length ?? 0) > 0 ||
         plan.settings !== null ||
         plan.timerState !== null ||
         plan.pmState !== null ||
@@ -55,6 +58,15 @@ export function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan
         throw new Error("Cannot build the pushed snapshot without a lastSynced baseline");
     }
     const pushed: SyncSnapshot = {
+        goalTrackers: { ...base.goalTrackers },
+        goalTrackerUpdatedAt: { ...base.goalTrackerUpdatedAt },
+        goalTrackerTombstones: { ...base.goalTrackerTombstones },
+        goals: { ...base.goals },
+        goalUpdatedAt: { ...base.goalUpdatedAt },
+        goalTombstones: { ...base.goalTombstones },
+        goalCheckIns: { ...base.goalCheckIns },
+        goalCheckInUpdatedAt: { ...base.goalCheckInUpdatedAt },
+        goalCheckInTombstones: { ...base.goalCheckInTombstones },
         tasks: { ...base.tasks },
         logs: { ...base.logs },
         habits: { ...base.habits },
@@ -126,6 +138,9 @@ export function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan
     applyPetCollection(pushed.petTrainingSkills, ack.petTrainingSkillUpserts, ack.petTrainingSkillTombstones);
     applyPetCollection(pushed.petFixations, ack.petFixationUpserts, ack.petFixationTombstones);
     applyPetCollection(pushed.petNotableEvents, ack.petNotableEventUpserts, ack.petNotableEventTombstones);
+    applyPetCollection(pushed.goalTrackers, ack.goalTrackerUpserts, ack.goalTrackerTombstones);
+    applyPetCollection(pushed.goals, ack.goalUpserts, ack.goalTombstones);
+    applyPetCollection(pushed.goalCheckIns, ack.goalCheckInUpserts, ack.goalCheckInTombstones);
     if (ack.petProfile) pushed.petProfile = clone(ack.petProfile);
     if (ack.petProfileTombstone) pushed.petProfile = { value: null, updatedAt: null };
     if (ack.settings) pushed.settings = clone(ack.settings);
