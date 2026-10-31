@@ -6,10 +6,12 @@ import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
-import { dueState, goalGrid, periodLabel } from "../lib/goals/periods";
+import { dueState, firstPeriod, goalGrid, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { localDateKey } from "../lib/todos/calendar";
 import type { LocalDateKey } from "../lib/todos/types";
+import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
+import { CheckInWizard } from "./goals/CheckInWizard";
 import { GoalDueNudge } from "./goals/GoalDueNudge";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { TrackerDueBadge } from "./goals/TrackerDueBadge";
@@ -37,6 +39,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [lifecycle, setLifecycle] = useState<Goal["lifecycle"] | "all">("active");
     const [editingGoal, setEditingGoal] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [pinnedCheckIn, setPinnedCheckIn] = useState<{ trackerId: string; period: GoalPeriod } | null>(null);
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -49,6 +52,20 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const due = tracker ? dueState(goalGrid(tracker), today) : null;
     const dueTracker = due !== null && due.kind === "due" ? due : null;
     const currentPeriodStart = due !== null && (due.kind === "due" || due.kind === "not-due") ? due.current.periodStart : null;
+    const checkInGrid = tracker ? goalGrid(tracker) : null;
+    const checkInCurrent = checkInGrid ? periodAt(checkInGrid, today) : null;
+    const checkInFirst = checkInGrid ? firstPeriod(checkInGrid) : null;
+    const checkInAvailability: CheckInAvailability = checkInCurrent !== null && tracker !== undefined && !tracker.isArchived
+        ? { kind: "open", periodStart: checkInCurrent.periodStart, periodLabel: periodLabel(checkInCurrent) }
+        : {
+            kind: "not-started",
+            message: tracker?.isArchived
+                ? "This tracker is archived."
+                : checkInFirst
+                    ? `No open period. First period starts on ${checkInFirst.periodStart}.`
+                    : "No open period.",
+            firstPeriodLabel: checkInFirst ? periodLabel(checkInFirst) : null,
+        };
     const slipCount = (goalId: string) => {
         if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
         return slipSummary(goalId, Object.values(state.checkIns), currentPeriodStart).consecutiveSlips;
@@ -96,7 +113,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 {hydrated && !tracker && <p>{Object.keys(state.trackers).length ? "No active trackers. Show archived trackers or add a tracker." : "No trackers yet. Add a tracker for the goals you want to work toward."}</p>}
                 {tracker && <>
                     <label className="flex items-center gap-2">Tracker
-                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); }}>
+                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); setPinnedCheckIn(null); }}>
                             {trackers.map(row => <option key={row.id} value={row.id}>{row.name}{row.isArchived ? " (archived)" : ""}</option>)}
                         </select>
                     </label>
@@ -117,10 +134,15 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                         <p className="text-neutral-400">{tracker.cadence.kind === "monthly-weekday"
                             ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
                             : `Every ${tracker.cadence.intervalWeeks} ${tracker.cadence.intervalWeeks === 1 ? "week" : "weeks"} on ${weekdays[tracker.cadence.weekday]}`}</p>
-                        <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id}>
-                            {tracker.cadenceAnchorAt > today
-                                ? <p>No open period. First period starts on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>
-                                : <p>First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>}
+                        <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="flex flex-wrap items-center gap-2">
+                            {!tracker.isArchived && (checkInCurrent === null
+                                ? <p>No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
+                                : <p>First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>)}
+                            <CheckInEntry trackerId={tracker.id} availability={checkInAvailability} onOpen={periodStart => {
+                                if (!checkInGrid) return;
+                                const pinned = periodAt(checkInGrid, periodStart);
+                                if (pinned) setPinnedCheckIn({ trackerId: tracker.id, period: pinned });
+                            }} />
                         </div>
                         <div data-goals-slot="deck-entry" data-tracker-id={tracker.id} />
                         <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id} />
@@ -152,7 +174,14 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 </>}
             </div>
         </main>
-        <div data-goals-slot="check-in-wizard" />
+        <div data-goals-slot="check-in-wizard">
+            {pinnedCheckIn && <CheckInWizard
+                key={`${pinnedCheckIn.trackerId}:${pinnedCheckIn.period.periodStart}`}
+                trackerId={pinnedCheckIn.trackerId}
+                period={pinnedCheckIn.period}
+                onClose={() => setPinnedCheckIn(null)}
+            />}
+        </div>
         <div data-goals-slot="deck-preview" />
         <div data-goals-slot="due-nudge"><GoalDueNudge today={today} /></div>
     </div>;

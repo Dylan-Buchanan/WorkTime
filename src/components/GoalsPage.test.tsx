@@ -1,5 +1,5 @@
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DragEndEvent } from "@dnd-kit/core";
@@ -44,6 +44,7 @@ async function oneTracker() {
     return { data, tracker };
 }
 beforeEach(() => localStorage.clear());
+afterEach(() => { vi.useRealTimers(); });
 
 describe("GoalsPage", () => {
     it("has a clean empty state and creates multiple trackers using both validated cadence variants", async () => {
@@ -289,5 +290,43 @@ describe("GoalsPage", () => {
         ]);
         const { container } = await mount(data, "2026-11-02");
         expect(container.querySelector('[data-goals-slot="goal-slip"]')).toBeEmptyDOMElement();
+    });
+
+    it("keeps the legacy no-open-period copy and disables the check-in control before the first boundary", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const future = buildGoalTrackerFixture({ id: "future", name: "Future", cadenceAnchorAt: "2099-01-04" });
+        await data.saveGoals([future], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement;
+        expect(entry).toHaveAttribute("data-tracker-id", future.id);
+        expect(entry).toHaveTextContent("No open period. First period starts on 2099-01-04.");
+        expect(screen.getAllByText(/No open period. First period starts on/)).toHaveLength(1);
+        const control = within(entry).getByRole("button", { name: "Period not open" });
+        expect(control).toBeDisabled();
+        expect(control).toHaveAttribute("aria-disabled", "true");
+        await user.click(control);
+        expect(container.querySelector('[data-goals-slot="check-in-wizard"]')).toBeEmptyDOMElement();
+    });
+
+    it("opens the wizard pinned to the current grid period and removes it on close", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 9, 20, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement;
+        expect(entry).toHaveAttribute("data-tracker-id", tracker.id);
+        expect(entry).toHaveTextContent(`First period started on ${tracker.cadenceAnchorAt}.`);
+        await user.click(within(entry).getByRole("button", { name: "Check in · October 2026" }));
+
+        const slot = container.querySelector('[data-goals-slot="check-in-wizard"]') as HTMLElement;
+        expect(within(slot).getByRole("heading", { name: "Check in · October 2026" })).toBeInTheDocument();
+        expect(within(slot).getByLabelText("Check-in period")).toHaveValue("2026-10-18");
+        expect(within(slot).getByLabelText(`Did for ${goal.title}`)).toBeInTheDocument();
+
+        await user.click(within(slot).getByRole("button", { name: "Close check-in wizard" }));
+        expect(slot).toBeEmptyDOMElement();
     });
 });
