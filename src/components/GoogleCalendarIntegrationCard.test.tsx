@@ -27,7 +27,7 @@ function access(overrides: Partial<GoogleCalendarDataAccess> = {}): GoogleCalend
         beginAuthorization: vi.fn().mockResolvedValue("https://accounts.google.com/o/oauth2/v2/auth?state=safe"),
         listCalendars: vi.fn().mockResolvedValue({ calendars: [], sources: [] }),
         updateSelectedCalendars: vi.fn().mockResolvedValue(undefined),
-        fetchEvents: vi.fn().mockResolvedValue([]),
+        fetchEvents: vi.fn().mockResolvedValue({ events: [], sources: [] }),
         fetchBusyIntervals: vi.fn(), loadTaskLink: vi.fn(), pushTask: vi.fn(), resyncTask: vi.fn(), unpushTask: vi.fn(),
         disconnect: vi.fn().mockResolvedValue(undefined),
         ...overrides,
@@ -91,12 +91,18 @@ describe("GoogleCalendarIntegrationCard", () => {
         expect(navigateTo).toHaveBeenCalledOnce();
     });
 
-    it("offers a targeted reconnect when a token expires after the calendar list loaded", async () => {
+    it("offers a targeted reconnect when an event read reports an account failure after the calendar list loaded", async () => {
         const a = connection("a", { isSchedulingTarget: true });
         const b = connection("b");
         const fetchEvents = vi.fn()
-            .mockResolvedValueOnce([])
-            .mockRejectedValue(new GoogleCalendarIntegrationError("GOOGLE_TOKEN_INVALID", "Google Calendar must be reconnected"));
+            .mockResolvedValueOnce({ events: [], sources: [] })
+            .mockResolvedValue({
+                events: [],
+                sources: [
+                    { connectionId: "a", accountEmail: "a@example.com", calendarCount: 1, busyMinutes: 0, errorCode: null },
+                    { connectionId: "b", accountEmail: "b@example.com", calendarCount: 0, busyMinutes: 0, errorCode: "GOOGLE_TOKEN_INVALID" },
+                ],
+            });
         const dataAccess = access({
             loadConnections: vi.fn().mockResolvedValue([a, b]),
             listCalendars: vi.fn().mockResolvedValue({
@@ -114,7 +120,8 @@ describe("GoogleCalendarIntegrationCard", () => {
         await waitFor(() => expect(fetchEvents).toHaveBeenCalledOnce());
 
         fireEvent.click(screen.getByRole("button", { name: "Refresh this week's calendar" }));
-        expect(await screen.findByRole("alert")).toHaveTextContent("Google Calendar must be reconnected");
+        expect(await screen.findByText("Google Calendar access for b@example.com needs reconnection.")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Reconnect a@example.com" })).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Reconnect b@example.com" }));
         await waitFor(() => expect(dataAccess.beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ scopeLevel: "schedule", connectionId: "b" })));
         expect(navigateTo).toHaveBeenCalledOnce();
@@ -157,9 +164,12 @@ describe("GoogleCalendarIntegrationCard", () => {
         end.setHours(10, 30);
         const dataAccess = access({
             loadConnections: vi.fn().mockResolvedValue([a]),
-            fetchEvents: vi.fn().mockResolvedValue([
-                { id: "primary:event-1", connectionId: "a", accountEmail: "a@example.com", title: "Team planning", start: start.toISOString(), end: end.toISOString(), allDay: false },
-            ]),
+            fetchEvents: vi.fn().mockResolvedValue({
+                events: [
+                    { id: "primary:event-1", connectionId: "a", accountEmail: "a@example.com", title: "Team planning", start: start.toISOString(), end: end.toISOString(), allDay: false },
+                ],
+                sources: [],
+            }),
         });
 
         render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
@@ -167,11 +177,42 @@ describe("GoogleCalendarIntegrationCard", () => {
         expect(await screen.findByText("Team planning")).toBeInTheDocument();
         expect(screen.getByLabelText("Current week calendar")).toBeInTheDocument();
         expect(screen.getByText(/9:00.*10:30/)).toBeInTheDocument();
-        const chip = screen.getByLabelText("Google account a@example.com");
+        const chip = screen.getByRole("img", { name: "Google account a@example.com" });
         expect(chip).toHaveTextContent("A");
         expect(chip).toHaveAttribute("title", "Google account: a@example.com");
         expect(screen.getByText("Team planning").closest("article")?.getAttribute("title")).toContain("a@example.com");
         expect(dataAccess.fetchEvents).toHaveBeenCalledWith(expect.objectContaining({ timeMin: expect.any(String), timeMax: expect.any(String) }));
+    });
+
+    it("merges week-strip events across accounts with distinct, named chips", async () => {
+        const a = connection("a", { isSchedulingTarget: true });
+        const b = connection("b");
+        const start = new Date();
+        start.setHours(9, 0, 0, 0);
+        const aEvent = {
+            id: "primary:a-event", connectionId: "a", accountEmail: "a@example.com", title: "Account A standup",
+            start: start.toISOString(), end: new Date(start.getTime() + 30 * 60_000).toISOString(), allDay: false,
+        };
+        const bEvent = {
+            id: "primary:b-event", connectionId: "b", accountEmail: "b@example.com", title: "Account B review",
+            start: new Date(start.getTime() + 60 * 60_000).toISOString(), end: new Date(start.getTime() + 90 * 60_000).toISOString(), allDay: false,
+        };
+        const dataAccess = access({
+            loadConnections: vi.fn().mockResolvedValue([a, b]),
+            fetchEvents: vi.fn().mockResolvedValue({ events: [aEvent, bEvent], sources: [] }),
+        });
+
+        render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
+
+        expect(await screen.findByText("Account A standup")).toBeInTheDocument();
+        expect(screen.getByText("Account B review")).toBeInTheDocument();
+        const chipA = screen.getByRole("img", { name: "Google account a@example.com" });
+        const chipB = screen.getByRole("img", { name: "Google account b@example.com" });
+        expect(chipA).toHaveTextContent("A");
+        expect(chipB).toHaveTextContent("B");
+        expect(chipA.className).not.toBe(chipB.className);
+        expect(screen.getByText("Account A standup").closest("article")?.getAttribute("title")).toContain("a@example.com");
+        expect(screen.getByText("Account B review").closest("article")?.getAttribute("title")).toContain("b@example.com");
     });
 
     it("labels legacy account-less events as unidentified instead of inventing provenance", async () => {
@@ -180,16 +221,26 @@ describe("GoogleCalendarIntegrationCard", () => {
         const end = new Date(start);
         end.setHours(10, 0);
         const dataAccess = access({
-            loadConnections: vi.fn().mockResolvedValue([connection("a", { isSchedulingTarget: true })]),
-            fetchEvents: vi.fn().mockResolvedValue([
-                { id: "primary:legacy", title: "Legacy meeting", start: start.toISOString(), end: end.toISOString(), allDay: false },
-            ]),
+            loadConnections: vi.fn().mockResolvedValue([connection("legacy", {
+                isSchedulingTarget: true, accountId: null, accountEmail: null, primaryCalendarId: null, identitySource: "legacy",
+            })]),
+            fetchEvents: vi.fn().mockResolvedValue({
+                events: [
+                    { id: "primary:legacy", title: "Legacy meeting", start: start.toISOString(), end: end.toISOString(), allDay: false },
+                    { id: "primary:legacy-attributed", connectionId: "legacy", title: "Unattributed meeting", start: end.toISOString(), end: new Date(end.getTime() + 30 * 60_000).toISOString(), allDay: false },
+                ],
+                sources: [],
+            }),
         });
 
         render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
 
         expect(await screen.findByText("Legacy meeting")).toBeInTheDocument();
-        expect(screen.getByLabelText("Google account Unidentified")).toHaveTextContent("U");
+        expect(screen.getByText("Unattributed meeting")).toBeInTheDocument();
+        const chips = screen.getAllByRole("img", { name: "Google account Unidentified" });
+        expect(chips).toHaveLength(2);
+        expect(chips.every((chip) => chip.classList.contains("border-neutral-700") && chip.textContent === "U")).toBe(true);
+        expect(screen.queryByText(/Unknown account/)).not.toBeInTheDocument();
     });
 
     it("prefers event identity over an unidentified legacy connection snapshot", async () => {
@@ -201,18 +252,21 @@ describe("GoogleCalendarIntegrationCard", () => {
             loadConnections: vi.fn().mockResolvedValue([connection("legacy", {
                 isSchedulingTarget: true, accountId: null, accountEmail: null, primaryCalendarId: null, identitySource: "legacy",
             })]),
-            fetchEvents: vi.fn().mockResolvedValue([
-                { id: "primary:backfilled", connectionId: "legacy", accountEmail: "backfilled@example.com", title: "Backfilled meeting", start: start.toISOString(), end: end.toISOString(), allDay: false },
-            ]),
+            fetchEvents: vi.fn().mockResolvedValue({
+                events: [
+                    { id: "primary:backfilled", connectionId: "legacy", accountEmail: "backfilled@example.com", title: "Backfilled meeting", start: start.toISOString(), end: end.toISOString(), allDay: false },
+                ],
+                sources: [],
+            }),
         });
 
         render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
 
         expect(await screen.findByText("Backfilled meeting")).toBeInTheDocument();
-        const chip = screen.getByLabelText("Google account backfilled@example.com");
+        const chip = screen.getByRole("img", { name: "Google account backfilled@example.com" });
         expect(chip).toHaveTextContent("B");
         expect(screen.getByText("Backfilled meeting").closest("article")?.getAttribute("title")).toContain("backfilled@example.com");
-        expect(screen.queryByLabelText("Google account Unidentified")).not.toBeInTheDocument();
+        expect(screen.queryByRole("img", { name: "Google account Unidentified" })).not.toBeInTheDocument();
     });
 
 
@@ -223,9 +277,12 @@ describe("GoogleCalendarIntegrationCard", () => {
         const end = new Date("2026-09-02T10:00:00");
         const dataAccess = access({
             loadConnections: vi.fn().mockResolvedValue([a]),
-            fetchEvents: vi.fn().mockResolvedValue([
-                { id: "primary:past", connectionId: "a", title: "Finished meeting", start: start.toISOString(), end: end.toISOString(), allDay: false },
-            ]),
+            fetchEvents: vi.fn().mockResolvedValue({
+                events: [
+                    { id: "primary:past", connectionId: "a", title: "Finished meeting", start: start.toISOString(), end: end.toISOString(), allDay: false },
+                ],
+                sources: [],
+            }),
         });
 
         render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
@@ -359,6 +416,25 @@ describe("GoogleCalendarIntegrationCard", () => {
         expect(await screen.findByText("Google Calendar connected: b@example.com.")).toBeInTheDocument();
         expect(window.location.pathname).toBe("/integrations");
         expect(window.location.search).toBe("?keep=yes");
+    });
+
+    it("shows a retry state instead of the empty state when accounts cannot be loaded", async () => {
+        const loadConnections = vi.fn()
+            .mockRejectedValueOnce(new Error("Network is unavailable"))
+            .mockResolvedValueOnce([connection("a", { isSchedulingTarget: true })]);
+        const dataAccess = access({ loadConnections });
+
+        render(<GoogleCalendarIntegrationCard dataAccess={dataAccess} />);
+
+        expect(await screen.findByText("Your Google Calendar accounts could not be loaded.")).toBeInTheDocument();
+        expect(screen.queryByText("No Google accounts are connected.")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Connect read only" })).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+        expect(await screen.findByText("a@example.com")).toBeInTheDocument();
+        expect(loadConnections).toHaveBeenCalledTimes(2);
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
     it("keeps a global invalid-token reconnect on the scheduling account", async () => {

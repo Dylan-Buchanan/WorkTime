@@ -66,6 +66,9 @@ export const GoogleCalendarTaskSection = ({
     const [notice, setNotice] = useState<string | null>(null);
     const [conflict, setConflict] = useState<{ action: "push" | "resync"; input: GoogleCalendarPushInput; intervals: Array<{ start: string; end: string }> } | null>(null);
     const resumedRef = useRef<string | null>(null);
+    // Guards a slow mount read from overwriting a link written by the resume
+    // effect after an upgraded push.
+    const linkVersionRef = useRef(0);
     const schedulingConnection = connections.find((connection) => connection.isSchedulingTarget) ?? null;
     const linkConnection = link?.connectionId
         ? connections.find((connection) => connection.connectionId === link.connectionId) ?? null
@@ -88,6 +91,7 @@ export const GoogleCalendarTaskSection = ({
     const reload = async () => {
         const accounts = await dataAccess.loadConnections();
         const nextLink = await dataAccess.loadTaskLink(task.id, accounts);
+        linkVersionRef.current += 1;
         setConnections(accounts);
         setLink(nextLink);
         if (nextLink) {
@@ -101,17 +105,20 @@ export const GoogleCalendarTaskSection = ({
     useEffect(() => {
         let active = true;
         setLoading(true);
+        const version = linkVersionRef.current;
         void (async () => {
             try {
                 const accounts = await dataAccess.loadConnections();
                 const nextLink = await dataAccess.loadTaskLink(task.id, accounts);
                 if (!active) return;
-                setConnections(accounts);
-                setLink(nextLink);
-                if (nextLink) {
-                    const start = new Date(nextLink.scheduledStart);
-                    setDateDraft(localDate(start));
-                    setTimeDraft(localTime(start));
+                if (version === linkVersionRef.current) {
+                    setConnections(accounts);
+                    setLink(nextLink);
+                    if (nextLink) {
+                        const start = new Date(nextLink.scheduledStart);
+                        setDateDraft(localDate(start));
+                        setTimeDraft(localTime(start));
+                    }
                 }
                 setLoading(false);
             } catch (reason) {
@@ -145,6 +152,7 @@ export const GoogleCalendarTaskSection = ({
             const next = action === "push"
                 ? await dataAccess.pushTask({ ...input, allowConflict })
                 : await dataAccess.resyncTask({ ...input, allowConflict });
+            linkVersionRef.current += 1;
             setLink(next);
             setNotice(action === "push" ? "Task scheduled in Google Calendar." : "Google Calendar event resynced.");
             return next;
@@ -201,6 +209,7 @@ export const GoogleCalendarTaskSection = ({
         setErrorCode(null);
         try {
             await dataAccess.unpushTask(task.id);
+            linkVersionRef.current += 1;
             setLink(null);
             setNotice("Task removed from Google Calendar.");
         } catch (reason) {

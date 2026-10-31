@@ -24,7 +24,7 @@ import { usePM } from "../../state/ProjectManagerContext";
 import { useHabits } from "../../state/HabitContext";
 import type { TaskChange } from "../../lib/engine/diffEngine";
 import { AgentApprovalCard } from "./AgentApprovalCard";
-import { GoogleCalendarIntegrationError, type GoogleCalendarDataAccess, type GoogleCalendarInterval } from "../../lib/data/GoogleCalendarDataAccess";
+import { GoogleCalendarIntegrationError, type GoogleCalendarBusyResult, type GoogleCalendarConnection, type GoogleCalendarDataAccess, type GoogleCalendarInterval, type GoogleCalendarSource } from "../../lib/data/GoogleCalendarDataAccess";
 import { googleAccountLabel } from "../../lib/integrations";
 import { resolvePlannerWorkUntil } from "../../lib/engine/plannerContext";
 
@@ -50,6 +50,21 @@ interface CalendarWarning {
     connectionId: string;
     label: string;
     code: string;
+}
+
+function calendarWarningsFrom(
+    sources: GoogleCalendarSource[] | undefined,
+    connections: GoogleCalendarConnection[],
+): CalendarWarning[] {
+    return (sources ?? []).flatMap((source) => {
+        if (!source.errorCode) return [];
+        const connection = connections.find((value) => value.connectionId === source.connectionId);
+        return [{
+            connectionId: source.connectionId,
+            label: googleAccountLabel(connection ?? { accountEmail: source.accountEmail, primaryCalendarId: null }),
+            code: source.errorCode,
+        }];
+    });
 }
 
 const StartOfDayPlanPreview: React.FC<{ plan: StartOfDayWorkflowResult }> = ({ plan }) => (
@@ -268,19 +283,25 @@ export const AgentPanel: React.FC<{
             if (report) setCalendarFeedback("Select busy-time calendars for at least one account in Integrations.");
             return [];
         }
-        const result = await googleCalendarDataAccess.fetchBusyIntervals({
-            timeMin: now.toISOString(),
-            timeMax: absoluteWorkUntil.toISOString(),
-        });
-        setCalendarWarnings((result.sources ?? []).flatMap((source) => {
-            if (!source.errorCode) return [];
-            const connection = connections.find((value) => value.connectionId === source.connectionId);
-            return [{
-                connectionId: source.connectionId,
-                label: googleAccountLabel(connection ?? { accountEmail: source.accountEmail, primaryCalendarId: null }),
-                code: source.errorCode,
-            }];
-        }));
+        let result: GoogleCalendarBusyResult;
+        try {
+            result = await googleCalendarDataAccess.fetchBusyIntervals({
+                timeMin: now.toISOString(),
+                timeMax: absoluteWorkUntil.toISOString(),
+            });
+        } catch (error) {
+            // A global busy failure carries no `sources[]`. Ask the calendar
+            // list which account actually failed so Reconnect does not target
+            // a healthy account.
+            if (error instanceof GoogleCalendarIntegrationError && error.code === "GOOGLE_TOKEN_INVALID") {
+                try {
+                    const list = await googleCalendarDataAccess.listCalendars();
+                    setCalendarWarnings(calendarWarningsFrom(list.sources, connections));
+                } catch { /* Attribution is unavailable; keep the fallback target. */ }
+            }
+            throw error;
+        }
+        setCalendarWarnings(calendarWarningsFrom(result.sources, connections));
         if (report) {
             const minutes = Math.round(result.intervals.reduce((sum, interval) =>
                 sum + new Date(interval.end).getTime() - new Date(interval.start).getTime(), 0) / 60_000);
@@ -308,10 +329,14 @@ export const AgentPanel: React.FC<{
         clearGenerationError();
         try {
             const connections = await googleCalendarDataAccess.loadConnections();
-            const connection = connectionId
-                ? connections.find((value) => value.connectionId === connectionId)
+            // A global busy failure has no explicit target; prefer the account
+            // the attribution probe reported as unreadable.
+            const targetId = connectionId
+                ?? calendarWarnings.find((warning) => warning.code === "GOOGLE_TOKEN_INVALID")?.connectionId;
+            const connection = targetId
+                ? connections.find((value) => value.connectionId === targetId)
                 : connections.find((value) => value.isSchedulingTarget) ?? connections[0];
-            if (!connection) throw new Error(connectionId
+            if (!connection) throw new Error(targetId
                 ? "Google account was disconnected. Refresh and try again."
                 : "No Google account is connected.");
             const returnTo = `${window.location.origin}${window.location.pathname}`;
@@ -563,6 +588,18 @@ export const AgentPanel: React.FC<{
 
             <div className="max-h-[70vh] overflow-y-auto p-3">
                 {hasKey && agent.mode === "start-of-day" && planPreview && <StartOfDayPlanPreview plan={planPreview} />}
+                {hasKey && agent.mode === "start-of-day" && (calendarFeedback || calendarWarnings.length > 0) && <div className="mb-3 space-y-1">
+                    {calendarFeedback && <p role="status" className="text-[10px] text-sky-300">{calendarFeedback}</p>}
+                    {calendarWarnings.length > 0 && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[10px] text-amber-200">
+                        <p>Some Google accounts could not be read; any busy time from them was left out of this plan.</p>
+                        <ul className="mt-1 space-y-1">
+                            {calendarWarnings.map((warning) => <li key={`${warning.connectionId}:${warning.code}`} className="flex flex-wrap items-center gap-1">
+                                <span>{warning.code === "GOOGLE_TOKEN_INVALID" ? `${warning.label} needs reconnecting.` : `${warning.label} could not be read (${warning.code}).`}</span>
+                                {warning.code === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void reconnectGoogleCalendar(warning.connectionId)} disabled={calendarReconnecting} className="underline underline-offset-2 disabled:opacity-50">Reconnect {warning.label}</button>}
+                            </li>)}
+                        </ul>
+                    </div>}
+                </div>}
                 {hasKey && agent.mode === "end-of-day" && endOfDayPreview && <EndOfDayPreview result={endOfDayPreview} />}
                 {!hasKey ? (
                     <div className="rounded-xl border border-dashed border-neutral-700 p-4 text-center">
@@ -595,16 +632,6 @@ export const AgentPanel: React.FC<{
                                     {googleCalendarDataAccess && <button type="button" disabled={generating || calendarRefreshing || !workUntil} onClick={() => void handleCalendarRefresh()} className="rounded-lg border border-neutral-700 px-2 py-1.5 text-[10px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-50">{calendarRefreshing ? "Refreshing…" : "Refresh calendar"}</button>}
                                     <button type="button" disabled={generating || !workUntil} onClick={() => void handleStartOfDay()} className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-500 disabled:opacity-50">{generating ? "Planning…" : "Generate plan"}</button>
                                 </div>
-                                {calendarFeedback && <p role="status" className="mt-2 text-[10px] text-sky-300">{calendarFeedback}</p>}
-                                {calendarWarnings.length > 0 && <div role="status" className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[10px] text-amber-200">
-                                    <p>Some Google accounts could not be read; any busy time from them was left out of this plan.</p>
-                                    <ul className="mt-1 space-y-1">
-                                        {calendarWarnings.map((warning) => <li key={`${warning.connectionId}:${warning.code}`} className="flex flex-wrap items-center gap-1">
-                                            <span>{warning.code === "GOOGLE_TOKEN_INVALID" ? `${warning.label} needs reconnecting.` : `${warning.label} could not be read (${warning.code}).`}</span>
-                                            {warning.code === "GOOGLE_TOKEN_INVALID" && <button type="button" onClick={() => void reconnectGoogleCalendar(warning.connectionId)} disabled={calendarReconnecting} className="underline underline-offset-2 disabled:opacity-50">Reconnect {warning.label}</button>}
-                                        </li>)}
-                                    </ul>
-                                </div>}
                                 {generating && <p role="status" className="mt-2 text-[11px] text-violet-300">Building and validating your day plan…</p>}
                                 {generationErrorAlert}
                             </div>

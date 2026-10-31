@@ -157,15 +157,24 @@ describe("SupabaseGoogleCalendarDataAccess", () => {
             .rejects.toMatchObject({ code: "CALENDAR_CONFLICT", retryAfterSeconds: 3, conflicts: [{ start: "2026-08-29T14:00:00.000Z", end: "2026-08-29T14:30:00.000Z" }] });
     });
 
-    it("loads named calendar events for a bounded display window", async () => {
-        const mocks = clientMock({ invokeData: { events: [{
-            id: "primary:event-1", title: "Team planning", start: "2026-08-31T13:00:00Z",
-            end: "2026-08-31T14:00:00Z", allDay: false,
-        }] } });
+    it("loads named calendar events and preserves per-account source errors", async () => {
+        const mocks = clientMock({ invokeData: {
+            events: [{
+                id: "primary:event-1", title: "Team planning", start: "2026-08-31T13:00:00Z",
+                end: "2026-08-31T14:00:00Z", allDay: false,
+            }],
+            sources: [{
+                connection_id: "connection-1", account_email: "a@example.com", calendar_count: 1,
+                busy_minutes: 0, error_code: "GOOGLE_TOKEN_INVALID",
+            }],
+        } });
         const access = new SupabaseGoogleCalendarDataAccess(mocks.client, "owner-1");
 
         await expect(access.fetchEvents({ timeMin: "2026-08-31T04:00:00Z", timeMax: "2026-09-07T04:00:00Z" }))
-            .resolves.toEqual([expect.objectContaining({ title: "Team planning", allDay: false })]);
+            .resolves.toEqual({
+                events: [expect.objectContaining({ title: "Team planning", allDay: false })],
+                sources: [expect.objectContaining({ connectionId: "connection-1", errorCode: "GOOGLE_TOKEN_INVALID" })],
+            });
         expect(mocks.invoke).toHaveBeenCalledWith("google-calendar", { method: "POST", body: expect.objectContaining({ action: "list_events" }) });
     });
     it.each([null, 42, "invalid"])("rejects malformed source %s with the domain error", async (source) => {

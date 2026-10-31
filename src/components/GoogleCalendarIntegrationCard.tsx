@@ -63,7 +63,7 @@ function eventAccountLabel(event: GoogleCalendarEvent, connections: GoogleCalend
     if (eventEmail) return eventEmail;
     const primary = connection?.primaryCalendarId?.trim();
     if (primary) return primary;
-    return event.connectionId ? "Unknown account" : "Unidentified";
+    return "Unidentified";
 }
 
 const CHIP_CLASSES = [
@@ -74,8 +74,8 @@ const CHIP_CLASSES = [
     "border-rose-700 bg-rose-950/70 text-rose-200",
 ];
 
-function chipClass(connectionId?: string): string {
-    if (!connectionId) return "border-neutral-700 bg-neutral-900 text-neutral-300";
+function chipClass(connectionId: string | undefined, label: string): string {
+    if (!connectionId || label === "Unidentified") return "border-neutral-700 bg-neutral-900 text-neutral-300";
     let hash = 0;
     for (let index = 0; index < connectionId.length; index += 1) {
         hash = (hash * 31 + connectionId.charCodeAt(index)) | 0;
@@ -95,6 +95,8 @@ export const GoogleCalendarIntegrationCard = ({
     const [eventsLoading, setEventsLoading] = useState(false);
     const [selected, setSelected] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [loadAttempt, setLoadAttempt] = useState(0);
     const [busy, setBusy] = useState(false);
     const [open, setOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -123,7 +125,15 @@ export const GoogleCalendarIntegrationCard = ({
         setEventsLoading(true);
         setError(null);
         setErrorCode(null);
-        try { setEvents(await dataAccess.fetchEvents({ timeMin: days[0].toISOString(), timeMax: timeMax.toISOString() })); }
+        try {
+            const result = await dataAccess.fetchEvents({ timeMin: days[0].toISOString(), timeMax: timeMax.toISOString() });
+            setEvents(result.events);
+            // `list_events` reports per-account failures too; without this a
+            // silently skipped account keeps a stale "no error" row.
+            if (result.sources.length > 0) {
+                setSourceErrors(Object.fromEntries(result.sources.map((source) => [source.connectionId, source.errorCode])));
+            }
+        }
         catch (reason) {
             setError(message(reason));
             setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
@@ -148,6 +158,10 @@ export const GoogleCalendarIntegrationCard = ({
 
     useEffect(() => {
         let active = true;
+        setLoading(true);
+        setLoadFailed(false);
+        setError(null);
+        setErrorCode(null);
         const returned = consumeGoogleCalendarOAuthReturn();
         if (returned?.errorCode === "GOOGLE_ACCOUNT_LIMIT_REACHED") setNotice("Google Calendar already has 5 connected accounts. Disconnect one before adding another.");
         else if (returned?.errorCode) setNotice(`Google authorization did not complete (${returned.errorCode}).`);
@@ -165,10 +179,11 @@ export const GoogleCalendarIntegrationCard = ({
             if (!active) return;
             setError(message(reason));
             setErrorCode(reason instanceof GoogleCalendarIntegrationError ? reason.code : null);
+            setLoadFailed(true);
             setLoading(false);
         });
         return () => { active = false; };
-    }, [dataAccess, loadCalendars, loadEvents]);
+    }, [dataAccess, loadCalendars, loadEvents, loadAttempt]);
 
     useEffect(() => {
         if (!open) return;
@@ -314,7 +329,12 @@ export const GoogleCalendarIntegrationCard = ({
                 {connections.length > 0 && <button type="button" aria-label="Disconnect all Google accounts" onClick={() => void disconnect()} disabled={busy} className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200 disabled:opacity-50"><X size={15} /></button>}
             </div>
 
-            {loading ? <p role="status" className="mt-5 text-[10px] text-neutral-500">Loading Google Calendar…</p> : connections.length === 0 ? (
+            {loading ? <p role="status" className="mt-5 text-[10px] text-neutral-500">Loading Google Calendar…</p> : loadFailed && connections.length === 0 ? (
+                <div className="mt-auto border-t border-neutral-800 pt-4">
+                    <p className="mb-2 text-[10px] text-neutral-500">Your Google Calendar accounts could not be loaded.</p>
+                    <button type="button" onClick={() => setLoadAttempt((value) => value + 1)} disabled={busy} className="rounded bg-neutral-100 px-3 py-1.5 text-[10px] font-medium text-neutral-950 disabled:opacity-50">Try again</button>
+                </div>
+            ) : connections.length === 0 ? (
                 <div className="mt-auto border-t border-neutral-800 pt-4">
                     <p className="mb-2 text-[10px] text-neutral-500">No Google accounts are connected.</p>
                     <button type="button" onClick={() => void connect()} disabled={busy} className="rounded bg-neutral-100 px-3 py-1.5 text-[10px] font-medium text-neutral-950 disabled:opacity-50">{busy ? "Opening Google…" : "Connect read only"}</button>
@@ -414,7 +434,7 @@ export const GoogleCalendarIntegrationCard = ({
                                                 <article key={`${event.connectionId ?? ""}:${event.id}`} data-past={eventPassed || undefined} title={`${event.title} — ${label}`} className={`rounded border px-1.5 py-1 ${eventPassed ? "border-neutral-800 bg-neutral-950/70 opacity-55" : "border-neutral-700 bg-neutral-900"}`}>
                                                     <div className="flex items-start justify-between gap-1">
                                                         <p className={`min-w-0 truncate text-[9px] font-medium ${eventPassed ? "text-neutral-500 line-through decoration-neutral-700" : "text-neutral-200"}`} title={event.title}>{event.title}</p>
-                                                        <span aria-label={`Google account ${label}`} title={`Google account: ${label}`} className={`shrink-0 rounded-full border px-1 text-[8px] font-semibold leading-4 ${chipClass(event.connectionId)}`}>{googleAccountInitial(label)}</span>
+                                                        <span role="img" aria-label={`Google account ${label}`} title={`Google account: ${label}`} className={`shrink-0 rounded-full border px-1 text-[8px] font-semibold leading-4 ${chipClass(event.connectionId, label)}`}>{googleAccountInitial(label)}</span>
                                                     </div>
                                                     <p className={`mt-0.5 truncate text-[8px] ${eventPassed ? "text-neutral-700" : "text-neutral-500"}`}>{eventTime(event)}</p>
                                                 </article>

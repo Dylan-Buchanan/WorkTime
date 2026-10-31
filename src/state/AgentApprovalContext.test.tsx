@@ -351,6 +351,42 @@ describe("AgentApprovalProvider", () => {
 
         fireEvent.click(screen.getByRole("button", { name: "Generate plan" }));
         await waitFor(() => expect(runStartOfDay).toHaveBeenCalledWith(expect.objectContaining({ busyIntervals: intervals })));
+        // The warning must survive the switch into approval so the user does
+        // not approve a plan that silently omitted an account.
+        expect(await screen.findByLabelText("Update task proposal")).toBeInTheDocument();
+        expect(screen.getByText("b@example.com needs reconnecting.")).toBeInTheDocument();
+    });
+
+    it("targets the account reported by the calendar list when a busy read fails without attribution", async () => {
+        const data = await dataWithProject();
+        setAgentApiKey("test-key");
+        const beginAuthorization = vi.fn().mockResolvedValue("https://accounts.google.com/o/oauth2/v2/auth?state=safe");
+        const googleCalendarDataAccess = {
+            loadConnections: vi.fn().mockResolvedValue([
+                googleConnection("a", { isSchedulingTarget: true, accountEmail: "a@example.com" }),
+                googleConnection("b", { accountEmail: "b@example.com", selectedCalendarIds: ["team"] }),
+            ]),
+            fetchBusyIntervals: vi.fn().mockRejectedValue(new GoogleCalendarIntegrationError("GOOGLE_TOKEN_INVALID", "Google Calendar must be reconnected")),
+            listCalendars: vi.fn().mockResolvedValue({
+                calendars: [],
+                sources: [
+                    { connectionId: "a", accountEmail: "a@example.com", calendarCount: 0, busyMinutes: 0, errorCode: null },
+                    { connectionId: "b", accountEmail: "b@example.com", calendarCount: 0, busyMinutes: 0, errorCode: "GOOGLE_TOKEN_INVALID" },
+                ],
+            }),
+            beginAuthorization,
+        } as unknown as GoogleCalendarDataAccess;
+        const navigateTo = vi.fn();
+
+        render(wrap(data, <MemoryRouter><AgentPanel googleCalendarDataAccess={googleCalendarDataAccess} navigateTo={navigateTo} /></MemoryRouter>));
+        fireEvent.click(screen.getByRole("button", { name: "Open planning agent" }));
+        fireEvent.click(screen.getByRole("button", { name: /Start of Day/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Refresh calendar" }));
+
+        expect(await screen.findByText("b@example.com needs reconnecting.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        await waitFor(() => expect(beginAuthorization).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "b" })));
+        expect(navigateTo).toHaveBeenCalledOnce();
     });
 
     it("launches End-of-Day, previews tomorrow, and applies the approved priority order", async () => {

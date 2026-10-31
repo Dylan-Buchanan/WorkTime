@@ -102,7 +102,7 @@ describe("GoogleCalendarTaskSection", () => {
         await waitFor(() => expect(dataAccess.resyncTask).toHaveBeenCalledWith(expect.objectContaining({ estimatePomos: 2, workMinutes: 25 })));
     });
 
-    it("attributes a link to a non-target account and unpushes it without re-homing the target", async () => {
+    it("shows the link's owning account and unpush leaves the scheduling target alone", async () => {
         const dataAccess = access([
             connection("scheduling-connection", { isSchedulingTarget: true }),
             connection("link-owner"),
@@ -113,6 +113,9 @@ describe("GoogleCalendarTaskSection", () => {
         expect(screen.getByText(/Focus events use scheduling-connection@example.com/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Unpush" }));
         await waitFor(() => expect(dataAccess.unpushTask).toHaveBeenCalledWith("task-1"));
+        await waitFor(() => expect(screen.queryByText("Event owned by link-owner@example.com.")).not.toBeInTheDocument());
+        expect(screen.getByRole("button", { name: "Push to Google" })).toBeInTheDocument();
+        expect(dataAccess.beginAuthorization).not.toHaveBeenCalled();
         expect(dataAccess.setSchedulingConnection).not.toHaveBeenCalled();
     });
 
@@ -147,6 +150,31 @@ describe("GoogleCalendarTaskSection", () => {
         expect(pushTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", scheduledStart: "2026-08-30T14:00:00.000Z" }));
         expect(dataAccess.beginAuthorization).not.toHaveBeenCalled();
         await waitFor(() => expect(onResumeConsumed).toHaveBeenCalledOnce());
+    });
+
+    it("keeps a resumed push when the initial status read resolves after it", async () => {
+        let resolveStale: (value: GoogleCalendarTaskLink | null) => void = () => undefined;
+        const stale = new Promise<GoogleCalendarTaskLink | null>((resolve) => { resolveStale = resolve; });
+        const loadTaskLink = vi.fn()
+            .mockImplementationOnce(() => stale)
+            .mockResolvedValue(null);
+        const pushTask = vi.fn().mockResolvedValue(linked);
+        const dataAccess = access([connection("scheduling-connection", { isSchedulingTarget: true })], { loadTaskLink, pushTask });
+        const onResumeConsumed = vi.fn();
+        const resume: GoogleCalendarOAuthReturn = {
+            connectionId: "scheduling-connection", connected: true, scopeLevel: "schedule", errorCode: null,
+            pendingTaskId: "task-1", pendingScheduledStart: "2026-08-30T14:00:00.000Z",
+        };
+        render(<MemoryRouter><GoogleCalendarTaskSection task={task} workMinutes={25} dataAccess={dataAccess} resume={resume} onResumeConsumed={onResumeConsumed} /></MemoryRouter>);
+
+        await waitFor(() => expect(pushTask).toHaveBeenCalledTimes(1));
+
+        resolveStale(null);
+        await waitFor(() => expect(loadTaskLink).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(onResumeConsumed).toHaveBeenCalledOnce());
+
+        expect(await screen.findByText("Event owned by scheduling-connection@example.com.")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Push to Google" })).not.toBeInTheDocument();
     });
 
     it("refuses to resume when the advertised account is no longer the scheduling account", async () => {

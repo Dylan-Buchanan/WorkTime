@@ -71,6 +71,11 @@ export interface GoogleCalendarEvent {
     allDay: boolean;
 }
 
+export interface GoogleCalendarEventList {
+    events: GoogleCalendarEvent[];
+    sources: GoogleCalendarSource[];
+}
+
 export interface GoogleCalendarTaskLink {
     connectionId?: string;
     accountEmail?: string | null;
@@ -137,7 +142,7 @@ export interface GoogleCalendarDataAccess {
     }): Promise<string>;
     listCalendars(): Promise<GoogleCalendarCalendarList>;
     updateSelectedCalendars(connectionId: string, calendarIds: readonly string[]): Promise<void>;
-    fetchEvents(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarEvent[]>;
+    fetchEvents(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarEventList>;
     fetchBusyIntervals(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarBusyResult>;
     loadTaskLink(taskId: string, connections?: readonly GoogleCalendarConnection[]): Promise<GoogleCalendarTaskLink | null>;
     pushTask(input: GoogleCalendarPushInput): Promise<GoogleCalendarTaskLink>;
@@ -357,20 +362,23 @@ export class SupabaseGoogleCalendarDataAccess implements GoogleCalendarDataAcces
         };
     }
 
-    async fetchEvents(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarEvent[]> {
+    async fetchEvents(input: { timeMin: string; timeMax: string }): Promise<GoogleCalendarEventList> {
         const data = await this.invoke({ action: "list_events", time_min: input.timeMin, time_max: input.timeMax });
         if (!Array.isArray(data.events)) throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned invalid calendar events.");
-        return data.events.map((value) => {
-            if (!value || typeof value !== "object") throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned invalid calendar events.");
-            const event = value as Record<string, unknown>;
-            if (typeof event.id !== "string" || typeof event.title !== "string" || typeof event.allDay !== "boolean"
-                || !validDateString(event.start) || !validDateString(event.end)) {
-                throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned invalid calendar events.");
-            }
-            return { id: event.id, title: event.title, start: event.start as string, end: event.end as string, allDay: event.allDay,
-                connectionId: typeof event.connection_id === "string" ? event.connection_id : undefined,
-                accountEmail: typeof event.account_email === "string" ? event.account_email : null };
-        });
+        return {
+            events: data.events.map((value) => {
+                if (!value || typeof value !== "object") throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned invalid calendar events.");
+                const event = value as Record<string, unknown>;
+                if (typeof event.id !== "string" || typeof event.title !== "string" || typeof event.allDay !== "boolean"
+                    || !validDateString(event.start) || !validDateString(event.end)) {
+                    throw new GoogleCalendarIntegrationError("GOOGLE_INVALID_RESPONSE", "Google returned invalid calendar events.");
+                }
+                return { id: event.id, title: event.title, start: event.start as string, end: event.end as string, allDay: event.allDay,
+                    connectionId: typeof event.connection_id === "string" ? event.connection_id : undefined,
+                    accountEmail: typeof event.account_email === "string" ? event.account_email : null };
+            }),
+            sources: this.sources(data.sources),
+        };
     }
 
     async loadTaskLink(taskId: string, connections?: readonly GoogleCalendarConnection[]): Promise<GoogleCalendarTaskLink | null> {
