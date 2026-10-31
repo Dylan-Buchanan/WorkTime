@@ -1,3 +1,5 @@
+import type { LocalDateKey } from "../lib/todos/types";
+
 export interface Task {
     id: string;
     name: string;
@@ -302,6 +304,64 @@ export interface PetNotableEvent {
     notes: string;
     /** ISO timestamp when the event happened; drives the computed age stamp. */
     timestamp: string;
+    createdAt: string;
+    updatedAt: string;
+}
+/** Calendar rules; boundary resolution belongs to the goals periods module. */
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type GoalCadence =
+    | { kind: "every-n-weeks"; weekday: Weekday; intervalWeeks: number }
+    | { kind: "monthly-weekday"; weekday: Weekday };
+
+export interface GoalTracker {
+    id: string;
+    name: string;
+    purpose: string;
+    cadence: GoalCadence;
+    cadenceAnchorAt: LocalDateKey;
+    color: string;
+    sortOrder: number;
+    isArchived: boolean;
+    lastBuiltPeriodStart: LocalDateKey | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface GoalMetric {
+    label: string;
+    target: number;
+    current: number;
+    unit: string;
+    source: "manual" | "liftingtracker";
+    overridePinned: boolean;
+}
+
+export interface Goal {
+    id: string;
+    trackerId: string;
+    title: string;
+    notes: string;
+    projectId: string | null;
+    metric: GoalMetric | null;
+    lifecycle: "active" | "achieved" | "dropped";
+    achievedAt: string | null;
+    droppedAt: string | null;
+    sortOrder: number;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface GoalCheckIn {
+    id: string;
+    goalId: string;
+    periodStart: LocalDateKey;
+    did: string;
+    current: string;
+    planned: { text: string; dueDate: LocalDateKey | null }[];
+    statusPill: "on-track" | "at-risk" | "blocked";
+    missReason: string;
+    isFocus: boolean;
+    evidenceTaskIds: string[];
     createdAt: string;
     updatedAt: string;
 }

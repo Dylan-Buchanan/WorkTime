@@ -1,3 +1,4 @@
+import { createGoalTracker, createGoal, createGoalCheckIn } from "../goals/factories";
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "./SupabaseDataAccess";
@@ -393,5 +394,44 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         expect(emptyArgs.p_pet_profile_upsert).toBeNull();
         expect(emptyArgs.p_pet_activity_upserts).toBeNull();
         expect(emptyArgs.p_pet_notable_event_tombstones).toBeNull();
+    });
+});
+
+
+describe("goal row transport", () => {
+    const t = "2026-10-01T12:00:00.000Z";
+    const tracker = createGoalTracker({ name: "Work", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-10-04" }, new Date(t), "tracker");
+    const goal = createGoal({ trackerId: "tracker", title: "Ship", metric: { label: "Count", current: 2, target: 5, unit: "", source: "manual", overridePinned: false } }, new Date(t), "goal");
+    const check = createGoalCheckIn({ goalId: "goal", periodStart: "2026-10-04", planned: [{ text: "Review", dueDate: "2026-10-05" }], evidenceTaskIds: ["task"] }, new Date(t), "check");
+    const rows = {
+        goal_trackers: [{ id: tracker.id, name: tracker.name, purpose: tracker.purpose, cadence: tracker.cadence, cadence_anchor_at: tracker.cadenceAnchorAt, color: tracker.color, sort_order: tracker.sortOrder, is_archived: tracker.isArchived, last_built_period_start: tracker.lastBuiltPeriodStart, created_at: t, updated_at: t }],
+        goals: [{ id: goal.id, tracker_id: goal.trackerId, title: goal.title, notes: goal.notes, project_id: goal.projectId, metric: goal.metric, lifecycle: goal.lifecycle, achieved_at: null, dropped_at: null, sort_order: goal.sortOrder, created_at: t, updated_at: t }],
+        goal_check_ins: [{ id: check.id, goal_id: check.goalId, period_start: check.periodStart, did: check.did, current: check.current, planned: check.planned, status_pill: check.statusPill, miss_reason: check.missReason, is_focus: check.isFocus, evidence_task_ids: check.evidenceTaskIds, created_at: t, updated_at: t }],
+    };
+    it("round trips every row field and sends exactly 42 named RPC inputs", async () => {
+        const pulled = await new SupabaseDataAccess(pullClient({ work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" }, rows)).pull(OWNER);
+        expect(pulled.goalTrackers.tracker).toEqual({ value: tracker, updatedAt: t });
+        expect(pulled.goals.goal).toEqual({ value: goal, updatedAt: t });
+        expect(pulled.goalCheckIns.check).toEqual({ value: check, updatedAt: t });
+        const { client, rpc } = mockClient(); const data = new SupabaseDataAccess(client);
+        await data.push(OWNER, { ...emptyPlan(), goalTrackerUpserts: [pulled.goalTrackers.tracker], goalUpserts: [pulled.goals.goal], goalCheckInUpserts: [pulled.goalCheckIns.check] });
+        const args = rpc.mock.calls[0][1];
+        expect(Object.keys(args)).toHaveLength(42);
+        expect(args.p_goal_tracker_upserts).toEqual(rows.goal_trackers);
+        expect(args.p_goal_upserts).toEqual(rows.goals);
+        expect(args.p_goal_check_in_upserts).toEqual(rows.goal_check_ins);
+        expect(args.p_goal_tracker_tombstones).toBeNull(); expect(args.p_goal_tombstones).toBeNull(); expect(args.p_goal_check_in_tombstones).toBeNull();
+    });
+    it.each([
+        ["goal_trackers", { ...rows.goal_trackers[0], cadence_anchor_at: "2026-02-30" }],
+        ["goal_trackers", { ...rows.goal_trackers[0], cadence: { kind: "every-n-weeks", weekday: 0, intervalWeeks: 0 } }],
+        ["goals", { ...rows.goals[0], metric: { ...goal.metric, current: "2" } }],
+        ["goals", { ...rows.goals[0], lifecycle: "deleted" }],
+        ["goal_check_ins", { ...rows.goal_check_ins[0], planned: [{ text: "Review", dueDate: "2026-02-30" }] }],
+        ["goal_check_ins", { ...rows.goal_check_ins[0], evidence_task_ids: [3] }],
+        ["goal_check_ins", { ...rows.goal_check_ins[0], updated_at: "bad" }],
+    ])("rejects malformed remote rows from %s", async (table, row) => {
+        const client = pullClient(undefined, { ...rows, [table as string]: [row] });
+        await expect(new SupabaseDataAccess(client).pull(OWNER)).rejects.toThrow("invalid row");
     });
 });

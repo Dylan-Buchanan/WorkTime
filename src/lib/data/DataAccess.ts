@@ -1,3 +1,4 @@
+import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { EngineResult } from "../engine";
 import type { Todo, TodoCompletion } from "../todos";
 import type {
@@ -129,6 +130,9 @@ export interface DataAccess {
     resetAppState(): Promise<EngineResult<AppStateData>>;
     savePMState(state: SyncedPMState): Promise<void>;
     loadPMState(): Promise<SyncedPMState | null>;
+    /** Full desired set, including archived trackers and achieved/dropped goals. */
+    saveGoals(trackers: GoalTracker[], goals: Goal[], checkIns: GoalCheckIn[]): Promise<void>;
+    loadGoals(): Promise<{ trackers: GoalTracker[]; goals: Goal[]; checkIns: GoalCheckIn[] }>;
     saveHabits(habits: Habit[], completions: HabitCompletion[]): Promise<void>;
     loadHabits(): Promise<{ habits: Habit[]; completions: HabitCompletion[] }>;
     saveTodos(todos: Todo[], completions: TodoCompletion[]): Promise<void>;

@@ -1,3 +1,5 @@
+import { StagedDataAccess } from "../src/lib/data/StagedDataAccess";
+import { createGoalTracker, createGoal, createGoalCheckIn } from "../src/lib/goals/factories";
 import { afterEach, describe, expect, it } from "vitest";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
 import { defaultAppState } from "../src/lib/engine";
@@ -598,5 +600,36 @@ describe("local-first staged sync transport", () => {
             p_full_wipe: false,
         });
         expect(response.error).not.toBeNull();
+    });
+});
+
+
+describe("goals local-first sync", () => {
+    it("converges two offline check-in ids onto the server row with no pending ghosts", async () => {
+        const owner = track(await createLocalUser());
+        const id = (suffix: string) => `00000000-0000-4000-8000-3000000000${suffix}`;
+        const tracker = createGoalTracker({ name: "Work", cadence: { kind: "every-n-weeks", weekday: 0, intervalWeeks: 2 }, cadenceAnchorAt: "2026-01-04" }, new Date(T0), id("31"));
+        const goal = createGoal({ trackerId: tracker.id, title: "Ship" }, new Date(T0), id("32"));
+        const first = createGoalCheckIn({ goalId: goal.id, periodStart: "2026-01-04", did: "Server content" }, new Date(T0), id("33"));
+        const second = { ...first, id: id("34"), did: "Offline content" };
+        const storage = () => { const map = new Map<string, string>(); return { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); }, removeItem: (key: string) => { map.delete(key); } }; };
+        const storeA = new LocalStagingStore(storage()); const storeB = new LocalStagingStore(storage());
+        const coordinatorA = new SyncCoordinator(owner.userId, storeA, remote(owner)); const coordinatorB = new SyncCoordinator(owner.userId, storeB, remote(owner));
+        const a = new StagedDataAccess(owner.userId, storeA, coordinatorA, { now: () => new Date(T0) });
+        const b = new StagedDataAccess(owner.userId, storeB, coordinatorB, { now: () => new Date(LATER) });
+        await a.saveGoals([tracker], [goal], [first]); await b.saveGoals([tracker], [goal], [second]);
+        await a.sync({ reason: "manual" }); await b.sync({ reason: "manual" }); await a.sync({ reason: "manual" });
+        for (const data of [a, b]) {
+            expect(data.pendingCount()).toBe(0);
+            const loaded = await data.loadGoals(); expect(loaded.checkIns).toHaveLength(1);
+            expect(loaded.checkIns[0]).toMatchObject({ id: first.id, did: "Server content" });
+        }
+        expect(storeB.read(owner.userId).goalCheckInUpdatedAt).toEqual({});
+        expect(storeB.read(owner.userId).goalCheckInTombstones).toEqual({});
+        await a.resetAppState(); await a.sync({ reason: "manual" });
+        const preserved = await remote(owner).pull(owner.userId);
+        expect(preserved.goalTrackers[tracker.id].value.name).toBe("Work");
+        expect(preserved.goals[goal.id].value.title).toBe("Ship");
+        expect(preserved.goalCheckIns[first.id].value.did).toBe("Server content");
     });
 });

@@ -1,3 +1,5 @@
+import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
+import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { EngineResult, InProgressPomodoroMap } from "../engine";
 import {
     archiveTask,
@@ -630,6 +632,50 @@ export class StagedDataAccess implements DataAccess {
     async loadPetProfile(): Promise<PetProfile | null> {
         const record = this.store.read(this.ownerId);
         return record.petProfile ? clone(record.petProfile) : null;
+    }
+
+    async loadGoals(): Promise<{ trackers: GoalTracker[]; goals: Goal[]; checkIns: GoalCheckIn[] }> {
+        const record = this.store.read(this.ownerId);
+        return clone({ trackers: Object.values(record.goalTrackers), goals: Object.values(record.goals), checkIns: Object.values(record.goalCheckIns) });
+    }
+
+    /** Full desired set only; omissions use the structural sync tombstone path. */
+    async saveGoals(trackers: GoalTracker[], goals: Goal[], checkIns: GoalCheckIn[]): Promise<void> {
+        if (!trackers.every(isGoalTracker) || !goals.every(isGoal) || !checkIns.every(isGoalCheckIn)) throw new RangeError("Invalid goals payload");
+        const stamp = this.now().toISOString();
+        const desired = clone({ trackers, goals, checkIns });
+        await this.store.update(this.ownerId, (current) => {
+            for (const tracker of desired.trackers) {
+                const previous = current.goalTrackers[tracker.id]?.lastBuiltPeriodStart;
+                if (previous && (!tracker.lastBuiltPeriodStart || tracker.lastBuiltPeriodStart < previous)) throw new RangeError("lastBuiltPeriodStart cannot move backwards");
+            }
+            const diff = <T extends { id: string }>(rows: T[], old: Record<string, T>, stamps: Record<string, string>, deleted: Record<string, { id: string; deletedAt: string }>, baseline: Record<string, { value: T; updatedAt: string }> = {}) => {
+                const values = Object.fromEntries(rows.map(row => [row.id, row]));
+                const updatedAt = { ...stamps }; const tombstones = { ...deleted };
+                for (const [id, row] of Object.entries(values)) {
+                    if (!equal(old[id], row)) {
+                        // Even a return to the baseline is a new edit: the previous value
+                        // may already be in flight. Identical repeated saves keep their stamp.
+                        updatedAt[id] = new Date(Math.max(Date.parse(stamp),
+                            updatedAt[id] ? Date.parse(updatedAt[id]) + 1 : 0,
+                            baseline[id] ? Date.parse(baseline[id].updatedAt) + 1 : 0)).toISOString();
+                    }
+                    delete tombstones[id];
+                }
+                for (const id of Object.keys(old)) {
+                    if (values[id]) continue;
+                    delete updatedAt[id]; tombstones[id] = { id, deletedAt: stamp };
+                }
+                return { values, updatedAt, tombstones };
+            };
+            const trackers = diff(desired.trackers, current.goalTrackers, current.goalTrackerUpdatedAt, current.goalTrackerTombstones, current.lastSynced?.goalTrackers);
+            const goals = diff(desired.goals, current.goals, current.goalUpdatedAt, current.goalTombstones, current.lastSynced?.goals);
+            const checkIns = diff(desired.checkIns, current.goalCheckIns, current.goalCheckInUpdatedAt, current.goalCheckInTombstones, current.lastSynced?.goalCheckIns);
+            return { ...current,
+                goalTrackers: trackers.values, goalTrackerUpdatedAt: trackers.updatedAt, goalTrackerTombstones: trackers.tombstones,
+                goals: goals.values, goalUpdatedAt: goals.updatedAt, goalTombstones: goals.tombstones,
+                goalCheckIns: checkIns.values, goalCheckInUpdatedAt: checkIns.updatedAt, goalCheckInTombstones: checkIns.tombstones };
+        });
     }
 
     /** Replaces one locally-staged pet record collection (full desired set). */

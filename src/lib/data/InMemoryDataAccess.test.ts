@@ -103,6 +103,7 @@ describe("InMemoryDataAccess", () => {
             petWeightEntries: [],
             petTrainingSkills: [],
             petFixations: [],
+            goalTrackers: [], goals: [], goalCheckIns: [],
             petNotableEvents: [],
             completed: false,
         };

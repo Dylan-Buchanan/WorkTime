@@ -1,3 +1,5 @@
+import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
+import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
     ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetFixation, PetNapRecord,
@@ -131,6 +133,16 @@ function petFixationRow(value: PetFixation, updatedAt: string) {
 }
 function petNotableEventRow(value: PetNotableEvent, updatedAt: string) {
     return { id: value.id, title: value.title, notes: value.notes, occurred_at: value.timestamp, created_at: value.createdAt, updated_at: updatedAt };
+}
+
+function goalTrackerRow(value: GoalTracker, updatedAt: string) {
+    return { id: value.id, name: value.name, purpose: value.purpose, cadence: value.cadence, cadence_anchor_at: value.cadenceAnchorAt, color: value.color, sort_order: value.sortOrder, is_archived: value.isArchived, last_built_period_start: value.lastBuiltPeriodStart, created_at: value.createdAt, updated_at: updatedAt };
+}
+function goalRow(value: Goal, updatedAt: string) {
+    return { id: value.id, tracker_id: value.trackerId, title: value.title, notes: value.notes, project_id: value.projectId, metric: value.metric, lifecycle: value.lifecycle, achieved_at: value.achievedAt, dropped_at: value.droppedAt, sort_order: value.sortOrder, created_at: value.createdAt, updated_at: updatedAt };
+}
+function goalCheckInRow(value: GoalCheckIn, updatedAt: string) {
+    return { id: value.id, goal_id: value.goalId, period_start: value.periodStart, did: value.did, current: value.current, planned: value.planned, status_pill: value.statusPill, miss_reason: value.missReason, is_focus: value.isFocus, evidence_task_ids: value.evidenceTaskIds, created_at: value.createdAt, updated_at: updatedAt };
 }
 
 /**
@@ -370,6 +382,22 @@ export class SupabaseDataAccess implements SyncRemote {
         return { id: row.id, title: row.title, notes: row.notes, timestamp: row.occurred_at, createdAt: row.created_at, updatedAt: row.updated_at };
     }
 
+    private validateGoalTracker(row: any): GoalTracker {
+        const value = { id: row.id, name: row.name, purpose: row.purpose, cadence: row.cadence, cadenceAnchorAt: row.cadence_anchor_at, color: row.color, sortOrder: row.sort_order, isArchived: row.is_archived, lastBuiltPeriodStart: row.last_built_period_start, createdAt: row.created_at, updatedAt: row.updated_at };
+        if (!isGoalTracker(value)) this.fail("goal_trackers", new Error(`invalid row for ${row.id}`));
+        return clone(value);
+    }
+    private validateGoal(row: any): Goal {
+        const value = { id: row.id, trackerId: row.tracker_id, title: row.title, notes: row.notes, projectId: row.project_id, metric: row.metric, lifecycle: row.lifecycle, achievedAt: row.achieved_at, droppedAt: row.dropped_at, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
+        if (!isGoal(value)) this.fail("goals", new Error(`invalid row for ${row.id}`));
+        return clone(value);
+    }
+    private validateGoalCheckIn(row: any): GoalCheckIn {
+        const value = { id: row.id, goalId: row.goal_id, periodStart: row.period_start, did: row.did, current: row.current, planned: row.planned, statusPill: row.status_pill, missReason: row.miss_reason, isFocus: row.is_focus, evidenceTaskIds: row.evidence_task_ids, createdAt: row.created_at, updatedAt: row.updated_at };
+        if (!isGoalCheckIn(value)) this.fail("goal_check_ins", new Error(`invalid row for ${row.id}`));
+        return clone(value);
+    }
+
     private validateTimer(value: unknown): ActiveTimer | null {
         if (value === null || value === undefined) return null;
         if (!isRecord(value) || typeof value.task_id !== "string" || typeof value.started_at !== "string" || typeof value.ends_at !== "string" || !["Work", "ShortBreak", "LongBreak"].includes(String(value.kind))) {
@@ -393,7 +421,7 @@ export class SupabaseDataAccess implements SyncRemote {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
 
         const [taskRows, logRows, habitRows, completionRows, todoRows, todoCompletionRows, settingsResponse, timerResponse, pmResponse,
-            petActivityRows, petProfileRows, petScheduleRows, petNapRows, petWeightRows, petTrainingRows, petFixationRows, petEventRows] = await Promise.all([
+            petActivityRows, petProfileRows, petScheduleRows, petNapRows, petWeightRows, petTrainingRows, petFixationRows, petEventRows, goalTrackerRows, goalRows, goalCheckInRows] = await Promise.all([
             this.page("tasks", ownerId, [{ column: "id" }]),
             this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
             this.page("habits", ownerId, [{ column: "id" }]),
@@ -411,6 +439,9 @@ export class SupabaseDataAccess implements SyncRemote {
             this.page("pet_training_skills", ownerId, [{ column: "id" }]),
             this.page("pet_fixations", ownerId, [{ column: "id" }]),
             this.page("pet_notable_events", ownerId, [{ column: "id" }]),
+            this.page("goal_trackers", ownerId, [{ column: "id" }]),
+            this.page("goals", ownerId, [{ column: "id" }]),
+            this.page("goal_check_ins", ownerId, [{ column: "id" }]),
         ]);
         if (settingsResponse.error) this.fail("settings", settingsResponse.error);
         if (timerResponse.error) this.fail("timer_state", timerResponse.error);
@@ -469,6 +500,12 @@ export class SupabaseDataAccess implements SyncRemote {
         // Absent singleton rows stay `{ value: null, updatedAt: null }` so the
         // merge engine can distinguish "never existed" from default app values.
         const snapshot: SyncSnapshot = {
+            goalTrackers: versionedMap(goalTrackerRows, (row) => this.validateGoalTracker(row)),
+            goalTrackerUpdatedAt: {}, goalTrackerTombstones: {},
+            goals: versionedMap(goalRows, (row) => this.validateGoal(row)),
+            goalUpdatedAt: {}, goalTombstones: {},
+            goalCheckIns: versionedMap(goalCheckInRows, (row) => this.validateGoalCheckIn(row)),
+            goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
             tasks,
             logs,
             habits,
@@ -626,6 +663,12 @@ export class SupabaseDataAccess implements SyncRemote {
             p_timer_new_generation: plan.timerState?.newGeneration ?? false,
             p_pm_data: plan.pmState?.value ?? null,
             p_pm_updated_at: plan.pmState?.updatedAt ?? null,
+            p_goal_tracker_upserts: plan.goalTrackerUpserts?.length ? plan.goalTrackerUpserts.map(({ value, updatedAt }) => goalTrackerRow(value, updatedAt)) : null,
+            p_goal_tracker_tombstones: tombstones(plan.goalTrackerTombstones),
+            p_goal_upserts: plan.goalUpserts?.length ? plan.goalUpserts.map(({ value, updatedAt }) => goalRow(value, updatedAt)) : null,
+            p_goal_tombstones: tombstones(plan.goalTombstones),
+            p_goal_check_in_upserts: plan.goalCheckInUpserts?.length ? plan.goalCheckInUpserts.map(({ value, updatedAt }) => goalCheckInRow(value, updatedAt)) : null,
+            p_goal_check_in_tombstones: tombstones(plan.goalCheckInTombstones),
             p_full_wipe: plan.fullWipe,
         });
         if (response.error) this.fail("apply_staged_sync", response.error);

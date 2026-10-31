@@ -271,7 +271,7 @@ Notes:
 - Layer-2 through layer-4 issues depend on the **v8→v9 ladder** being correct, so test the upgrade path against a real v8 record: open the app on `main` before the change (creates a v8 staging record), then after the change confirm `schemaVersion: 9` and preserved data. Do not clear localStorage in between.
 - The nine new staging fields (`goalTrackers`, `goals`, `goalCheckIns` plus their `*UpdatedAt` and `*Tombstones` maps) must be added to the record **and** to `lastSynced` in the same ladder step. A field added to one and not the other fails the first pull.
 - `src/lib/goals/cadence.ts` is part of this issue (rule validation for the tracker factory) but **boundary math is not** — that is #135's `periods.ts`. Do not implement period windows here.
-- Two migrations expected: `20261030000000_goals.sql` and `20261031000000_goal_staged_sync_rpc.sql`. The RPC grows six positional arguments (38 → 44) through the pet private/public wrapper pattern. Nothing after `20261027000000` currently exists, so ordering is safe — keep it that way.
+- Two migrations expected: `20261030000000_goals.sql` and `20261031000000_goal_staged_sync_rpc.sql`. The RPC grows six positional arguments (36 → 42) through the pet private/public wrapper pattern. Nothing after `20261027000000` currently exists, so ordering is safe — keep it that way.
 - No other branch may touch `supabase/migrations` for the rest of this epic.
 - #133 is dark (no route, no nav, no provider), so merging it to `main` early is safe and gives both lanes a stable, already-migrated base.
 

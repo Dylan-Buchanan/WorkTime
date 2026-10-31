@@ -1,3 +1,5 @@
+import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
+import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { EngineResult, InProgressPomodoroMap } from "../engine";
 import {
     DEFAULT_SETTINGS,
@@ -70,6 +72,9 @@ export interface InMemoryDataStore {
     habitCompletions: HabitCompletion[];
     todos: Todo[];
     todoCompletions: TodoCompletion[];
+    goalTrackers: GoalTracker[];
+    goals: Goal[];
+    goalCheckIns: GoalCheckIn[];
     petActivityRecords: PetActivityRecord[];
     petProfile: PetProfile | null;
     petScheduleItems: PetScheduleItem[];
@@ -123,8 +128,11 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petReminderMarks: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
+            this.store = { state: cloneAppState(base), inProgressPomodoros: {}, pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], goalTrackers: [], goals: [], goalCheckIns: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petReminderMarks: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
         }
+        this.store.goalTrackers = clone(this.store.goalTrackers ?? []);
+        this.store.goals = clone(this.store.goals ?? []);
+        this.store.goalCheckIns = clone(this.store.goalCheckIns ?? []);
         this.store.state = cloneAppState(this.store.state);
         this.store.inProgressPomodoros = clone(this.store.inProgressPomodoros ?? {});
         this.store.pmState = this.store.pmState ? clone(this.store.pmState) : null;
@@ -427,6 +435,25 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.petNotableEvents.map((event) => clone(event));
     }
 
+    async loadGoals(): Promise<{ trackers: GoalTracker[]; goals: Goal[]; checkIns: GoalCheckIn[] }> {
+        return clone({ trackers: this.store.goalTrackers, goals: this.store.goals, checkIns: this.store.goalCheckIns });
+    }
+
+    async saveGoals(trackers: GoalTracker[], goals: Goal[], checkIns: GoalCheckIn[]): Promise<void> {
+        if (!trackers.every(isGoalTracker) || !goals.every(isGoal) || !checkIns.every(isGoalCheckIn)) throw new RangeError("Invalid goals payload");
+        for (const tracker of trackers) {
+            const previous = this.store.goalTrackers.find(row => row.id === tracker.id)?.lastBuiltPeriodStart;
+            if (previous && (!tracker.lastBuiltPeriodStart || tracker.lastBuiltPeriodStart < previous)) throw new RangeError("lastBuiltPeriodStart cannot move backwards");
+        }
+        const next = clone({ trackers, goals, checkIns });
+        if (equal(next, await this.loadGoals())) return;
+        this.store.goalTrackers = next.trackers;
+        this.store.goals = next.goals;
+        this.store.goalCheckIns = next.checkIns;
+        this.pending += 1;
+        this.notify();
+    }
+
     async discardPendingChanges(): Promise<void> {
         const inProgressPomodoros = clone(this.store.inProgressPomodoros);
         this.store.state = cloneAppState(this.baseline.state);
@@ -444,6 +471,9 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petTrainingSkills = this.baseline.petTrainingSkills.map((skill) => clone(skill));
         this.store.petFixations = this.baseline.petFixations.map((fixation) => clone(fixation));
         this.store.petNotableEvents = this.baseline.petNotableEvents.map((event) => clone(event));
+        this.store.goalTrackers = clone(this.baseline.goalTrackers);
+        this.store.goals = clone(this.baseline.goals);
+        this.store.goalCheckIns = clone(this.baseline.goalCheckIns);
         this.store.completed = this.baseline.completed;
         this.store.inProgressPomodoros = inProgressPomodoros;
         this.pending = 0;
@@ -482,6 +512,9 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         habitCompletions: [],
         todos: [],
         todoCompletions: [],
+        goalTrackers: [],
+        goals: [],
+        goalCheckIns: [],
         petActivityRecords: [],
         petProfile: null,
         petScheduleItems: [],
