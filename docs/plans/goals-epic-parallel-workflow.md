@@ -10,6 +10,133 @@ Follow the phases in order. Every phase has an exit gate; do not start the next 
 
 ---
 
+## Orchestrator handoff — paused after Phase 4 (2026-10-31)
+
+> **Read this before acting on any phase below.** The user requested a handoff because Codex limits were
+> running low. **Phase 4 is the last fully accepted phase.** No manual check has passed, no feature phase
+> after Phase 4 has been accepted, and the epic is **not finished**. Phase 5 was launched but deliberately
+> stopped before implementation. Do not resume feature work until you have re-read this section and the
+> resume procedure at the end of it.
+
+### Stop record (Phase 5)
+
+- A Phase 5 IMPL session was launched via opencode, but it only read documents and rebased the previously
+  empty `issue/135-goals-periods` branch. **ORCH interrupted session `ses_e6c5669edffe1G4PI6IYGCimNF`
+  before any implementation**, to honor the stop request.
+- The CLI exited `1` with "Step interrupted". That was an **intentional stop, not a gate failure**. The
+  `WorkTime-engine` tree is clean: **no Phase 5 source edit, no implementation commit, and no gate run**.
+- **No ORCH-launched implementation child remains running.** Do not start additional feature work in this
+  handoff. Resume with a **fresh child per issue**: the existence of a branch does not mean its phase is
+  complete.
+
+### Verified git state (feature baseline)
+
+These commits were verified with git reads. This handoff document's own commit and merge will follow the
+feature baseline, so a new ORCH must read the **actual current git HEAD** rather than assume the baseline
+below is still the tip.
+
+| Ref / artifact | State |
+| -------------- | ----- |
+| `main` and `origin/main` | `4d365119e0b46d5c7e213de71b6e61f4d8093c5c` (#133 foundation merge) |
+| `epic/goals` and `origin/epic/goals` — **feature baseline** | `be826b9abb7b96035f79ee446268030bce1ec327` (Phase 4 merge, pushed) |
+| #133 implementation | `da4bf8dc7d74744227c913c641ab1cab0b480a76`, merged as `4d36511` |
+| Contract + fixtures | `f660ed43c1112fae0f640ac5779bc57b64ba4071` on `issue/133-goals-contract`, merged as `87457e4939b910f4dabe0c318aae2359593df50b` |
+| #134 implementation | `82d96e7300557b81fd77592bc938472a5ca461af` on `issue/134-goals-page`, merged as `be826b9` |
+| `C:\Users\dylan\Desktop\Coding\VSCode\WorkTime` | `main` integration worktree; returns to `epic/goals` after this separate documentation branch is merged by ORCH |
+| `C:\Users\dylan\Desktop\Coding\VSCode\WorkTime-ui` | `issue/134-goals-page` @ `82d96e7`, clean, already merged. **Never rebase or edit this merged branch**; create a fresh `issue/135-deck-due-mount` from the then-current `epic/goals` when Phase 6 is authorized |
+| `C:\Users\dylan\Desktop\Coding\VSCode\WorkTime-engine` | `issue/135-goals-periods` @ `be826b9`, clean, **no implementation commit**. It was updated to the Phase 4 base; for resumed Phase 5, fetch/rebase this unmerged branch onto the latest `origin/epic/goals`, then start a fresh IMPL |
+
+- The local `issue/133-goals-contract` branch is merged; the foundation branch was deleted after its merge.
+- All planning/issue/research documents are committed. The contract and `testFixtures` exist and are frozen.
+
+### Phase results (ORCH personally ran these acceptance checks)
+
+1. **Phase 1 — DONE.** Lint, 1099 unit tests, build, 141 integration tests, and platform checks passed. An
+   automated literal-v8-record `DataProvider` upgrade test proves schema 9 with preserved old fields and
+   all nine new maps present in **both** the record and `lastSynced`. There was **no human v8 check**, and
+   **no Phase 1 Tauri packaging gate is claimed**.
+2. **Phase 2 — DONE.** Contract and shared fixtures landed: lint, narrow 11 tests, 1099 unit tests, build;
+   merged and pushed.
+3. **Phase 3 — DONE.** Both lane installs used the frozen lockfile, and each lane passed untouched lint,
+   1099 unit tests, and build. The UI lane hit a pre-existing `HabitsPage` 5 s year-history timeout during a
+   concurrent install; it **passed on a sequential full rerun** with no unrelated test or config change.
+   Avoid heavy parallel installs and test suites, and do not treat that prior flaky failure as an
+   unresolved code defect.
+4. **Phase 4 — DONE.** Lazy `/goals` route/nav, authenticated `GoalProvider`, multi-tracker CRUD/archive,
+   goal quick-add, reorder/lifecycle/reactivate/metric, and stable future mount slots. The parent install
+   completed (the child's isolated install stopped at the reinstall prompt without removing
+   `node_modules`). Parent lint, 44 narrow tests, 1141 full unit tests across 100 files, and build all
+   passed **after the merge**. **No `test:all` gate for Phase 5 has been run yet.** `main` still contains
+   only the foundation.
+5. **Phase 5 — NOT IMPLEMENTED.** Only the preliminary rebase/read happened; the branch is parked clean.
+   Full period windows and slips, badge/nudge, wizard, deck plan/preview/export, evidence/import, and
+   dogfood/native delivery all remain. **The next gate after the Phase 5 merge is the full `test:all` from
+   the main worktree.**
+
+### Recorded decisions / overrides the new ORCH must retain
+
+- **ORCH makes no direct edits to any file.** No scratch/redirection/file-copy beyond the two allowed env
+  copies per lane, and no ordinary `add`/`commit`. All changes are delegated; ORCH verifies, merges, and
+  pushes. The only `add -A`/commit-without-edit exception is concluding a tree an agent already resolved
+  during a merge. The user permits IMPL+ with `--sandbox danger-full-access` **only** for separate
+  commit-only steps, always `--ask-for-approval never`; implementing IMPL+ stays `workspace-write`. That
+  workaround existed because Codex protects `.git`; routine OpenCode agents can commit their own branches.
+- **Roster is pinned:** IMPL = `opencode run --auto --model opencode-go/deepseek-v4.1-flash#high`;
+  RESEARCH = the same model with `--agent codebase-research`; IMPL+ = Codex GPT-6.1 Sol high with approval
+  `never`. One child per worktree, blocking dispatch with an exit code, a fresh child per issue, and no
+  push from lanes.
+- **Contract signatures are frozen in `docs/goals/contract.md`.** RESEARCH drafted chat content because its
+  profile only permits `docs/research/**` writes; IMPL+ materialized and corrected it. RESEARCH may still
+  write authorized research/dogfood notes under `docs/research`.
+- **Phase 4 escalated to IMPL+ for a real cross-owner dependency:** tracker creation must store an actually
+  snapped boundary before Phase 5 exists. Minimal `periods.ts` types plus `resolveCadenceAnchorAt` and its
+  13 tests landed with #134. Phase 5 extends/reuses this **one canonical implementation** — no
+  `anchor.ts`/UI duplication, no unsnapped anchor, no phase reorder.
+- **#133 whole-row LWW plus check-in natural-key server-ID dedupe; archive/lifecycle only; nine flat maps
+  in the record and `lastSynced`; monotonic `lastBuiltPeriodStart`; full desired sets in every save.**
+  Verified RPC argument count is **36 → 42** (not 38 → 44), with six added arguments; signed semantics are
+  unchanged.
+- **Slip completion uses exact normalized DID LINES** with list/checked-box prefixes per the contract, not
+  substring or prose guessing, and adds no persisted checkbox field. Pure dedupe groups by
+  `(goalId, periodStart)`; status sparkline is 0/1/2 with no invented historical metrics. Deck history
+  cutoff and goal-creation/lifecycle projection prevent future data leaking into old decks.
+- **Chart renderer direction ORCH chose at freeze:** hand-authored SVG plus canvas PNG, plain numeric
+  series. Research 140 did not itself finalize the choice. WebView2 download remains **UNVERIFIED**
+  pending the Phase 11 human report, as does actual PowerPoint fidelity.
+- **The exact monthly Mon/Tue rule outranks the workflow's approximate 27–35-day description:** Friday
+  May 2021 `2021-05-07 → 2021-05-28` is 21 days; Wednesday July 2025 `2025-06-25 → 2025-08-06` is 42 days.
+  These should be fixed cases in Phase 5 — no guessed length cap.
+- **Later evidence ownership amendment remains pending Phase 12.** `DeckPreview` body stays Lane B;
+  the `GoalsPage` mount stays Lane A. No source or contract signatures changed for this handoff.
+
+### Environment, gates, and resume procedure
+
+- The main worktree's ignored env files existed; only `.env.development.local` and
+  `.env.production.local` were copied into each lane under the Phase 3 exception. Do not print secrets.
+  Lane installs and builds were bootstrapped. Main Supabase was started and applied in Phase 1; verify
+  actual Docker health at resume. ORCH has **not** started `pnpm dev`/the app or its own
+  `supabase:serve` process.
+- Re-derive worktrees/branches/log/status; read this workflow, the binding decisions, the contract,
+  research 140/143, and the issue docs. Then run a **fresh IMPL for Phase 5 in the engine lane** with the
+  full brief and the verbatim notes above. Preserve the existing 13 resolver tests. Phase 5 scope is only
+  `periods`/`slips` and their tests (4 files) — no UI, docs, or data. Lane gates are lint, narrow, full
+  unit, and build; the child commits and does not push; ORCH verifies scope and cleanliness, performs a
+  clean `--no-ff` merge, and reruns the gates.
+- Then ORCH starts Supabase and the function server in the main worktree and runs `test:all` (build before
+  PWA verification). Lanes never run DB, heavy, or native gates.
+- Only continue to Phase 6 after the Phase 5 heavy gate passes. Then follow Phase 7, the mandatory human
+  pause in Phase 8, the unbounded real-period dogfood in Phase 9 (**no integration reset, poll, or nudge**),
+  preview in Phase 10, native/export human verification in Phase 11, then Phases 12–14 per this guide. No
+  version bump before Phase 13; IMPL+ does the docs/version edits and ORCH verifies `test:version`, the MSI,
+  and the final gates.
+- There are no approvals or check-ins between phases. The human check protocol applies only to Phases 8, 9,
+  and 11 (plus documented, genuinely undecided architecture/escalation questions). **This stop is an
+  explicitly user-requested orchestrator handoff, not an extra manual test gate.**
+- The user also wants a chat handoff prompt. ORCH supplies that in chat; **do not create another file for
+  it.**
+
+---
+
 ## Agent and model assignments (read first)
 
 Every phase below names the agent that does the work. Use exactly this roster; do not re-route work silently.
