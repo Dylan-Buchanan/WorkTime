@@ -9,6 +9,7 @@ import { useSounds } from "./hooks/useSounds";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { ProjectManagerProvider, usePM } from "./state/ProjectManagerContext";
 import { HabitProvider } from "./state/HabitContext";
+import { GoalProvider } from "./state/GoalContext";
 import { AppStateProvider } from "./state/AppStateContext";
 import StateSyncBridge from "./state/StateSyncBridge";
 import { SyncProvider } from "./state/SyncContext";
@@ -40,6 +41,7 @@ const ProjectManagerPage = lazy(() =>
 );
 const AnalyticsPage = lazy(() => import("./components/AnalyticsPage"));
 const HabitsPage = lazy(() => import("./components/HabitsPage").then((m) => ({ default: m.HabitsPage })));
+const GoalsPage = lazy(() => import("./components/GoalsPage").then((m) => ({ default: m.GoalsPage })));
 const TodosPage = lazy(() => import("./components/TodosPage").then((m) => ({ default: m.TodosPage })));
 const PetPage = lazy(() => import("./components/pets/PetPage").then((m) => ({ default: m.PetPage })));
 const WeekOverviewPage = lazy(() =>
@@ -82,6 +84,7 @@ const App: React.FC = () => (
                         <Route path="/projects" element={<ErrorBoundary><ProjectManagerRoute /></ErrorBoundary>} />
                         <Route path="/analytics" element={<AnalyticsPage />} />
                         <Route path="/habits" element={<HabitsPage />} />
+                        <Route path="/goals" element={<GoalsPage />} />
                         <Route path="/todos" element={<TodosPage />} />
                         <Route path="/pet" element={<PetPage />} />
                         <Route path="/week" element={<WeekOverviewPage />} />
@@ -150,6 +153,7 @@ const AuthenticatedShell: React.FC = () => {
                     <ProjectManagerProvider>
                         <AgentApprovalProvider>
                             <HabitProvider>
+                                <GoalProvider>
                                 <TodoProvider>
                                     <ToastProvider>
                                         <PetProvider>
@@ -166,6 +170,7 @@ const AuthenticatedShell: React.FC = () => {
                                         </PetProvider>
                                     </ToastProvider>
                                 </TodoProvider>
+                                </GoalProvider>
                             </HabitProvider>
                         </AgentApprovalProvider>
                     </ProjectManagerProvider>
@@ -199,6 +204,7 @@ const TopNav: React.FC = () => {
             <Link to="/projects" onClick={() => handleClick("/projects")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/projects"))}>Projects</Link>
             <Link to="/analytics" onClick={() => handleClick("/analytics")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/analytics"))}>Analytics</Link>
             <Link to="/habits" onClick={() => handleClick("/habits")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/habits"))}>Habits</Link>
+            <Link to="/goals" onClick={() => handleClick("/goals")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/goals"))}>Goals</Link>
             <Link to="/todos" onClick={() => handleClick("/todos")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/todos"))}>To-dos</Link>
             <Link to="/pet" onClick={() => handleClick("/pet")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/pet"))}>Pet</Link>
             <Link to="/week" onClick={() => handleClick("/week")} onMouseEnter={() => play("hover")} className={linkClass(loc.pathname.startsWith("/week"))}>Week</Link>
