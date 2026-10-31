@@ -10,6 +10,7 @@ import {
     buildGoalTrackerFixture,
     buildMetricGoalFixture,
     buildSnappedMonthTrackerFixture,
+    buildArchivedTrackerFixture,
 } from "../testFixtures";
 import {
     buildDeckPlan,
@@ -173,6 +174,13 @@ describe("buildDeckPlan slide inventory", () => {
     });
 });
 
+describe("buildDeckPlan archived trackers", () => {
+    it("rejects an archived tracker", () => {
+        expect(() => buildDeckPlan(buildInput({ tracker: buildArchivedTrackerFixture() })))
+            .toThrow(new RangeError("Cannot build a deck for an archived tracker"));
+    });
+});
+
 describe("buildDeckPlan lifecycle inclusion", () => {
     it("uses the injected local-date projection for creation and achievement boundaries", () => {
         const goals = [
@@ -268,6 +276,41 @@ describe("buildDeckPlan period content", () => {
                 text: "Ship the migration",
             }]);
         }
+    });
+
+    it("ignores blank current planned rows for next plans while retaining them on the recap", () => {
+        const blank = goal("goal-blank", { title: "Blank plans", sortOrder: 0 });
+        const filled = goal("goal-filled", { title: "Filled plans", sortOrder: 1 });
+        const plan = buildPlan({
+            goals: [blank, filled],
+            checkIns: [
+                checkIn("goal-blank", PERIOD.periodStart, {
+                    did: "Made progress",
+                    planned: [{ text: "   ", dueDate: null }],
+                    isFocus: true,
+                }),
+                checkIn("goal-filled", PERIOD.periodStart, {
+                    did: "Made progress",
+                    planned: [{ text: "Ship the migration", dueDate: "2026-10-30" }],
+                    isFocus: true,
+                }),
+            ],
+        });
+
+        const nextPlans = slide(plan, "next-plans");
+        expect(nextPlans.kind).toBe("next-plans");
+        if (nextPlans.kind === "next-plans") {
+            expect(nextPlans.items).toEqual([{
+                goalId: "goal-filled",
+                goalTitle: "Filled plans",
+                text: "Ship the migration",
+                dueDate: "2026-10-30",
+            }]);
+        }
+        expect(recap(plan, "goal-blank").planned).toEqual([{ text: "   ", dueDate: null }]);
+        expect(plan.warnings.map(warning => warning.id)).toEqual([
+            "thin:goal-without-plans:goal-blank",
+        ]);
     });
 
     it("uses the exact missing-progress placeholder and empty planned items when a current row is absent", () => {
@@ -443,6 +486,38 @@ describe("deck talk-length estimate", () => {
             expect(item.suggestedSeconds).toBe(suggestedSecondsForSlide(item));
         }
         expect(plan.estimate.wordsPerMinute).toBe(DECK_WORDS_PER_MINUTE);
+    });
+
+    it("counts only the title slide's title and notes, not the tracker identity or period labels", () => {
+        const tracker = buildGoalTrackerFixture({
+            name: "Quarterly systems review",
+            purpose: "Keep the platform healthy and the release train moving.",
+        });
+        const plan = buildDeckPlan({
+            tracker,
+            goals: [],
+            checkIns: [],
+            period: PERIOD,
+            now: NOW,
+            localDateOf: project,
+        });
+        const title = plan.slides[0] as DeckTitleSlide;
+        expect(title.trackerName).not.toBe("");
+        expect(title.purpose).not.toBe("");
+        expect(title.periodLabel).not.toBe("");
+        expect(title.periodRangeLabel).not.toBe("");
+
+        const tokens = (value: string) =>
+            value.trim().split(/\s+/).filter(token => token !== "").length;
+        const titleAndNotes = tokens(title.title) + tokens(title.notes);
+        expect(countDeckWords(title)).toBe(titleAndNotes);
+        expect(countDeckWords(title)).toBeLessThan(
+            titleAndNotes +
+            tokens(title.trackerName) +
+            tokens(title.purpose) +
+            tokens(title.periodLabel) +
+            tokens(title.periodRangeLabel),
+        );
     });
 
     it("excludes hidden slides and appendix-placement recaps from the rendered estimate", () => {

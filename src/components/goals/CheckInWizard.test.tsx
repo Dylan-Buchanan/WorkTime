@@ -282,4 +282,124 @@ describe("CheckInWizard", () => {
         expect(saved.checkIns).toHaveLength(1);
         expect(saved.checkIns[0]).toMatchObject({ periodStart: "2026-11-01", did: "New current period" });
     });
+
+    it("excludes a goal from a past period that ended before the goal was created", async () => {
+        vi.setSystemTime(new Date(2026, 9, 31, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const earlier = buildGoalFixture({
+            id: "goal-earlier",
+            trackerId: tracker.id,
+            title: "Started earlier",
+            sortOrder: 0,
+        });
+        const later = buildGoalFixture({
+            id: "goal-later",
+            trackerId: tracker.id,
+            title: "Started later",
+            sortOrder: 1,
+            createdAt: "2026-10-25T12:00:00.000Z",
+        });
+        await data.saveGoals([tracker], [earlier, later], []);
+        const period = periodFor(tracker, "2026-10-31");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        expect(await screen.findByRole("heading", { name: later.title })).toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+        await waitFor(() =>
+            expect(screen.queryByRole("heading", { name: later.title })).not.toBeInTheDocument());
+        expect(screen.getByRole("heading", { name: earlier.title })).toBeInTheDocument();
+
+        await user.type(screen.getByLabelText(`Did for ${earlier.title}`), "Older progress");
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+        const saved = (await data.loadGoals()).checkIns;
+        expect(saved).toHaveLength(1);
+        expect(saved[0]).toMatchObject({
+            goalId: earlier.id,
+            periodStart: "2026-10-04",
+            did: "Older progress",
+        });
+        expect(saved.some(row => row.goalId === later.id)).toBe(false);
+    });
+
+    it("includes an active goal created within the selected period", async () => {
+        vi.setSystemTime(new Date(2026, 9, 31, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const created = buildGoalFixture({
+            id: "goal-new",
+            trackerId: tracker.id,
+            title: "Created this period",
+            createdAt: "2026-10-25T12:00:00.000Z",
+        });
+        await data.saveGoals([tracker], [created], []);
+        const period = periodFor(tracker, "2026-10-31");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        expect(await screen.findByRole("heading", { name: created.title })).toBeInTheDocument();
+        expect(screen.getByLabelText("Check-in period")).toHaveValue("2026-10-18");
+        await user.type(screen.getByLabelText(`Did for ${created.title}`), "First check-in");
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+        const saved = (await data.loadGoals()).checkIns;
+        expect(saved).toHaveLength(1);
+        expect(saved[0]).toMatchObject({
+            goalId: created.id,
+            periodStart: "2026-10-18",
+            did: "First check-in",
+        });
+    });
+
+    it("retains a stored row for an excluded goal and period verbatim on save", async () => {
+        vi.setSystemTime(new Date(2026, 9, 31, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const earlier = buildGoalFixture({
+            id: "goal-earlier",
+            trackerId: tracker.id,
+            title: "Started earlier",
+            sortOrder: 0,
+        });
+        const later = buildGoalFixture({
+            id: "goal-later",
+            trackerId: tracker.id,
+            title: "Started later",
+            sortOrder: 1,
+            createdAt: "2026-10-25T12:00:00.000Z",
+        });
+        const legacy = buildGoalCheckInFixture({
+            id: "legacy-row",
+            goalId: later.id,
+            periodStart: "2026-10-04",
+            did: "Legacy before creation",
+            planned: [{ text: "Old plan", dueDate: "2026-10-10" }],
+            statusPill: "blocked",
+            missReason: "Older reason",
+            isFocus: true,
+            createdAt: "2026-10-05T12:00:00.000Z",
+            updatedAt: "2026-10-05T12:00:00.000Z",
+        });
+        await data.saveGoals([tracker], [earlier, later], [legacy]);
+        const period = periodFor(tracker, "2026-10-31");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        await screen.findByRole("heading", { name: earlier.title });
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+        await waitFor(() =>
+            expect(screen.queryByRole("heading", { name: later.title })).not.toBeInTheDocument());
+
+        await user.type(screen.getByLabelText(`Did for ${earlier.title}`), "Edited older goal");
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+        const saved = (await data.loadGoals()).checkIns;
+        expect(saved).toHaveLength(2);
+        expect(saved.find(row => row.id === "legacy-row")).toEqual(legacy);
+    });
 });

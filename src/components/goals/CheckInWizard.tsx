@@ -12,7 +12,7 @@ import {
     periodRangeLabel,
     type GoalPeriod,
 } from "../../lib/goals/periods";
-import { slipSummary } from "../../lib/goals/slips";
+import { isGoalIncludedInPeriod, slipSummary } from "../../lib/goals/slips";
 import { useGoals } from "../../state/GoalContext";
 import { GoalSlipBadge } from "./GoalSlipBadge";
 
@@ -79,12 +79,17 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
     const goals = useGoals();
     const { state } = goals;
     const tracker = state.trackers[trackerId];
+    const [activePeriod, setActivePeriod] = useState<GoalPeriod>(period);
+    // A goal created at/after the period end never appears in that period, even
+    // though it is active now; section 4's inclusion rule matches the deck.
     const activeGoals = tracker
         ? Object.values(state.goals)
-            .filter(row => row.trackerId === trackerId && row.lifecycle === "active")
+            .filter(row =>
+                row.trackerId === trackerId &&
+                row.lifecycle === "active" &&
+                isGoalIncludedInPeriod(row, activePeriod))
             .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
         : [];
-    const [activePeriod, setActivePeriod] = useState<GoalPeriod>(period);
     const [drafts, setDrafts] = useState<Record<string, GoalCheckIn>>(() => buildDrafts(period.periodStart, activeGoals, Object.values(state.checkIns)));
     const [dismissedStamp, setDismissedStamp] = useState<LocalDateKey | null>(null);
     const [reloadMessage, setReloadMessage] = useState<string | null>(null);

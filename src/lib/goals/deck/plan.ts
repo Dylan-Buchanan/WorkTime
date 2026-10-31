@@ -313,15 +313,14 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
 
         if (current) {
             for (const item of current.planned) {
+                if (item.text.trim() === "") continue;
                 nextPlanItems.push({
                     goalId: goal.id,
                     goalTitle: goal.title,
                     text: item.text,
                     dueDate: item.dueDate,
                 });
-                if (item.text.trim() !== "") {
-                    commitments.push({ goalId: goal.id, goalTitle: goal.title, text: item.text });
-                }
+                commitments.push({ goalId: goal.id, goalTitle: goal.title, text: item.text });
             }
         }
 
@@ -381,12 +380,7 @@ export function countDeckWords(slide: DeckSlide): number {
     let total = words(slide.title, slide.notes);
     switch (slide.kind) {
         case "title":
-            return total + words(
-                slide.trackerName,
-                slide.purpose,
-                slide.periodLabel,
-                slide.periodRangeLabel,
-            );
+            return total;
         case "recap":
             total += words(slide.did, slide.current, slide.missReason, slide.metric?.label, slide.metric?.unit);
             for (const item of slide.planned) total += words(item.text);
