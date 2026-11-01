@@ -159,7 +159,7 @@ describe("Start-of-Day workflow", () => {
         });
         for (const [request] of complete.mock.calls) {
             expect(request).toEqual(expect.objectContaining({
-                model: "deepseek-v4-flash",
+                model: "deepseek-flash",
                 thinking: { type: "disabled" },
             }));
             expect(request).not.toHaveProperty("maxTokens");

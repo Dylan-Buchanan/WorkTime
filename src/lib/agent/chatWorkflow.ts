@@ -2,7 +2,7 @@ import type { Habit, HabitCompletion, PMTask, ProjectManagerState, ProposedTask 
 import { quickAddParse } from "../../state/ProjectManagerContext";
 import { diffPlannerTasks, type TaskChange } from "../engine/diffEngine";
 import { requestValidatedJson } from "./agentClient";
-import { getAgentProvider, type AgentProvider } from "./apiKey";
+import { getAgentProvider, getAgentProviderConfig, type AgentProvider } from "./apiKey";
 import { createStoredAgentClient, type ChatCompletionsClient } from "./llmTransport";
 import { chatOutputSchema, type ChatCreateOutput, type ChatOutput } from "./outputSchemas";
 
@@ -29,10 +29,6 @@ export interface ChatWorkflowResult {
     projectId: string;
     reply: string;
     changes: TaskChange[];
-}
-
-function modelFor(provider: AgentProvider): string {
-    return provider === "deepseek" ? "deepseek-v4-flash" : "gpt-5.6-luna";
 }
 
 function proposedTask(task: PMTask): ProposedTask {
@@ -123,7 +119,7 @@ export async function runChatWorkflow(input: ChatWorkflowInput): Promise<ChatWor
     const provider = input.provider ?? getAgentProvider();
     const client = input.client ?? createStoredAgentClient({ provider });
     const output = await requestValidatedJson<ChatOutput>(client, {
-        model: input.model ?? modelFor(provider),
+        model: input.model ?? getAgentProviderConfig(provider).defaultModel,
         temperature: 0.35,
         ...(provider === "deepseek" ? { thinking: { type: "disabled" as const } } : {}),
         messages: [

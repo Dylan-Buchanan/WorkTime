@@ -2,7 +2,7 @@ import type { PMTask, ProjectManagerState, ProposedTask } from "../../state/type
 import { compareEndOfDayPlan, validateTomorrowTaskOrder, type EndOfDayComparison } from "../engine/endOfDay";
 import { diffPlannerTasks, type TaskChange } from "../engine/diffEngine";
 import { requestValidatedJson } from "./agentClient";
-import { getAgentProvider, type AgentProvider } from "./apiKey";
+import { getAgentProvider, getAgentProviderConfig, type AgentProvider } from "./apiKey";
 import { createStoredAgentClient, type ChatCompletionsClient } from "./llmTransport";
 import { endOfDayOutputSchema, type EndOfDayOutput } from "./outputSchemas";
 import { getAgentStartOfDayPlan, type AgentStartOfDayPlan } from "./startOfDayPlanStore";
@@ -29,10 +29,6 @@ export interface EndOfDayWorkflowResult {
     comparison: EndOfDayComparison;
     tomorrowTasks: { taskId: string; title: string; status: PMTask["status"]; priority: PMTask["priority"] }[];
     changes: TaskChange[];
-}
-
-function modelFor(provider: AgentProvider): string {
-    return provider === "deepseek" ? "deepseek-v4-flash" : "gpt-5.6-luna";
 }
 
 function emit(listener: EndOfDayWorkflowInput["onProgress"], event: StartOfDayProgressEvent): void {
@@ -99,7 +95,7 @@ export async function runEndOfDayWorkflow(input: EndOfDayWorkflowInput): Promise
     const client = input.client ?? createStoredAgentClient({ provider });
     phase("planning");
     const output = await requestValidatedJson<EndOfDayOutput>(client, {
-        model: input.model ?? modelFor(provider),
+        model: input.model ?? getAgentProviderConfig(provider).defaultModel,
         temperature: 0.2,
         ...(provider === "deepseek" ? { thinking: { type: "disabled" as const } } : {}),
         messages: [

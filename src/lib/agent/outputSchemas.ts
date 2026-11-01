@@ -94,6 +94,34 @@ export const endOfDayOutputSchema: JsonSchema = {
     },
 };
 
+export interface DeckPolishOutput {
+    slides: { title: string; notes: string; body: string[] }[];
+    focusGoalIndexes: number[];
+}
+
+/** Positional copy only: the model cannot supply slide structure or goal IDs. */
+export const deckPolishOutputSchema: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["slides", "focusGoalIndexes"],
+    properties: {
+        slides: {
+            type: "array",
+            items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["title", "notes", "body"],
+                properties: {
+                    title: { type: "string", minLength: 1 },
+                    notes: { type: "string", minLength: 1 },
+                    body: { type: "array", items: { type: "string", minLength: 1 } },
+                },
+            },
+        },
+        focusGoalIndexes: { type: "array", items: { type: "integer", minimum: 0 } },
+    },
+};
+
 const chatCreateSchema: JsonSchema = {
     type: "object",
     additionalProperties: false,

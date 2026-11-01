@@ -3,7 +3,7 @@ import { buildPlannerContext, type PlannerBusyInterval } from "../engine/planner
 import { diffPlannerTasks, type TaskChange } from "../engine/diffEngine";
 import { selectStartOfDayPlanItems, validateStartOfDayPlan, type StartOfDayPlanItem } from "../engine/startOfDay";
 import { requestPlannerOutput, requestWriterOutput } from "./agentClient";
-import { getAgentProvider, type AgentProvider } from "./apiKey";
+import { getAgentProvider, getAgentProviderConfig, type AgentProvider } from "./apiKey";
 import { createStoredAgentClient, type ChatCompletionRequest, type ChatCompletionsClient } from "./llmTransport";
 import {
     parseStrictJson,
@@ -76,11 +76,6 @@ export interface StartOfDayWorkflowResult {
     proposedTasks: ProposedTask[];
     orderedTasks: StartOfDayPlanItem[];
     changes: TaskChange[];
-}
-
-function defaultModel(provider: AgentProvider): string {
-    // Both defaults support Chat Completions, JSON output, and temperature.
-    return provider === "deepseek" ? "deepseek-v4-flash" : "gpt-5.6-luna";
 }
 
 function defaultMonotonicNow(): number {
@@ -278,7 +273,7 @@ function assertValidPlan(currentTasks: ReturnType<typeof projectTasks>, proposed
 export async function runStartOfDayWorkflow(input: StartOfDayWorkflowInput): Promise<StartOfDayWorkflowResult> {
     const provider = input.provider ?? getAgentProvider();
     const client = input.client ?? createStoredAgentClient({ provider });
-    const model = defaultModel(provider);
+    const model = getAgentProviderConfig(provider).defaultModel;
     const providerRequest = provider === "deepseek"
         ? { thinking: { type: "disabled" as const } }
         : {};

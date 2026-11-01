@@ -49,7 +49,7 @@ export interface DeckPlanInput {
     localDateOf?: LifecycleDateProjection;
 }
 
-const MISSING_PROGRESS_DID = "No progress recorded this period";
+export const MISSING_PROGRESS_DID = "No progress recorded this period";
 const MISSING_COMMITMENT_TEXT = "No commitments set for the next period.";
 const STATUS_LABELS: Readonly<Record<GoalCheckIn["statusPill"], string>> = {
     "on-track": "on track",

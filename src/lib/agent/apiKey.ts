@@ -4,9 +4,9 @@ export const AGENT_PROVIDER_STORAGE_KEY = "worktime:agent:provider";
 export type AgentProvider = "openai" | "deepseek";
 
 export const AGENT_PROVIDER_OPTIONS = [
-    { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1" },
-    { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com" },
-] as const satisfies readonly { id: AgentProvider; label: string; baseUrl: string }[];
+    { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5.6-luna" },
+    { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-flash" },
+] as const satisfies readonly { id: AgentProvider; label: string; baseUrl: string; defaultModel: string }[];
 
 export const DEFAULT_AGENT_PROVIDER: AgentProvider = "openai";
 

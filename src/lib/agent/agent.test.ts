@@ -52,6 +52,7 @@ describe("agent API key storage", () => {
         expect(storage.get(AGENT_PROVIDER_STORAGE_KEY)).toBe("deepseek");
         expect(getAgentProvider(fakeStorage)).toBe("deepseek");
         expect(getAgentProviderConfig("deepseek").baseUrl).toBe("https://api.deepseek.com");
+        expect(getAgentProviderConfig("deepseek").defaultModel).toBe("deepseek-flash");
 
         setAgentProvider("openai", fakeStorage);
     });

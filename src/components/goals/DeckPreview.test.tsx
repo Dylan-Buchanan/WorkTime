@@ -7,7 +7,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { DeckPreview, type DeckPreviewProps } from "./DeckPreview";
-import { buildDeckPlan } from "../../lib/goals/deck/plan";
+import { buildDeckPlan, refreshDeckDerivations } from "../../lib/goals/deck/plan";
 import type { DeckPlan } from "../../lib/goals/deck/types";
 import type { GoalPeriod } from "../../lib/goals/periods";
 import {
@@ -16,6 +16,10 @@ import {
     buildGoalTrackerFixture,
 } from "../../lib/goals/testFixtures";
 import type { LocalDateKey } from "../../lib/todos/types";
+import { setAgentApiKey } from "../../lib/agent/apiKey";
+import * as transport from "../../lib/agent/llmTransport";
+import { buildDeckPolishContext } from "../../lib/agent/deckPolishWorkflow";
+import type { DeckPolishOutput } from "../../lib/agent/outputSchemas";
 
 const PERIOD: GoalPeriod = {
     periodStart: "2026-10-04",
@@ -169,6 +173,21 @@ function renderPreview(
     return { user, onExport, onClose, ...view };
 }
 
+function mockPolish(plan: DeckPlan, focusGoalIndexes = [0, 2, 3]) {
+    setAgentApiKey("test-key");
+    const output: DeckPolishOutput = {
+        slides: buildDeckPolishContext(plan, "").slides.map((slide, index) => ({
+            title: plan.slides[index].title,
+            notes: "A cohesive review of the recorded progress.",
+            body: slide.body.map(field => field.field === "did" ? `Polished: ${field.text}` : field.text),
+        })),
+        focusGoalIndexes,
+    };
+    const complete = vi.fn().mockResolvedValue(JSON.stringify(output));
+    vi.spyOn(transport, "createStoredAgentClient").mockReturnValue({ complete });
+    return { complete, output };
+}
+
 const articleNames = () =>
     screen.getAllByRole("article").map(article => article.getAttribute("aria-label"));
 
@@ -179,6 +198,277 @@ beforeEach(() => {
 });
 
 describe("DeckPreview", () => {
+    it("runs the presentation preset in one click and shows the exact brief used", async () => {
+        const { complete } = mockPolish(buildPlan());
+        const { user } = renderPreview(buildPlan());
+        const preset = screen.getByRole("region", { name: "Presentation preset" });
+        expect(within(preset).getByRole("button", { name: "Improve my presentation" }))
+            .toHaveAccessibleDescription(/Make slide wording more engaging and speaker notes sound natural aloud\. Runs immediately/);
+        expect(within(preset).queryByRole("button", { name: "Polish deck" })).not.toBeInTheDocument();
+        const custom = screen.getByRole("region", { name: "Custom deck polish" });
+        expect(within(custom).getByRole("button", { name: "Polish deck" })).toBeInTheDocument();
+        await user.type(screen.getByLabelText("Deck-level prompt"), "Old custom brief");
+        await user.click(screen.getByRole("button", { name: "Improve my presentation" }));
+        await screen.findByRole("region", { name: "Latest polish changes" });
+        expect(complete).toHaveBeenCalledTimes(1);
+        const brief = JSON.parse(complete.mock.calls[0][0].messages[1].content).brief;
+        expect(brief).toContain("fun to read and engaging to hear presented aloud");
+        expect(brief).toContain("speaker notes as natural spoken narration");
+        expect(brief).toContain("Preserve all facts, numbers");
+        expect(brief).not.toContain("Old custom brief");
+        expect(screen.getByLabelText("Deck-level prompt")).toHaveValue(brief);
+        expect(screen.getByRole("button", { name: "Improve my presentation" })).toBeEnabled();
+    });
+
+    it("can apply the preset after an earlier polish using current edited copy", async () => {
+        const plan = buildPlan();
+        const { complete } = mockPolish(plan);
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await screen.findByRole("region", { name: "Latest polish changes" });
+        const did = within(screen.getByRole("article", { name: "Slide: Ship the release" })).getByLabelText("Did");
+        await user.clear(did);
+        await user.type(did, "Progress edited before the preset");
+        await user.click(screen.getByRole("button", { name: "Improve my presentation" }));
+        await waitFor(() => expect(screen.getByRole("button", { name: "Improve my presentation" })).toBeEnabled());
+        expect(complete).toHaveBeenCalledTimes(2);
+        const context = JSON.parse(complete.mock.calls[1][0].messages[1].content);
+        expect(context.brief).toContain("fun to read");
+        expect(context.slides[1].body[0].text).toBe("Progress edited before the preset");
+    });
+
+    it("allows another polish with a new prompt and the user's current edits", async () => {
+        const plan = buildPlan();
+        const { complete, output } = mockPolish(plan);
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await screen.findByRole("region", { name: "Latest polish changes" });
+        expect(screen.getByRole("button", { name: "Polish deck" })).toBeEnabled();
+        const did = within(screen.getByRole("article", { name: "Slide: Ship the release" })).getByLabelText("Did");
+        await user.clear(did);
+        await user.type(did, "My latest progress");
+        await user.type(screen.getByLabelText("Deck-level prompt"), "Make this more direct");
+        output.slides[1].body[0] = "A more direct summary";
+        complete.mockResolvedValue(JSON.stringify(output));
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await waitFor(() => expect(did).toHaveValue("A more direct summary"));
+        expect(complete).toHaveBeenCalledTimes(2);
+        const context = JSON.parse(complete.mock.calls[1][0].messages[1].content);
+        expect(context.brief).toBe("Make this more direct");
+        expect(context.slides[1].body[0].text).toBe("My latest progress");
+        const changes = screen.getByRole("region", { name: "Latest polish changes" });
+        const detail = within(changes).getByText(/Ship the release · 1 field/).closest("details")!;
+        await user.click(within(detail).getByText(/Ship the release · 1 field/));
+        expect(within(detail).getByText("My latest progress")).toBeInTheDocument();
+        expect(within(detail).getByText("A more direct summary")).toBeInTheDocument();
+        expect(within(changes).queryByText("Reviewed the spec")).not.toBeInTheDocument();
+    });
+
+    it("shows exact before/after changes, badges, and navigation including hidden and appendix slides", async () => {
+        const plan = buildPlan();
+        mockPolish(plan);
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Hide slide: Work" }));
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        const changes = await screen.findByRole("region", { name: "Latest polish changes" });
+        expect(within(changes).getByText(new RegExp(`Changed ${plan.slides.length} slides`))).toBeInTheDocument();
+        expect(within(changes).getByText(/Work · 1 field · Hidden/)).toBeInTheDocument();
+        expect(within(changes).getByText(/Train four times · 2 fields · In appendix/)).toBeInTheDocument();
+        const ship = screen.getByRole("article", { name: "Slide: Ship the release" });
+        expect(within(ship).getByText("Changed by latest polish")).toBeInTheDocument();
+        const details = within(changes).getByText(/Ship the release · 2 fields/).closest("details")!;
+        await user.click(within(details).getByText(/Ship the release · 2 fields/));
+        expect(within(details).getByText("Reviewed the spec")).toBeInTheDocument();
+        expect(within(details).getByText("Polished: Reviewed the spec")).toBeInTheDocument();
+        await user.click(within(details).getByRole("button", { name: "View slide: Ship the release" }));
+        expect(ship).toHaveAttribute("aria-current", "true");
+    });
+
+    it("clearly reports a pass with no changes", async () => {
+        const plan = buildPlan();
+        const { complete, output } = mockPolish(plan, []);
+        output.slides = buildDeckPolishContext(plan, "").slides.map((slide, index) => ({
+            title: plan.slides[index].title, notes: plan.slides[index].notes, body: slide.body.map(field => field.text),
+        }));
+        complete.mockResolvedValue(JSON.stringify(output));
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        expect(await screen.findByText("No copy changes in the latest polish.")).toBeInTheDocument();
+        expect(screen.queryByText("Changed by latest polish")).not.toBeInTheDocument();
+    });
+
+    it("can retry a failed pass and clears stale failure details after success", async () => {
+        const plan = buildPlan();
+        const { complete, output } = mockPolish(plan);
+        complete.mockRejectedValueOnce(new transport.LLMTransportError("offline"));
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await screen.findByText("Polish details");
+        expect(screen.getByRole("button", { name: "Polish deck" })).toBeEnabled();
+        complete.mockResolvedValue(JSON.stringify(output));
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await screen.findByRole("region", { name: "Latest polish changes" });
+        expect(screen.queryByText("Polish details")).not.toBeInTheDocument();
+    });
+
+    it("ignores an older skipped response while a newer pass is pending", async () => {
+        const plan = buildPlan();
+        const { complete, output } = mockPolish(plan);
+        let finishFirst!: (value: string) => void;
+        let finishSecond!: (value: string) => void;
+        complete.mockImplementationOnce(() => new Promise<string>(resolveResponse => { finishFirst = resolveResponse; }))
+            .mockImplementationOnce(() => new Promise<string>(resolveResponse => { finishSecond = resolveResponse; }));
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await user.click(screen.getByRole("button", { name: "Skip polish" }));
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await act(async () => { finishFirst(JSON.stringify(output)); });
+        expect(screen.getByRole("button", { name: "Export deck" })).toBeDisabled();
+        expect(screen.getByLabelText("Deck-level prompt")).toBeDisabled();
+        expect(screen.queryByRole("region", { name: "Latest polish changes" })).not.toBeInTheDocument();
+        output.slides[1].body[0] = "The newer response";
+        await act(async () => { finishSecond(JSON.stringify(output)); });
+        expect(within(screen.getByRole("article", { name: "Slide: Ship the release" })).getByLabelText("Did"))
+            .toHaveValue("The newer response");
+        expect(screen.getByRole("button", { name: "Polish deck" })).toBeEnabled();
+    });
+
+    it("hides the pre-export check with no warnings, and restores it when an edit needs attention", async () => {
+        const plan = buildPlan();
+        const metric = plan.slides.find(slide => slide.id === "recap:goal-metric");
+        if (metric?.kind === "recap") metric.planned = [{ text: "Train again", dueDate: null }];
+        const misses = plan.slides.find(slide => slide.kind === "misses");
+        if (misses?.kind === "misses") misses.items[0].reason = "Review pending";
+        const cleanPlan = refreshDeckDerivations(plan);
+        expect(cleanPlan.warnings).toEqual([]);
+        const { user } = renderPreview(cleanPlan);
+        expect(screen.queryByRole("region", { name: "Pre-export check" })).not.toBeInTheDocument();
+        const reason = within(screen.getByRole("article", { name: "Slide: Misses" })).getByLabelText("Reason");
+        await user.clear(reason);
+        expect(screen.getByRole("region", { name: "Pre-export check" })).toBeInTheDocument();
+        await user.type(reason, "Review pending");
+        expect(screen.queryByRole("region", { name: "Pre-export check" })).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Export deck" })).toBeEnabled();
+    });
+
+    it("hides the pre-export card after the final item is skipped", async () => {
+        const { user } = renderPreview(buildThinPlan());
+        for (let index = 0; index < 3; index += 1) {
+            await user.click(within(screen.getByRole("region", { name: "Pre-export check" })).getAllByRole("button", { name: "Skip" })[0]);
+        }
+        expect(screen.queryByRole("region", { name: "Pre-export check" })).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Export deck" })).toBeEnabled();
+    });
+
+    it("captures one deck prompt and waits for acceptance before changing focus", async () => {
+        const plan = buildPlan();
+        const { complete } = mockPolish(plan);
+        const { user, onExport } = renderPreview(plan);
+        await user.type(screen.getByLabelText("Deck-level prompt"), "Be concise and emphasize blockers");
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        const suggestion = await screen.findByRole("region", { name: "Suggested focus" });
+        expect(JSON.parse(complete.mock.calls[0][0].messages[1].content).brief).toBe("Be concise and emphasize blockers");
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole("article", { name: "Slide: Automate invoices" })).toBeInTheDocument();
+        expect(screen.queryByRole("article", { name: "Slide: Train four times" })).not.toBeInTheDocument();
+        await user.click(within(suggestion).getByRole("button", { name: "Accept suggested focus" }));
+        expect(screen.queryByRole("article", { name: "Slide: Automate invoices" })).not.toBeInTheDocument();
+        expect(screen.getByRole("article", { name: "Slide: Train four times" })).toBeInTheDocument();
+        expect(screen.queryByRole("region", { name: "Suggested focus" })).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Export deck" }));
+        const exported = vi.mocked(onExport).mock.calls[0][0];
+        expect(exported.slides.filter(slide => slide.kind === "recap" && slide.placement === "body").map(slide => slide.id))
+            .toEqual(["recap:goal-ship", "recap:goal-metric", "recap:goal-achieved"]);
+    });
+
+    it("lets the user adjust the suggestion before applying it", async () => {
+        const plan = buildPlan();
+        mockPolish(plan);
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        const suggestion = await screen.findByRole("region", { name: "Suggested focus" });
+        await user.click(within(suggestion).getByRole("button", { name: "Adjust focus" }));
+        await user.click(within(suggestion).getByLabelText("Train four times"));
+        await user.click(within(suggestion).getByLabelText("Automate invoices"));
+        expect(screen.queryByRole("article", { name: "Slide: Train four times" })).not.toBeInTheDocument();
+        await user.click(within(suggestion).getByRole("button", { name: "Apply adjusted focus" }));
+        expect(screen.getByRole("article", { name: "Slide: Automate invoices" })).toBeInTheDocument();
+        expect(screen.queryByRole("article", { name: "Slide: Train four times" })).not.toBeInTheDocument();
+    });
+
+    it("allows keeping current focus while editing polished text and rechecking before export", async () => {
+        const plan = buildPlan();
+        mockPolish(plan);
+        const { user, onExport } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        const suggestion = await screen.findByRole("region", { name: "Suggested focus" });
+        await user.click(within(suggestion).getByRole("button", { name: "Keep current focus" }));
+        const ship = screen.getByRole("article", { name: "Slide: Ship the release" });
+        const did = within(ship).getByLabelText("Did");
+        expect(did).toHaveValue("Polished: Reviewed the spec");
+        await user.clear(did);
+        await user.type(did, "My edited summary");
+        const missWarning = plan.warnings.find(warning => warning.kind === "miss-without-reason")!;
+        const check = screen.getByRole("region", { name: "Pre-export check" });
+        expect(within(check).getByText(missWarning.message)).toBeInTheDocument();
+        const misses = screen.getByRole("article", { name: "Slide: Misses" });
+        await user.type(within(misses).getByLabelText("Reason"), "Waiting on review");
+        expect(within(check).queryByText(missWarning.message)).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Export deck" }));
+        const exported = vi.mocked(onExport).mock.calls[0][0];
+        expect(exported.slides.find(slide => slide.id === "recap:goal-ship")).toMatchObject({ did: "My edited summary" });
+        expect(exported.slides.find(slide => slide.id === "recap:goal-ops")).toMatchObject({ placement: "body" });
+        expect(exported.slides.find(slide => slide.id === "recap:goal-metric")).toMatchObject({ placement: "appendix" });
+    });
+
+    it.each(["no-key", "transport", "invalid-json", "empty-suggestion"]) ("keeps export available for %s", async kind => {
+        const plan = buildPlan();
+        if (kind !== "no-key") {
+            const { complete, output } = mockPolish(plan, []);
+            if (kind === "transport") complete.mockRejectedValue(new Error("offline"));
+            if (kind === "invalid-json") complete.mockResolvedValue("invalid JSON");
+            if (kind === "empty-suggestion") complete.mockResolvedValue(JSON.stringify(output));
+        }
+        const { user, onExport } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await waitFor(() => expect(screen.getByRole("button", { name: "Export deck" })).toBeEnabled());
+        expect(screen.queryByRole("region", { name: "Suggested focus" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Export deck" }));
+        const exported = vi.mocked(onExport).mock.calls[0][0];
+        if (kind !== "empty-suggestion") expect(exported).toEqual(plan);
+    });
+
+    it("can skip a slow pass and ignores its late response", async () => {
+        const plan = buildPlan();
+        const { complete, output } = mockPolish(plan);
+        let finish!: (value: string) => void;
+        complete.mockImplementation(() => new Promise<string>(resolveResponse => { finish = resolveResponse; }));
+        const { user, onExport } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        expect(screen.getByRole("button", { name: "Export deck" })).toBeDisabled();
+        expect(screen.getAllByLabelText("Did")[0]).toBeDisabled();
+        await user.click(screen.getByRole("button", { name: "Skip polish" }));
+        expect(screen.getByRole("button", { name: "Export deck" })).toBeEnabled();
+        await act(async () => { finish(JSON.stringify(output)); });
+        expect(screen.queryByRole("region", { name: "Suggested focus" })).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Export deck" }));
+        expect(vi.mocked(onExport).mock.calls[0][0]).toEqual(plan);
+    });
+
+    it("shows provider/model and HTTP diagnostics while preserving the editable deck", async () => {
+        const plan = buildPlan();
+        const { complete } = mockPolish(plan);
+        complete.mockRejectedValue(new transport.LLMTransportError("SECRET ERROR", 404, "SECRET RESPONSE"));
+        const { user } = renderPreview(plan);
+        await user.click(screen.getByRole("button", { name: "Polish deck" }));
+        await user.click(await screen.findByText("Polish details"));
+        expect(screen.getByText(/HTTP 404/)).toHaveTextContent("openai · gpt-5.6-luna");
+        expect(screen.queryByText(/SECRET/)).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Export deck" })).toBeEnabled();
+        expect(screen.getAllByLabelText("Did")[0]).toBeEnabled();
+    });
+
     it("renders the plan in order with titles, notes, suggested seconds, and the plan estimate", () => {
         const plan = buildPlan();
         renderPreview(plan);
