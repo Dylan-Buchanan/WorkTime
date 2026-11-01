@@ -54,7 +54,9 @@ function recap(slide: Slide, source: DeckRecapSlide) {
 async function renderSlide(slide: Slide, source: DeckSlide) {
     switch (source.kind) {
         case "title":
-            text(slide, source.trackerName, 0.65, 1.8, 12.03, 0.75, 32);
+            if (source.trackerName !== source.title) {
+                text(slide, source.trackerName, 0.65, 1.8, 12.03, 0.75, 32);
+            }
             text(slide, source.purpose, 0.65, 2.95, 12.03, 1.6, 28);
             text(slide, `${source.periodLabel}\n${source.periodRangeLabel}`, 0.65, 5.3, 12.03, 1.1, 24);
             break;
@@ -117,7 +119,9 @@ export async function renderDeck(plan: DeckPlan): Promise<{ blob: Blob; fileName
         if (source.isHidden || (source.kind === "recap" && source.placement === "appendix")) continue;
         const slide = presentation.addSlide();
         slide.background = { color: "FAFAF9" };
-        text(slide, source.title, 0.65, 0.45, WIDTH - 1.3, 0.7, 36);
+        if (!(source.kind === "recap" && source.goalTitle === source.title)) {
+            text(slide, source.title, 0.65, 0.45, WIDTH - 1.3, 0.7, 36);
+        }
         await renderSlide(slide, source);
         slide.addNotes(`${source.notes}\n\nSuggested time: ${suggestedSecondsForSlide(source)} seconds.`);
     }

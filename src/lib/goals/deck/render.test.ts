@@ -58,6 +58,33 @@ beforeEach(() => {
 });
 
 describe("renderDeck", () => {
+    it("renders matching cover and recap names exactly once across text runs", async () => {
+        const plan = fixture();
+        plan.slides = plan.slides.map(slide => {
+            if (slide.kind === "title") return { ...slide, title: slide.trackerName };
+            if (slide.kind === "recap") return { ...slide, title: slide.goalTitle };
+            return slide;
+        });
+        await renderDeck(plan);
+        expect(copy(0).split("Edited tracker")).toHaveLength(2);
+        expect(copy(1).split("Edited goal")).toHaveLength(2);
+        expect(mock.slides[0].addText).toHaveBeenCalledWith("Edited tracker", expect.objectContaining({ y: 0.45, fontSize: 36 }));
+        expect(mock.slides[1].addText).toHaveBeenCalledWith("Edited goal", expect.objectContaining({ y: 1.3, fontSize: 24 }));
+    });
+
+    it("preserves distinct edited cover and recap titles alongside their tracker and goal names", async () => {
+        await renderDeck(fixture());
+        for (const [index, title, name, heroY, heroSize] of [
+            [0, "Edited cover", "Edited tracker", 1.8, 32],
+            [1, "Edited recap", "Edited goal", 1.3, 24],
+        ] as const) {
+            expect(copy(index).split(title)).toHaveLength(2);
+            expect(copy(index).split(name)).toHaveLength(2);
+            expect(mock.slides[index].addText).toHaveBeenCalledWith(title, expect.objectContaining({ y: 0.45, fontSize: 36 }));
+            expect(mock.slides[index].addText).toHaveBeenCalledWith(name, expect.objectContaining({ y: heroY, fontSize: heroSize }));
+        }
+    });
+
     it("maps all kinds in plan order into light, wide slides with editable text and current notes/seconds", async () => {
         const plan = fixture();
         const before = JSON.stringify(plan);
