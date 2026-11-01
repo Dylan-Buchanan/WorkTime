@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CheckInWizard, type CheckInWizardProps } from "./CheckInWizard";
 import { GoalProvider, useGoals } from "../../state/GoalContext";
@@ -108,6 +108,92 @@ describe("CheckInWizard", () => {
             ],
         });
         expect(saved[0].id).toBeTruthy();
+    });
+
+    it("derives a live Did not do list from the latest previous check-in", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
+        const previous = buildGoalCheckInFixture({
+            id: "previous-row",
+            goalId: goal.id,
+            periodStart: "2026-10-04",
+            planned: [
+                { text: "Ship the migration", dueDate: "2026-10-10" },
+                { text: "Write the retro", dueDate: null },
+            ],
+        });
+        await data.saveGoals([tracker], [goal], [previous]);
+        const period = periodFor(tracker, "2026-10-20");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const comparison = within(card).getByRole("heading", { name: "Did not do" }).closest("section") as HTMLElement;
+        expect(within(comparison).getByText("Ship the migration")).toBeInTheDocument();
+        expect(within(comparison).getByText("Write the retro")).toBeInTheDocument();
+        expect(within(comparison).getByText("2026-10-10")).toBeInTheDocument();
+        expect(within(card).getByText("Why not / miss reason")).toBeInTheDocument();
+        expect(within(card).getByText("Explains the items above.")).toBeInTheDocument();
+
+        const did = screen.getByLabelText(`Did for ${goal.title}`);
+        await user.type(did, "Ship the migration");
+        expect(within(comparison).queryByText("Ship the migration")).not.toBeInTheDocument();
+        expect(within(comparison).getByText("Write the retro")).toBeInTheDocument();
+        expect(within(comparison).queryByText("2026-10-10")).not.toBeInTheDocument();
+
+        await user.type(did, "{Enter}Write the retro");
+        expect(within(comparison).queryByText("Write the retro")).not.toBeInTheDocument();
+        expect(within(comparison).getByText("Everything from the previous check-in is marked done.")).toBeInTheDocument();
+
+        await user.type(screen.getByLabelText(`Miss reason for ${goal.title}`), "Waited on review");
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+        const saved = (await data.loadGoals()).checkIns.find(row => row.periodStart === period.periodStart)!;
+        expect(saved.missReason).toBe("Waited on review");
+        expect(saved.did).toBe("Ship the migration\nWrite the retro");
+        expect(Object.keys(saved).sort()).toEqual([
+            "createdAt", "current", "did", "evidenceTaskIds", "goalId", "id",
+            "isFocus", "missReason", "periodStart", "planned", "statusPill", "updatedAt",
+        ]);
+    });
+
+    it("shows a quiet comparison message when there is no previous check-in", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        expect(within(card).getByRole("heading", { name: "Did not do" })).toBeInTheDocument();
+        expect(within(card).getByText("No previous plans to compare.")).toBeInTheDocument();
+    });
+
+    it("reflects the selected status pill in a colored chip", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        const chip = () => screen.getByRole("article", { name: goal.title }).querySelector("[data-status-pill]") as HTMLElement;
+        expect(chip()).toHaveAttribute("data-status-pill", "on-track");
+        expect(chip()).toHaveTextContent("On track");
+        expect(chip()).toHaveClass("text-emerald-200");
+
+        await user.selectOptions(screen.getByLabelText(`Status for ${goal.title}`), "at-risk");
+        expect(chip()).toHaveAttribute("data-status-pill", "at-risk");
+        expect(chip()).toHaveTextContent("At risk");
+        expect(chip()).toHaveClass("text-amber-200");
+
+        await user.selectOptions(screen.getByLabelText(`Status for ${goal.title}`), "blocked");
+        expect(chip()).toHaveAttribute("data-status-pill", "blocked");
+        expect(chip()).toHaveTextContent("Blocked");
+        expect(chip()).toHaveClass("text-rose-200");
     });
 
     it("reloads stored values and upserts a single row per goal and period on reopen", async () => {

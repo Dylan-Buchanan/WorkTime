@@ -12,8 +12,9 @@ import {
     periodRangeLabel,
     type GoalPeriod,
 } from "../../lib/goals/periods";
-import { isGoalIncludedInPeriod, slipSummary } from "../../lib/goals/slips";
+import { isGoalIncludedInPeriod, normalizeCheckInHistory, slipSummary, unmetPlannedItems } from "../../lib/goals/slips";
 import { useGoals } from "../../state/GoalContext";
+import { CheckInStatusBadge } from "./GoalStatusBadge";
 import { GoalSlipBadge } from "./GoalSlipBadge";
 
 export interface CheckInWizardProps {
@@ -118,6 +119,9 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
     // TEST-VERIFIABLE ONLY until #140 stamps lastBuiltPeriodStart: this guard has
     // no real build key to observe yet, so it is exercised only by simulated data.
     const staleWarning = lastBuilt !== null && lastBuilt >= activePeriod.periodStart && dismissedStamp !== lastBuilt;
+    // "Did not do" is derived from the latest stored row before the selected
+    // period; no new persisted field is added to GoalCheckIn.
+    const storedHistory = normalizeCheckInHistory(Object.values(state.checkIns));
 
     const patchDraft = (goalId: string, patch: Partial<GoalCheckIn>) => {
         const updatedAt = new Date().toISOString();
@@ -222,6 +226,9 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                     const draft = drafts[goal.id];
                     if (!draft) return null;
                     const slips = slipSummary(goal.id, Object.values(state.checkIns), activePeriod.periodStart);
+                    const priorRows = storedHistory.filter(row => row.goalId === goal.id && row.periodStart < activePeriod.periodStart);
+                    const previous = priorRows.length > 0 ? priorRows[priorRows.length - 1] : null;
+                    const unmet = previous ? unmetPlannedItems(previous, draft) : [];
                     return <article key={goal.id} aria-label={goal.title} className="space-y-2 rounded border border-neutral-800 bg-neutral-900/30 p-3">
                         <div className="flex flex-wrap items-center gap-2">
                             <h3 className="flex-1 font-medium">{goal.title}</h3>
@@ -233,11 +240,25 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                                     {STATUS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                                 </select>
                             </label>
+                            <span className="mb-2"><CheckInStatusBadge statusPill={draft.statusPill} /></span>
                             <label className="flex items-center gap-2"><input type="checkbox" aria-label={`Focus for ${goal.title}`} checked={draft.isFocus} onChange={event => patchDraft(goal.id, { isFocus: event.target.checked })} />Focus</label>
                         </div>
                         <label className="grid gap-1">Did
                             <textarea className={control} aria-label={`Did for ${goal.title}`} value={draft.did} onChange={event => patchDraft(goal.id, { did: event.target.value })} />
                         </label>
+                        <section className="rounded-md border border-neutral-800/70 bg-neutral-950/20 p-3">
+                            <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Did not do</h4>
+                            {!previous
+                                ? <p className="mt-1 text-xs text-neutral-500">No previous plans to compare.</p>
+                                : unmet.length === 0
+                                    ? <p className="mt-1 text-xs text-neutral-500">Everything from the previous check-in is marked done.</p>
+                                    : <ul className="mt-1 space-y-1 text-sm text-neutral-300">
+                                        {unmet.map((item, index) => <li key={`${item.text}-${index}`} className="flex flex-wrap items-baseline gap-2">
+                                            <span>{item.text}</span>
+                                            {item.dueDate && <span className="text-xs text-neutral-500">Due <time dateTime={item.dueDate}>{item.dueDate}</time></span>}
+                                        </li>)}
+                                    </ul>}
+                        </section>
                         <label className="grid gap-1">Currently working on
                             <textarea className={control} aria-label={`Current for ${goal.title}`} value={draft.current} onChange={event => patchDraft(goal.id, { current: event.target.value })} />
                         </label>
@@ -254,8 +275,10 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                             </div>)}
                             <button type="button" className={button} aria-label={`Add planned item for ${goal.title}`} onClick={() => addPlanned(goal.id)}>Add planned item</button>
                         </fieldset>
-                        <label className="grid gap-1">Miss reason
+                        <label className="grid gap-1">
+                            <span>Why not / miss reason</span>
                             <input className={control} aria-label={`Miss reason for ${goal.title}`} value={draft.missReason} onChange={event => patchDraft(goal.id, { missReason: event.target.value })} />
+                            <span className="text-xs text-neutral-500">Explains the items above.</span>
                         </label>
                     </article>;
                 })}

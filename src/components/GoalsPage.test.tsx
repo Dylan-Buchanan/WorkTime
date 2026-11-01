@@ -47,9 +47,17 @@ beforeEach(() => localStorage.clear());
 afterEach(() => { vi.useRealTimers(); });
 
 describe("GoalsPage", () => {
+    it("shows a clear page heading and description", async () => {
+        await mount();
+        expect(screen.getByRole("heading", { level: 1, name: "Goals" })).toBeInTheDocument();
+        expect(screen.getByText(/Check in each period to record progress/)).toBeInTheDocument();
+    });
+
     it("has a clean empty state and creates multiple trackers using both validated cadence variants", async () => {
         const { user, data } = await mount();
-        expect(screen.getByText(/No trackers yet/)).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
+        expect(screen.getByText(/A tracker holds the goals you are working toward/)).toBeInTheDocument();
+        expect(screen.getAllByRole("button", { name: "Add tracker" })).toHaveLength(1);
         await user.click(screen.getByRole("button", { name: "Add tracker" }));
         await user.type(screen.getByLabelText("Tracker name"), "Work");
         await user.type(screen.getByLabelText("Purpose"), "Ship useful things");
@@ -73,6 +81,16 @@ describe("GoalsPage", () => {
         expect(saved.trackers.find(row => row.name === "Life")?.cadence).toEqual({ kind: "monthly-weekday", weekday: 5 });
         await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), saved.trackers.find(row => row.name === "Work")!.id);
         expect(screen.getByRole("heading", { name: "Work" })).toBeInTheDocument();
+    });
+
+    it("shows a distinct empty state when every tracker is archived", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.saveGoals([buildArchivedTrackerFixture()], [], []);
+        await mount(data);
+        expect(screen.getByRole("heading", { name: "No active trackers" })).toBeInTheDocument();
+        expect(screen.getByText(/Every tracker you have is archived/)).toBeInTheDocument();
+        expect(screen.getAllByRole("button", { name: "Add tracker" })).toHaveLength(1);
+        expect(screen.queryByRole("heading", { name: "Start your first tracker" })).not.toBeInTheDocument();
     });
 
     it("rejects invalid tracker forms and supports tracker edit, confirmed archive, and restore", async () => {
@@ -113,6 +131,7 @@ describe("GoalsPage", () => {
         const goal = buildGoalFixture({ trackerId: future.id });
         await data.saveGoals([future, past], [goal], []);
         const { user, container } = await mount(data);
+        expect(screen.getByText("Every 2 weeks on Sunday")).toBeInTheDocument();
         expect(screen.getByText(/No open period. First period starts on/)).toHaveTextContent("2099-01-04");
         expect(screen.queryByRole("button", { name: /check.in|build deck/i })).not.toBeInTheDocument();
         for (const slot of ["tracker-due", "check-in-entry", "deck-entry", "goal-set-actions", "goal-slip", "check-in-wizard", "deck-preview", "due-nudge"]) {
@@ -198,10 +217,18 @@ describe("GoalsPage", () => {
         const checkIn = buildGoalCheckInFixture({ goalId: goal.id });
         await data.saveGoals([tracker], [goal], [checkIn]);
         const { user } = await mount(data);
-        await user.click(screen.getByRole("button", { name: "Achieve" }));
+        const achieve = screen.getByRole("button", { name: "Achieve" });
+        expect(achieve).toHaveClass("border-emerald-700");
+        expect(achieve).toHaveClass("text-emerald-200");
+        const drop = screen.getByRole("button", { name: "Drop" });
+        expect(drop).toHaveClass("border-rose-800");
+        expect(drop).toHaveClass("text-rose-200");
+        await user.click(achieve);
         expect(screen.queryByRole("heading", { name: goal.title })).not.toBeInTheDocument();
         await user.selectOptions(screen.getByLabelText("Goal status"), "achieved");
-        await user.click(screen.getByRole("button", { name: "Reactivate" }));
+        const reactivate = screen.getByRole("button", { name: "Reactivate" });
+        expect(reactivate).toHaveClass("border-neutral-700");
+        await user.click(reactivate);
         await user.selectOptions(screen.getByLabelText("Goal status"), "active");
         await user.click(screen.getByRole("button", { name: "Drop" }));
         await user.selectOptions(screen.getByLabelText("Goal status"), "dropped");
@@ -210,6 +237,23 @@ describe("GoalsPage", () => {
         await user.selectOptions(screen.getByLabelText("Goal status"), "active");
         await waitFor(async () => expect((await data.loadGoals()).goals[0].lifecycle).toBe("active"));
         expect((await data.loadGoals()).checkIns).toEqual([checkIn]);
+    });
+
+    it("renders colored lifecycle pills for active, achieved, and dropped goals", async () => {
+        const { data, tracker } = await oneTracker();
+        const active = buildGoalFixture({ id: "goal-active", trackerId: tracker.id, title: "Active goal", sortOrder: 0 });
+        const achieved = buildGoalFixture({ id: "goal-achieved", trackerId: tracker.id, title: "Achieved goal", sortOrder: 1, lifecycle: "achieved", achievedAt: "2026-10-12T12:00:00.000Z" });
+        const dropped = buildGoalFixture({ id: "goal-dropped", trackerId: tracker.id, title: "Dropped goal", sortOrder: 2, lifecycle: "dropped", droppedAt: "2026-10-20T12:00:00.000Z" });
+        await data.saveGoals([tracker], [active, achieved, dropped], []);
+        const { user } = await mount(data);
+        await user.selectOptions(screen.getByLabelText("Goal status"), "all");
+        const pill = (title: string) => within(screen.getByLabelText(title)).getByText(/^(Active|Achieved|Dropped)$/);
+        expect(pill("Active goal")).toHaveTextContent("Active");
+        expect(pill("Active goal")).toHaveClass("text-sky-200");
+        expect(pill("Achieved goal")).toHaveTextContent("Achieved");
+        expect(pill("Achieved goal")).toHaveClass("text-emerald-200");
+        expect(pill("Dropped goal")).toHaveTextContent("Dropped");
+        expect(pill("Dropped goal")).toHaveClass("text-neutral-400");
     });
 
     it("reorders from the dnd-kit drop event while retaining hidden lifecycle rows and the complete set", async () => {
@@ -304,6 +348,7 @@ describe("GoalsPage", () => {
         const control = within(entry).getByRole("button", { name: "Period not open" });
         expect(control).toBeDisabled();
         expect(control).toHaveAttribute("aria-disabled", "true");
+        expect(control).toHaveClass("border-neutral-700");
         await user.click(control);
         expect(container.querySelector('[data-goals-slot="check-in-wizard"]')).toBeEmptyDOMElement();
     });
@@ -319,7 +364,11 @@ describe("GoalsPage", () => {
         const entry = container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement;
         expect(entry).toHaveAttribute("data-tracker-id", tracker.id);
         expect(entry).toHaveTextContent(`First period started on ${tracker.cadenceAnchorAt}.`);
-        await user.click(within(entry).getByRole("button", { name: "Check in · October 2026" }));
+        const openEntry = within(entry).getByRole("button", { name: "Check in · October 2026" });
+        expect(openEntry).toHaveClass("bg-indigo-600");
+        expect(openEntry).toHaveClass("ring-indigo-400/40");
+        expect(openEntry).toHaveTextContent("Period open");
+        await user.click(openEntry);
 
         const slot = container.querySelector('[data-goals-slot="check-in-wizard"]') as HTMLElement;
         expect(within(slot).getByRole("heading", { name: "Check in · October 2026" })).toBeInTheDocument();
