@@ -1,5 +1,7 @@
 # Goals epic shared contract — Phase 2
 
+Implementation status: **Phases 1–12 are implemented; the Phase 12 ownership amendment is ratified.** This contract remains binding for the #143/#142 follow-ups.
+
 Status: **Signatures FROZEN by ORCH review, contingent on the normal Phase 2 gate;
 not a gate record.** RESEARCH authored the chat draft at foundation HEAD
 `4d365119e0b46d5c7e213de71b6e61f4d8093c5c`; IMPL+ materialized the contract and
