@@ -6,12 +6,16 @@ import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
-import { dueState, firstPeriod, goalGrid, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
+import { dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
+import { buildDeckPlan } from "../lib/goals/deck/plan";
+import type { DeckPlan } from "../lib/goals/deck/types";
 import { localDateKey } from "../lib/todos/calendar";
 import type { LocalDateKey } from "../lib/todos/types";
 import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
 import { CheckInWizard } from "./goals/CheckInWizard";
+import { DeckEntry, type DeckEntryAvailability } from "./goals/DeckEntry";
+import { DeckPreview } from "./goals/DeckPreview";
 import { GoalDueNudge } from "./goals/GoalDueNudge";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
@@ -44,6 +48,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [editingGoal, setEditingGoal] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [pinnedCheckIn, setPinnedCheckIn] = useState<{ trackerId: string; period: GoalPeriod } | null>(null);
+    const [deckPreview, setDeckPreview] = useState<{ trackerId: string; plan: DeckPlan } | null>(null);
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -71,6 +76,25 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                     : "No open period.",
             firstPeriodLabel: checkInFirst ? periodLabel(checkInFirst) : null,
         };
+    const deckCompleted = checkInGrid ? mostRecentCompletedPeriod(checkInGrid, today) : null;
+    const deckAvailability: DeckEntryAvailability = tracker === undefined
+        ? { kind: "not-ready", message: "No tracker selected." }
+        : tracker.isArchived
+            ? { kind: "not-ready", message: "This tracker is archived. Reactivate it to build a deck." }
+            : deckCompleted === null
+                ? {
+                    kind: "not-ready",
+                    message: checkInCurrent
+                        ? `No completed period yet. Build the deck after the ${periodLabel(checkInCurrent)} period completes.`
+                        : checkInFirst
+                            ? `No completed period yet. Build the deck after the first period completes; it starts on ${checkInFirst.periodStart}.`
+                            : "No completed period yet.",
+                }
+                : {
+                    kind: "ready",
+                    period: deckCompleted,
+                    built: tracker.lastBuiltPeriodStart === deckCompleted.periodStart,
+                };
     const slipCount = (goalId: string) => {
         if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
         return slipSummary(goalId, Object.values(state.checkIns), currentPeriodStart).consecutiveSlips;
@@ -90,6 +114,27 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         const visibleIds = new Set(moved);
         const fullOrder = allGoals.map(row => visibleIds.has(row.id) ? moved[index++] : row.id);
         attempt(() => goals.reorderGoals(tracker.id, fullOrder));
+    }
+    function buildDeck(period: GoalPeriod) {
+        if (!tracker) return;
+        try {
+            // Always regenerate in memory: no plan cache, persistence, or archive.
+            const plan = buildDeckPlan({
+                tracker,
+                goals: Object.values(state.goals),
+                checkIns: Object.values(state.checkIns),
+                period,
+                now: new Date(),
+            });
+            setDeckPreview({ trackerId: tracker.id, plan });
+            setError(null);
+        } catch (error) {
+            setError(errorMessage(error));
+        }
+    }
+    /** #140 renders and delivers the pptx from this seam; it is deliberately a no-op for now. */
+    async function exportDeck(_plan: DeckPlan): Promise<void> {
+        // #140 renders and delivers the pptx file here.
     }
 
     return <div className="flex h-full min-h-0 flex-col">
@@ -133,7 +178,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 </section>}
                 {tracker && <>
                     <label className="flex items-center gap-2">Tracker
-                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); setPinnedCheckIn(null); }}>
+                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); setPinnedCheckIn(null); setDeckPreview(null); }}>
                             {trackers.map(row => <option key={row.id} value={row.id}>{row.name}{row.isArchived ? " (archived)" : ""}</option>)}
                         </select>
                     </label>
@@ -171,7 +216,14 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 if (pinned) setPinnedCheckIn({ trackerId: tracker.id, period: pinned });
                             }} />
                         </div>
-                        <div data-goals-slot="deck-entry" data-tracker-id={tracker.id} />
+                        <div data-goals-slot="deck-entry" data-tracker-id={tracker.id}>
+                            <DeckEntry
+                                trackerId={tracker.id}
+                                trackerName={tracker.name}
+                                availability={deckAvailability}
+                                onBuild={buildDeck}
+                            />
+                        </div>
                         <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id} />
                     </section>
                     {!tracker.isArchived && <QuickAdd key={tracker.id} first={allGoals.length === 0} onAdd={(title, status, notes) => {
@@ -209,7 +261,14 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 onClose={() => setPinnedCheckIn(null)}
             />}
         </div>
-        <div data-goals-slot="deck-preview" />
+        <div data-goals-slot="deck-preview">
+            {deckPreview && deckPreview.trackerId === tracker?.id && <DeckPreview
+                key={`${deckPreview.trackerId}:${deckPreview.plan.period.periodStart}:${deckPreview.plan.generatedAt}`}
+                plan={deckPreview.plan}
+                onClose={() => setDeckPreview(null)}
+                onExport={exportDeck}
+            />}
+        </div>
         <div data-goals-slot="due-nudge"><GoalDueNudge today={today} /></div>
     </div>;
 };
