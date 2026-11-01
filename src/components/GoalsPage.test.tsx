@@ -15,6 +15,7 @@ import { makeAppState } from "../test/mockTauri";
 import type { Project } from "../state/types";
 import type { LocalDateKey } from "../lib/todos/types";
 import type { DeckPlan } from "../lib/goals/deck/types";
+import { serializeGoalSet } from "../lib/goals/goalSetFile";
 import {
     buildArchivedTrackerFixture,
     buildCheckInHistoryFixture,
@@ -626,5 +627,86 @@ describe("GoalsPage", () => {
         expect(within(row).getByText("Linked project is missing")).toBeInTheDocument();
         expect(within(row).queryByRole("alert")).not.toBeInTheDocument();
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("mounts goal-set export and import actions in the selected tracker's slot", async () => {
+        const { data, tracker } = await oneTracker();
+        const { container } = await mount(data);
+        const slot = container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
+        expect(slot).toHaveAttribute("data-tracker-id", tracker.id);
+        expect(within(slot).getByRole("button", { name: "Export goals" })).toBeEnabled();
+        expect(within(slot).getByLabelText("Import goals")).toHaveAttribute("type", "file");
+        expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
+    });
+
+    it("moves the goal-set actions to the newly selected tracker", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const first = buildGoalTrackerFixture({ id: "tracker-alpha", name: "Alpha", sortOrder: 0 });
+        const second = buildGoalTrackerFixture({ id: "tracker-beta", name: "Beta", sortOrder: 1 });
+        await data.saveGoals([first, second], [], []);
+        const { user, container } = await mount(data);
+        const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
+        expect(slot()).toHaveAttribute("data-tracker-id", first.id);
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), second.id);
+        expect(slot()).toHaveAttribute("data-tracker-id", second.id);
+        expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeEnabled();
+        expect(within(slot()).getByLabelText("Import goals")).toBeInTheDocument();
+        expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
+    });
+
+    it("selects an imported tracker and clears the deck preview, pinned check-in, and goal edit", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ cadenceAnchorAt: "2026-10-04" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
+        const wizard = () => container.querySelector('[data-goals-slot="check-in-wizard"]') as HTMLElement;
+        const preview = () => container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+
+        // Put the page in the state import must clear.
+        await user.click(within(container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement)
+            .getByRole("button", { name: "Check in · October 2026" }));
+        expect(wizard()).not.toBeEmptyDOMElement();
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        expect(preview()).not.toBeEmptyDOMElement();
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getByRole("form", { name: "Edit goal" })).toBeInTheDocument();
+
+        // Drive the real Lane B component through a validated file and confirm.
+        await user.upload(
+            within(slot()).getByLabelText("Import goals"),
+            new File([serializeGoalSet(tracker, [goal])], "goals-work-2026-10-20.json", { type: "application/json" }),
+        );
+        const review = await within(slot()).findByRole("region", { name: "Import review" });
+        expect(within(review).getByText("Ship the release")).toBeInTheDocument();
+        await user.click(within(review).getByRole("button", { name: "Create tracker" }));
+
+        await waitFor(() => expect(slot().getAttribute("data-tracker-id")).not.toBe(tracker.id));
+        const created = (await data.loadGoals()).trackers.find(row => row.id !== tracker.id)!;
+        expect(created).toBeDefined();
+        expect(slot()).toHaveAttribute("data-tracker-id", created.id);
+        expect(screen.getByRole("combobox", { name: "Tracker" })).toHaveValue(created.id);
+        expect(wizard()).toBeEmptyDOMElement();
+        expect(preview()).toBeEmptyDOMElement();
+        expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
+
+        // Import stays additive: the source tracker and goal are untouched.
+        await waitFor(async () => expect((await data.loadGoals()).goals).toHaveLength(2));
+        const saved = await data.loadGoals();
+        expect(saved.trackers).toHaveLength(2);
+        expect(saved.goals.find(row => row.id === goal.id)).toMatchObject({
+            id: goal.id,
+            trackerId: tracker.id,
+            title: goal.title,
+            lifecycle: goal.lifecycle,
+        });
+    });
+
+    it("leaves the goal-set actions slot absent in the empty state", async () => {
+        const { container } = await mount();
+        expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
+        expect(container.querySelector('[data-goals-slot="goal-set-actions"]')).toBeNull();
+        expect(screen.queryByRole("button", { name: "Export goals" })).not.toBeInTheDocument();
     });
 });

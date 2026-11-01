@@ -20,6 +20,7 @@ import { DeckEntry, type DeckEntryAvailability } from "./goals/DeckEntry";
 import { DeckPreview } from "./goals/DeckPreview";
 import { GoalCountdownBadge } from "./goals/GoalCountdownBadge";
 import { GoalDueNudge } from "./goals/GoalDueNudge";
+import { GoalSetActions } from "./goals/GoalSetActions";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
 import { TrackerDueBadge } from "./goals/TrackerDueBadge";
@@ -239,7 +240,15 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 onBuild={buildDeck}
                             />
                         </div>
-                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id} />
+                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id}>
+                            <GoalSetActions trackerId={tracker.id} onImported={newTrackerId => {
+                                // The component already created the tracker and its goals through the provider.
+                                goals.selectTracker(newTrackerId);
+                                setDeckPreview(null);
+                                setPinnedCheckIn(null);
+                                setEditingGoal(null);
+                            }} />
+                        </div>
                     </section>
                     {!tracker.isArchived && <QuickAdd key={tracker.id} first={allGoals.length === 0} onAdd={(title, status, notes) => {
                         const row = goals.createGoal({ trackerId: tracker.id, title, notes });
