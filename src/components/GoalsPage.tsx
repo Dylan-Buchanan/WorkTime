@@ -10,6 +10,7 @@ import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, 
 import { slipSummary } from "../lib/goals/slips";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
 import type { DeckPlan } from "../lib/goals/deck/types";
+import { initiateBlobDownload } from "../lib/goals/deck/delivery";
 import { localDateKey } from "../lib/todos/calendar";
 import type { LocalDateKey } from "../lib/todos/types";
 import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
@@ -134,9 +135,17 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
             setError(errorMessage(error));
         }
     }
-    /** #140 renders and delivers the pptx from this seam; it is deliberately a no-op for now. */
-    async function exportDeck(_plan: DeckPlan): Promise<void> {
-        // #140 renders and delivers the pptx file here.
+    async function exportDeck(plan: DeckPlan): Promise<void> {
+        setError(null);
+        try {
+            const { renderDeck } = await import("../lib/goals/deck/render");
+            const { blob, fileName } = await renderDeck(plan);
+            await initiateBlobDownload(blob, fileName);
+            await goals.stampBuiltPeriod(plan.trackerId, plan.period.periodStart);
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : "Export failed. Please try again.");
+            throw caught;
+        }
     }
 
     return <div className="flex h-full min-h-0 flex-col">
