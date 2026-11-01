@@ -48,3 +48,6 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Local pnpm content-addressable store
+.pnpm-store/

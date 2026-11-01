@@ -11,6 +11,7 @@ import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
 import type { LocalDateKey } from "../lib/todos/types";
+import type { DeckPlan } from "../lib/goals/deck/types";
 import {
     buildArchivedTrackerFixture,
     buildCheckInHistoryFixture,
@@ -21,6 +22,19 @@ import {
 } from "../lib/goals/testFixtures";
 
 const drag = vi.hoisted(() => ({ end: null as null | ((event: DragEndEvent) => void) }));
+const deckExport = vi.hoisted(() => ({ render: vi.fn(), deliver: vi.fn(), stamp: vi.fn() }));
+vi.mock("../lib/goals/deck/render", () => ({ renderDeck: deckExport.render }));
+vi.mock("../lib/goals/deck/delivery", () => ({ initiateBlobDownload: deckExport.deliver }));
+vi.mock("../state/GoalContext", async importOriginal => {
+    const original = await importOriginal<typeof import("../state/GoalContext")>();
+    return { ...original, useGoals: () => {
+        const goals = original.useGoals();
+        return { ...goals, stampBuiltPeriod: async (trackerId: string, periodStart: LocalDateKey) => {
+            await deckExport.stamp(trackerId, periodStart);
+            await goals.stampBuiltPeriod(trackerId, periodStart);
+        } };
+    } };
+});
 vi.mock("@dnd-kit/core", async importOriginal => {
     const original = await importOriginal<typeof import("@dnd-kit/core")>();
     return { ...original, DndContext: (props: React.ComponentProps<typeof original.DndContext>) => {
@@ -43,7 +57,12 @@ async function oneTracker() {
     await data.saveGoals([tracker], [], []);
     return { data, tracker };
 }
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+    localStorage.clear();
+    deckExport.render.mockReset().mockResolvedValue({ blob: new Blob(["deck"]), fileName: "Work.pptx" });
+    deckExport.deliver.mockReset().mockResolvedValue(undefined);
+    deckExport.stamp.mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => { vi.useRealTimers(); });
 
 describe("GoalsPage", () => {
@@ -459,7 +478,7 @@ describe("GoalsPage", () => {
         expect(preview()).toBeEmptyDOMElement();
     });
 
-    it("keeps the preview open and writes nothing when export runs before #140", async () => {
+    it("keeps the preview open and writes no export artifacts to localStorage", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();
         await data.saveGoals([tracker], [], []);
@@ -474,5 +493,74 @@ describe("GoalsPage", () => {
         setItem.mockRestore();
         expect(within(preview).getByRole("heading", { name: heading.textContent! })).toBeInTheDocument();
         expect(within(preview).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("awaits render, delivery, then stamp with the edited plan's completed period key", async () => {
+        const { data, tracker } = await oneTracker();
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        const title = within(preview).getAllByLabelText("Slide title")[0];
+        fireEvent.change(title, { target: { value: "Edited export title" } });
+        const notes = within(preview).getAllByLabelText("Speaker notes")[0];
+        fireEvent.change(notes, { target: { value: "Edited export notes" } });
+        let finishRender!: (value: { blob: Blob; fileName: string }) => void;
+        let finishDelivery!: () => void;
+        deckExport.render.mockReturnValue(new Promise(resolve => { finishRender = resolve; }));
+        deckExport.deliver.mockReturnValue(new Promise<void>(resolve => { finishDelivery = resolve; }));
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        await waitFor(() => expect(deckExport.render).toHaveBeenCalledTimes(1));
+        const edited = deckExport.render.mock.calls[0][0] as DeckPlan;
+        expect(edited.slides[0].title).toBe("Edited export title");
+        expect(edited.slides[0].notes).toBe("Edited export notes");
+        expect(edited.period.periodStart).toBe("2026-10-04");
+        expect(deckExport.deliver).not.toHaveBeenCalled();
+        expect(deckExport.stamp).not.toHaveBeenCalled();
+        const blob = new Blob(["edited deck"]);
+        await act(async () => { finishRender({ blob, fileName: "edited.pptx" }); });
+        expect(deckExport.deliver).toHaveBeenCalledExactlyOnceWith(blob, "edited.pptx");
+        expect(deckExport.stamp).not.toHaveBeenCalled();
+        expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBeNull();
+        await act(async () => { finishDelivery(); });
+        await waitFor(() => expect(deckExport.stamp).toHaveBeenCalledExactlyOnceWith(edited.trackerId, edited.period.periodStart));
+        await waitFor(async () => expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBe("2026-10-04"));
+        expect(deckExport.render.mock.invocationCallOrder[0]).toBeLessThan(deckExport.deliver.mock.invocationCallOrder[0]);
+        expect(deckExport.deliver.mock.invocationCallOrder[0]).toBeLessThan(deckExport.stamp.mock.invocationCallOrder[0]);
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+        expect(title).toHaveValue("Edited export title");
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it.each(["render", "deliver"])("surfaces a %s rejection in the page and preview without stamping", async stage => {
+        const { data } = await oneTracker();
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        deckExport[stage as "render" | "deliver"].mockRejectedValueOnce(new Error(`${stage} failed`));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+        for (const alert of screen.getAllByRole("alert")) expect(alert).toHaveTextContent(`${stage} failed`);
+        expect(deckExport.stamp).not.toHaveBeenCalled();
+        if (stage === "render") expect(deckExport.deliver).not.toHaveBeenCalled();
+        expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBeNull();
+        expect(within(preview).getByRole("button", { name: "Export deck" })).toBeEnabled();
+    });
+
+    it("rejects and shows both alerts when the awaited stamp write fails after initiation", async () => {
+        const { data } = await oneTracker();
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        const save = vi.spyOn(data, "saveGoals").mockRejectedValueOnce(new Error("Stamp storage failed"));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+        for (const alert of screen.getAllByRole("alert")) expect(alert).toHaveTextContent("Stamp storage failed");
+        expect(deckExport.deliver).toHaveBeenCalledTimes(1);
+        expect(deckExport.stamp).toHaveBeenCalledExactlyOnceWith("tracker-work", "2026-10-04");
+        expect(save).toHaveBeenCalledTimes(1);
+        expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBeNull();
+        expect(screen.queryByText("Built")).not.toBeInTheDocument();
+        expect(within(preview).getByRole("button", { name: "Export deck" })).toBeEnabled();
+        save.mockRestore();
     });
 });
