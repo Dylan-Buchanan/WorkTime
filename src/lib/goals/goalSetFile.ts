@@ -93,12 +93,6 @@ function requireNumber(value: unknown, what: string): number {
     return value;
 }
 
-function requirePositiveNumber(value: unknown, what: string): number {
-    const number = requireNumber(value, what);
-    if (number <= 0) invalid(`${what} must be greater than zero`);
-    return number;
-}
-
 function readWeekday(value: unknown, what: string): Weekday {
     if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 6) {
         invalid(`${what} must be an integer from 0 to 6`);
@@ -134,7 +128,9 @@ function readMetric(value: unknown, what: string): GoalSetMetricDefinition | nul
     requireKeys(value, METRIC_KEYS, `${what} metric`);
     return {
         label: requireText(value.label, `${what} metric label`),
-        target: requirePositiveNumber(value.target, `${what} metric target`),
+        // The app's own `isGoalMetric` only requires finite, so zero and negative
+        // targets are legal stored data and must survive export/import.
+        target: requireNumber(value.target, `${what} metric target`),
         unit: requireString(value.unit, `${what} metric unit`),
     };
 }

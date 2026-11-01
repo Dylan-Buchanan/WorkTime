@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GoalEvidencePanel } from "./GoalEvidencePanel";
@@ -141,7 +141,15 @@ async function mount(options: {
     return { data, user: userEvent.setup(), ...view };
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Inside PERIOD, so the default panel case is the currently open period.
+    vi.setSystemTime(new Date(2026, 9, 10, 12));
+});
+afterEach(() => {
+    vi.useRealTimers();
+});
 
 describe("GoalEvidencePanel", () => {
     it("adds and removes PM task ids without touching stale ids or did", async () => {
@@ -229,6 +237,24 @@ describe("GoalEvidencePanel", () => {
 
         expect(await screen.findByText("In Progress: Alpha")).toBeInTheDocument();
         expect(screen.getByTestId("current")).toHaveTextContent("Already typed");
+    });
+
+    it.each([
+        ["a past period", { periodStart: "2026-08-02", periodEnd: "2026-08-16" } as PeriodBounds],
+        ["a future period", { periodStart: "2026-10-18", periodEnd: "2026-11-01" } as PeriodBounds],
+    ])("never prefills %s from today's In Progress tasks", async (_label, period) => {
+        const goal = buildGoalFixture({ projectId: "project-1" });
+        const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: period.periodStart, current: "" });
+        await mount({
+            goal,
+            checkIn,
+            period,
+            pmTasks: [pmTask({ id: "pm-a", title: "Alpha", status: "In Progress", appTaskId: undefined })],
+            backendTasks: [],
+        });
+
+        expect(await screen.findByText("In Progress: Alpha")).toBeInTheDocument();
+        expect(screen.getByTestId("current").textContent).toBe("");
     });
 
     it("renders nothing for an unlinked goal", async () => {

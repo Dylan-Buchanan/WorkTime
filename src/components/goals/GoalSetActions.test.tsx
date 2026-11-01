@@ -3,6 +3,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { GoalSetActions } from "./GoalSetActions";
 import { GoalProvider, type NewGoalInput, type NewGoalTrackerInput } from "../../state/GoalContext";
+import { ProjectManagerProvider } from "../../state/ProjectManagerContext";
+import { AppStateProvider } from "../../state/AppStateContext";
 import { DataProvider } from "../../state/DataContext";
 import { SyncProvider } from "../../state/SyncContext";
 import { TauriCloseProvider } from "../../state/TauriCloseContext";
@@ -15,7 +17,7 @@ import {
     buildGoalFixture,
     buildMetricGoalFixture,
 } from "../../lib/goals/testFixtures";
-import type { Goal, GoalTracker } from "../../state/types";
+import type { Goal, GoalTracker, Project } from "../../state/types";
 
 const calls = vi.hoisted(() => ({
     deliver: vi.fn(),
@@ -26,6 +28,8 @@ const calls = vi.hoisted(() => ({
     selected: [] as string[],
     updateTracker: vi.fn(),
     archiveTracker: vi.fn(),
+    persist: vi.fn(),
+    persistFailure: null as Error | null,
 }));
 
 vi.mock("../../lib/goals/deck/delivery", async importOriginal => {
@@ -67,6 +71,10 @@ vi.mock("../../state/GoalContext", async importOriginal => {
                     calls.archiveTracker(id, archived);
                     goals.archiveTracker(id, archived);
                 },
+                persist: () => {
+                    calls.persist();
+                    return calls.persistFailure !== null ? Promise.reject(calls.persistFailure) : goals.persist();
+                },
             };
         },
     };
@@ -76,9 +84,13 @@ function tree(data: InMemoryDataAccess, trackerId: string, onImported: (newTrack
     return <TauriCloseProvider>
         <DataProvider dataAccess={data}>
             <SyncProvider ownerId="goal-set-owner">
-                <GoalProvider>
-                    <GoalSetActions trackerId={trackerId} onImported={onImported} />
-                </GoalProvider>
+                <AppStateProvider>
+                    <ProjectManagerProvider>
+                        <GoalProvider>
+                            <GoalSetActions trackerId={trackerId} onImported={onImported} />
+                        </GoalProvider>
+                    </ProjectManagerProvider>
+                </AppStateProvider>
             </SyncProvider>
         </DataProvider>
     </TauriCloseProvider>;
@@ -88,6 +100,29 @@ async function seeded(tracker: GoalTracker, goals: Goal[]) {
     const data = new InMemoryDataAccess(makeAppState());
     await data.saveGoals([tracker], goals, []);
     return data;
+}
+
+function project(id: string, sortOrder: number): Project {
+    return {
+        id,
+        name: `Project ${id}`,
+        color: "#6366F1",
+        workableStart: "09:00",
+        workableEnd: "17:00",
+        workableDays: [1, 2, 3, 4, 5],
+        isArchived: false,
+        sortOrder,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+    };
+}
+
+async function seedProjects(data: InMemoryDataAccess, ids: readonly string[]) {
+    await data.savePMState({
+        projects: Object.fromEntries(ids.map((id, index) => [id, project(id, index)])),
+        tasks: {},
+        meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+    });
 }
 
 async function mount(data: InMemoryDataAccess, trackerId: string, onImported = vi.fn()) {
@@ -116,6 +151,8 @@ beforeEach(() => {
     calls.deliver.mockReset().mockResolvedValue(undefined);
     calls.updateTracker.mockReset();
     calls.archiveTracker.mockReset();
+    calls.persist.mockReset();
+    calls.persistFailure = null;
     calls.createTracker.length = 0;
     calls.createGoal.length = 0;
     calls.createdGoals.length = 0;
@@ -142,6 +179,23 @@ describe("GoalSetActions", () => {
         expect(payload.goals.map((row: { title: string }) => row.title)).toEqual(["Train four times"]);
         expect(calls.updateTracker).not.toHaveBeenCalled();
         expect(calls.archiveTracker).not.toHaveBeenCalled();
+    });
+
+    it("disables export for a tracker with no goals and never delivers a file", async () => {
+        const tracker = buildEveryNWeeksTrackerFixture();
+        const data = await seeded(tracker, []);
+        render(tree(data, tracker.id, vi.fn()));
+
+        const hint = await screen.findByText("Add a goal before exporting this tracker.");
+        const exportButton = screen.getByRole("button", { name: "Export goals" });
+        expect(exportButton).toBeDisabled();
+        expect(exportButton).toHaveAttribute("aria-describedby", hint.id);
+        expect(screen.getByLabelText("Import goals")).toBeEnabled();
+
+        await userEvent.setup().click(exportButton);
+
+        expect(calls.deliver).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
     it("reviews a selected file without creating anything yet", async () => {
@@ -201,6 +255,52 @@ describe("GoalSetActions", () => {
         expect(calls.updateTracker).not.toHaveBeenCalled();
         expect(calls.archiveTracker).not.toHaveBeenCalled();
         expect(calls.setLifecycle).toHaveLength(0);
+    });
+
+    it("keeps the review open and reports no success when the save rejects", async () => {
+        const tracker = buildEveryNWeeksTrackerFixture();
+        const goals = [buildGoalFixture({ id: "goal-a", trackerId: tracker.id, sortOrder: 0 })];
+        const data = await seeded(tracker, goals);
+        const { user, onImported } = await mount(data, tracker.id);
+        await uploadJson(user, fileJson(tracker, goals));
+
+        const review = await screen.findByRole("region", { name: "Import review" });
+        calls.persistFailure = new Error("storage is unavailable");
+        await user.click(within(review).getByRole("button", { name: "Create tracker" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Could not save the imported goal set");
+        expect(alert).toHaveTextContent("storage is unavailable");
+        expect(screen.getByRole("region", { name: "Import review" })).toBeInTheDocument();
+        expect(onImported).not.toHaveBeenCalled();
+        expect(calls.selected).toHaveLength(0);
+        expect(calls.persist).toHaveBeenCalledTimes(1);
+        expect(calls.createTracker).toHaveLength(1);
+        expect(calls.createGoal).toHaveLength(1);
+    });
+
+    it("imports goals unlinked when their project is not on this device and keeps known links", async () => {
+        const tracker = buildEveryNWeeksTrackerFixture();
+        const goals = [
+            buildGoalFixture({ id: "goal-known", trackerId: tracker.id, title: "Known project", projectId: "project-1", sortOrder: 0 }),
+            buildGoalFixture({ id: "goal-missing-a", trackerId: tracker.id, title: "Missing A", projectId: "project-missing-a", sortOrder: 1 }),
+            buildGoalFixture({ id: "goal-missing-b", trackerId: tracker.id, title: "Missing B", projectId: "project-missing-b", sortOrder: 2 }),
+        ];
+        const data = await seeded(tracker, goals);
+        await seedProjects(data, ["project-1"]);
+        const { user, onImported } = await mount(data, tracker.id);
+        await uploadJson(user, fileJson(tracker, goals));
+
+        const review = await screen.findByRole("region", { name: "Import review" });
+        expect(await within(review).findByText(
+            "2 project links will be cleared because those projects are not on this device.",
+        )).toBeInTheDocument();
+
+        await user.click(within(review).getByRole("button", { name: "Create tracker" }));
+        await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
+
+        expect(calls.createGoal.map(input => input.projectId)).toEqual(["project-1", null, null]);
+        expect(calls.createdGoals.map(goal => goal.projectId)).toEqual(["project-1", null, null]);
     });
 
     it("preserves achieved and dropped lifecycle when importing", async () => {
