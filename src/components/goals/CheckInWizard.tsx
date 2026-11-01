@@ -15,6 +15,7 @@ import {
 import { isGoalIncludedInPeriod, normalizeCheckInHistory, slipSummary, unmetPlannedItems } from "../../lib/goals/slips";
 import { useGoals } from "../../state/GoalContext";
 import { CheckInStatusBadge } from "./GoalStatusBadge";
+import { GoalEvidencePanel } from "./GoalEvidencePanel";
 import { GoalSlipBadge } from "./GoalSlipBadge";
 
 export interface CheckInWizardProps {
@@ -246,6 +247,12 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                         <label className="grid gap-1">Did
                             <textarea className={control} aria-label={`Did for ${goal.title}`} value={draft.did} onChange={event => patchDraft(goal.id, { did: event.target.value })} />
                         </label>
+                        {goal.projectId !== null && <GoalEvidencePanel
+                            goal={goal}
+                            checkIn={draft}
+                            period={activePeriod}
+                            onChange={patch => patchDraft(goal.id, patch)}
+                        />}
                         <section className="rounded-md border border-neutral-800/70 bg-neutral-950/20 p-3">
                             <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Did not do</h4>
                             {!previous

@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { CheckInWizard, type CheckInWizardProps } from "./CheckInWizard";
 import { GoalProvider, useGoals } from "../../state/GoalContext";
+import { AppStateProvider } from "../../state/AppStateContext";
+import { ProjectManagerProvider } from "../../state/ProjectManagerContext";
 import { DataProvider } from "../../state/DataContext";
 import { SyncProvider } from "../../state/SyncContext";
 import { TauriCloseProvider } from "../../state/TauriCloseContext";
@@ -15,7 +17,7 @@ import {
     buildGoalFixture,
     buildGoalTrackerFixture,
 } from "../../lib/goals/testFixtures";
-import type { GoalTracker } from "../../state/types";
+import type { GoalTracker, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
 import type { LocalDateKey } from "../../lib/todos/types";
 
 function WizardHarness(props: CheckInWizardProps) {
@@ -29,14 +31,81 @@ function periodFor(tracker: GoalTracker, today: LocalDateKey): GoalPeriod {
     return period;
 }
 
+function project(overrides: Partial<Project> = {}): Project {
+    return {
+        id: "project-1",
+        name: "Deep Work",
+        color: "#6366F1",
+        workableStart: "09:00",
+        workableEnd: "17:00",
+        workableDays: [1, 2, 3, 4, 5],
+        isArchived: false,
+        sortOrder: 0,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
+function pmTask(overrides: Partial<PMTask> = {}): PMTask {
+    return {
+        id: "pm-1",
+        title: "Ship the release",
+        projectId: "project-1",
+        status: "Done",
+        priority: "Medium",
+        timeSpentMinutes: 0,
+        tags: [],
+        links: [],
+        checklist: [],
+        sortOrder: 0,
+        isArchived: false,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        appTaskId: "app-1",
+        relatedTo: [],
+        ...overrides,
+    };
+}
+
+function backendTask(overrides: Partial<Task> = {}): Task {
+    return {
+        id: "app-1",
+        name: "Ship the release",
+        target_pomodoros: 1,
+        completed_pomodoros: 1,
+        created_at: "2026-10-01T00:00:00.000Z",
+        completed_at: new Date(2026, 9, 20, 12).toISOString(),
+        break_skips: 0,
+        archived: false,
+        ...overrides,
+    };
+}
+
+function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
+    return {
+        id: "log-1",
+        task_id: "app-1",
+        duration_minutes: 25,
+        finished_at: new Date(2026, 9, 20, 12).toISOString(),
+        was_break: false,
+        break_skipped: false,
+        ...overrides,
+    };
+}
+
 async function mountWizard(data: InMemoryDataAccess, trackerId: string, period: GoalPeriod, onClose: () => void) {
     const view = render(
         <TauriCloseProvider>
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId="wizard-owner">
-                    <GoalProvider>
-                        <WizardHarness trackerId={trackerId} period={period} onClose={onClose} />
-                    </GoalProvider>
+                    <AppStateProvider>
+                        <ProjectManagerProvider>
+                            <GoalProvider>
+                                <WizardHarness trackerId={trackerId} period={period} onClose={onClose} />
+                            </GoalProvider>
+                        </ProjectManagerProvider>
+                    </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
         </TauriCloseProvider>,
@@ -491,5 +560,90 @@ describe("CheckInWizard", () => {
         const saved = (await data.loadGoals()).checkIns;
         expect(saved).toHaveLength(2);
         expect(saved.find(row => row.id === "legacy-row")).toEqual(legacy);
+    });
+
+    it("shows project evidence for a linked goal and persists an accepted task id", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { "app-1": backendTask() },
+            logs: [log()],
+        }));
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: { "pm-1": pmTask() },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-10-20");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const checkbox = await within(card).findByRole("checkbox", { name: /^Evidence Ship the release for/ });
+        expect(within(card).getByRole("heading", { name: "Evidence" })).toBeInTheDocument();
+        expect(checkbox).not.toBeChecked();
+        await user.click(checkbox);
+        expect(checkbox).toBeChecked();
+
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+
+        const saved = (await data.loadGoals()).checkIns[0];
+        expect(saved).toMatchObject({
+            goalId: goal.id,
+            periodStart: period.periodStart,
+            evidenceTaskIds: ["pm-1"],
+            did: "",
+        });
+    });
+
+    it("shows no evidence panel for an unlinked goal even when project data exists", async () => {
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { "app-1": backendTask() } }));
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-life", trackerId: tracker.id, title: "Life goal", projectId: null });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: { "pm-1": pmTask() },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        expect(within(card).queryByRole("region", { name: /Evidence/ })).not.toBeInTheDocument();
+        expect(within(card).queryByRole("checkbox", { name: /^Evidence/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/only tasks finalized through the timer/)).not.toBeInTheDocument();
+    });
+
+    it("prefills current from In Progress tasks, freezes after an edit, and re-syncs only on refresh", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {
+                "pm-a": pmTask({ id: "pm-a", title: "Alpha", status: "In Progress", appTaskId: undefined, sortOrder: 0 }),
+                "pm-b": pmTask({ id: "pm-b", title: "Beta", status: "In Progress", appTaskId: undefined, sortOrder: 1 }),
+            },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const current = screen.getByLabelText(`Current for ${goal.title}`);
+        await waitFor(() => expect(current).toHaveValue("Alpha, Beta"));
+
+        await user.clear(current);
+        await user.type(current, "Handwritten");
+        expect(current).toHaveValue("Handwritten");
+        await user.clear(current);
+        await waitFor(() => expect(current).toHaveValue(""));
+
+        await user.click(within(card).getByRole("button", { name: "Refresh suggestions" }));
+        await waitFor(() => expect(current).toHaveValue("Alpha, Beta"));
     });
 });
