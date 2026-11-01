@@ -378,4 +378,88 @@ describe("GoalsPage", () => {
         await user.click(within(slot).getByRole("button", { name: "Close check-in wizard" }));
         expect(slot).toBeEmptyDOMElement();
     });
+
+    it("builds the most recent completed deck into the preview slot and clears it on close", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        expect(entry).toHaveAttribute("data-tracker-id", tracker.id);
+        const build = within(entry).getByRole("button", { name: "Build deck" });
+        expect(build).toBeEnabled();
+        await user.click(build);
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+        // The completed period is the one that started 2026-10-04, not the 2026-10-18 period in progress.
+        expect(within(preview).getAllByText(/Oct 4/).length).toBeGreaterThan(0);
+        expect(within(preview).getAllByLabelText("Slide title")[0]).toHaveValue(tracker.name);
+        await user.click(within(preview).getByRole("button", { name: "Close preview" }));
+        expect(preview).toBeEmptyDOMElement();
+    });
+
+    it("shows the built cue for the completed period and still allows a same-period rebuild", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ lastBuiltPeriodStart: "2026-10-04" });
+        await data.saveGoals([tracker], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        expect(within(entry).getByText("Built")).toBeInTheDocument();
+        const rebuild = within(entry).getByRole("button", { name: "Rebuild deck" });
+        expect(rebuild).toBeEnabled();
+        await user.click(rebuild);
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+    });
+
+    it("disables the deck entry without a completed period and for an archived tracker", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const inProgress = buildGoalTrackerFixture({ id: "in-progress", name: "In progress", cadenceAnchorAt: "2026-10-18", sortOrder: 0 });
+        const future = buildGoalTrackerFixture({ id: "future", name: "Future", cadenceAnchorAt: "2099-01-04", sortOrder: 1 });
+        const archived = buildArchivedTrackerFixture({ id: "archived", name: "Archived", sortOrder: 2 });
+        await data.saveGoals([inProgress, future, archived], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = () => container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        const preview = () => container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+
+        expect(entry()).toHaveAttribute("data-tracker-id", inProgress.id);
+        expect(entry()).toHaveTextContent("No completed period yet. Build the deck after the October 2026 period completes.");
+        const disabled = within(entry()).getByRole("button", { name: "Deck not ready" });
+        expect(disabled).toBeDisabled();
+        expect(disabled).toHaveAttribute("aria-disabled", "true");
+        await user.click(disabled);
+        expect(preview()).toBeEmptyDOMElement();
+        expect(screen.queryByRole("button", { name: /build deck|rebuild deck/i })).not.toBeInTheDocument();
+
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), future.id);
+        expect(entry()).toHaveAttribute("data-tracker-id", future.id);
+        expect(entry()).toHaveTextContent("it starts on 2099-01-04");
+        expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+        expect(preview()).toBeEmptyDOMElement();
+
+        await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), archived.id);
+        expect(entry()).toHaveAttribute("data-tracker-id", archived.id);
+        expect(entry()).toHaveTextContent("This tracker is archived. Reactivate it to build a deck.");
+        expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+        expect(preview()).toBeEmptyDOMElement();
+    });
+
+    it("keeps the preview open and writes nothing when export runs before #140", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        await data.saveGoals([tracker], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        await user.click(within(entry).getByRole("button", { name: "Build deck" }));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        const heading = within(preview).getByRole("heading", { name: `${tracker.name} deck preview` });
+        const setItem = vi.spyOn(Storage.prototype, "setItem");
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        expect(setItem).not.toHaveBeenCalled();
+        setItem.mockRestore();
+        expect(within(preview).getByRole("heading", { name: heading.textContent! })).toBeInTheDocument();
+        expect(within(preview).queryByRole("alert")).not.toBeInTheDocument();
+    });
 });
