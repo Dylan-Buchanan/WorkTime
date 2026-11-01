@@ -3,6 +3,7 @@ import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type 
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
+import { usePM } from "../state/ProjectManagerContext";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
@@ -351,12 +352,21 @@ function MetricBadge({ metric }: { metric: GoalMetric }) {
     return <span className="text-neutral-400">{metric.source === "manual" ? "Manual" : "Auto"}{metric.overridePinned ? " · Override" : ""}</span>;
 }
 
+function GoalProjectLink({ projectId }: { projectId: string }) {
+    const pm = usePM();
+    const project = pm.state.projects[projectId];
+    return project
+        ? <span className="text-xs text-neutral-400">{project.name}</span>
+        : <span className="text-xs text-neutral-500">Linked project is missing</span>;
+}
+
 function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecycle }: { goal: Goal; consecutiveSlips: number; expanded: boolean; onExpand: () => void; onEdit: () => void; onLifecycle: (value: Goal["lifecycle"]) => void }) {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id });
     return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className="rounded border border-neutral-800 bg-neutral-900/30 p-3" aria-label={goal.title}>
         <div className="flex flex-wrap items-center gap-3">
             <button className={button} {...attributes} {...listeners} aria-label={`Reorder ${goal.title}`}>⠿</button>
             <h3 className="flex-1 font-medium">{goal.title}</h3>
+            {goal.projectId !== null && <GoalProjectLink projectId={goal.projectId} />}
             <GoalStatusBadge lifecycle={goal.lifecycle} />
             <span data-goals-slot="goal-slip" data-goal-id={goal.id}><GoalSlipBadge consecutiveSlips={consecutiveSlips} /></span>
             <button className={button} onClick={onExpand} aria-expanded={expanded}>{expanded ? "Hide details" : "Show details"}</button>
@@ -372,8 +382,13 @@ function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecyc
 }
 
 function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
+    const pm = usePM();
+    const projects = Object.values(pm.state.projects).sort((left, right) =>
+        left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const [title, setTitle] = useState(goal.title);
     const [notes, setNotes] = useState(goal.notes);
+    const [projectId, setProjectId] = useState(goal.projectId ?? "");
+    const missingProject = goal.projectId !== null && !projects.some(project => project.id === goal.projectId);
     const [metric, setMetric] = useState(goal.metric !== null);
     const [label, setLabel] = useState(goal.metric?.label ?? "");
     const [current, setCurrent] = useState(String(goal.metric?.current ?? 0));
@@ -386,12 +401,17 @@ function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Pa
         try {
             if (!title.trim()) throw new RangeError("Give this goal a name.");
             if (metric && (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target)))) throw new RangeError("Metric needs a label and finite current and target values.");
-            onSave({ title, notes, metric: metric ? { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: source === goal.metric?.source ? goal.metric.overridePinned : false } : null });
+            onSave({ title, notes, projectId: projectId || null, metric: metric ? { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: source === goal.metric?.source ? goal.metric.overridePinned : false } : null });
         } catch (error) { setError(errorMessage(error)); }
     }}>
         <h3 className="font-medium">Edit goal</h3>
         <label className="grid gap-1">Name<input className={control} value={title} onChange={event => setTitle(event.target.value)} /></label>
         <label className="grid gap-1">Goal note<textarea className={control} value={notes} onChange={event => setNotes(event.target.value)} /></label>
+        <label className="grid gap-1">Project<select className={control} aria-label="Project" value={projectId} onChange={event => setProjectId(event.target.value)}>
+            <option value="">No project</option>
+            {missingProject && <option value={goal.projectId!}>Missing project</option>}
+            {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select></label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={metric} onChange={event => setMetric(event.target.checked)} />Track one metric</label>
         {metric && <fieldset className="flex flex-wrap gap-3"><legend className="mb-2">Metric {goal.metric && <MetricBadge metric={goal.metric} />}</legend>
             <label className="grid gap-1">Metric label<input className={control} value={label} onChange={event => setLabel(event.target.value)} /></label>

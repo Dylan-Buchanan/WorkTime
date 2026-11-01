@@ -5,11 +5,14 @@ import userEvent from "@testing-library/user-event";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { GoalsPage } from "./GoalsPage";
 import { GoalProvider } from "../state/GoalContext";
+import { AppStateProvider } from "../state/AppStateContext";
+import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { DataProvider } from "../state/DataContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
+import type { Project } from "../state/types";
 import type { LocalDateKey } from "../lib/todos/types";
 import type { DeckPlan } from "../lib/goals/deck/types";
 import {
@@ -44,7 +47,7 @@ vi.mock("@dnd-kit/core", async importOriginal => {
 });
 
 function tree(data: InMemoryDataAccess, today?: LocalDateKey) {
-    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><GoalProvider><GoalsPage today={today} /></GoalProvider></SyncProvider></DataProvider></TauriCloseProvider>;
+    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><AppStateProvider><ProjectManagerProvider><GoalProvider><GoalsPage today={today} /></GoalProvider></ProjectManagerProvider></AppStateProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
 async function mount(data = new InMemoryDataAccess(makeAppState()), today?: LocalDateKey) {
     const view = render(tree(data, today));
@@ -56,6 +59,21 @@ async function oneTracker() {
     const tracker = buildGoalTrackerFixture();
     await data.saveGoals([tracker], [], []);
     return { data, tracker };
+}
+function project(overrides: Partial<Project> = {}): Project {
+    return {
+        id: "project-1",
+        name: "Deep Work",
+        color: "#6366F1",
+        workableStart: "09:00",
+        workableEnd: "17:00",
+        workableDays: [1, 2, 3, 4, 5],
+        isArchived: false,
+        sortOrder: 0,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        ...overrides,
+    };
 }
 beforeEach(() => {
     localStorage.clear();
@@ -562,5 +580,51 @@ describe("GoalsPage", () => {
         expect(screen.queryByText("Built")).not.toBeInTheDocument();
         expect(within(preview).getByRole("button", { name: "Export deck" })).toBeEnabled();
         save.mockRestore();
+    });
+
+    it("round-trips a goal project link through the editor and clears it to null", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ id: "goal-linked", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {},
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const { user } = await mount(data, "2026-10-20");
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const select = await screen.findByLabelText("Project");
+        await screen.findByRole("option", { name: "Deep Work" });
+        await user.selectOptions(select, "project-1");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectId).toBe("project-1"));
+        expect(within(screen.getByLabelText(goal.title)).getByText("Deep Work")).toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const reopened = await screen.findByLabelText("Project");
+        await waitFor(() => expect(reopened).toHaveValue("project-1"));
+        await user.selectOptions(reopened, "");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectId).toBeNull());
+        expect(screen.queryByText("Deep Work")).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows a quiet missing-project note instead of an error on a broken goal link", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ id: "goal-broken", trackerId: tracker.id, title: "Broken link", projectId: "project-gone" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {},
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        await mount(data, "2026-10-20");
+
+        const row = screen.getByLabelText(goal.title);
+        expect(within(row).getByText("Linked project is missing")).toBeInTheDocument();
+        expect(within(row).queryByRole("alert")).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 });
