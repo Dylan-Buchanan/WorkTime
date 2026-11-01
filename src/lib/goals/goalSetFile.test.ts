@@ -177,8 +177,32 @@ describe("goalSetFile serializeGoalSet", () => {
         expect(() => serializeGoalSet(tracker, [{ ...goal, title: "" }])).toThrow(GoalSetError);
         expect(() => serializeGoalSet(tracker, [{
             ...goal,
-            metric: { label: "Sessions", target: 0, current: 0, unit: "", source: "manual", overridePinned: false },
+            metric: { label: "Sessions", target: Number.POSITIVE_INFINITY, current: 0, unit: "", source: "manual", overridePinned: false },
         }])).toThrow(GoalSetError);
+    });
+
+    it("accepts the finite metric targets the app can store, including zero and negatives", () => {
+        const tracker = buildEveryNWeeksTrackerFixture();
+        const zero = {
+            ...buildMetricGoalFixture(tracker.id),
+            id: "goal-zero",
+            metric: { label: "Sessions", target: 0, current: 0, unit: "", source: "manual" as const, overridePinned: false },
+            sortOrder: 0,
+        };
+        const negative = {
+            ...buildMetricGoalFixture(tracker.id),
+            id: "goal-negative",
+            metric: { label: "Delta", target: -3, current: 2, unit: "kg", source: "manual" as const, overridePinned: false },
+            sortOrder: 1,
+        };
+
+        const json = serializeGoalSet(tracker, [zero, negative]);
+        const file = parseGoalSet(json);
+        expect(file.goals.map(goal => goal.metric?.target)).toEqual([0, -3]);
+
+        const materialized = materializeGoalSet(file, NOW, ids());
+        expect(materialized.goals.map(goal => goal.metric?.target)).toEqual([0, -3]);
+        expect(materialized.goals.map(goal => goal.metric?.current)).toEqual([0, 0]);
     });
 });
 
@@ -275,7 +299,7 @@ describe("goalSetFile parseGoalSet", () => {
         }))).toBe("invalid-field");
         expect(thrownCode('{"format":"worktime.goal-set","version":1,"tracker":{"name":"Work","purpose":"","cadence":{"kind":"monthly-weekday","weekday":0},"color":""},"goals":[{"title":"x","notes":"","projectId":null,"metric":null,"lifecycle":"active","sortOrder":1e999}]}')).toBe("invalid-field");
         expect(thrownCode(withChange(file => {
-            (file.goals as Record<string, unknown>[])[0].metric = { label: "Sessions", target: 0, unit: "" };
+            (file.goals as Record<string, unknown>[])[0].metric = { label: "Sessions", target: null, unit: "" };
         }))).toBe("invalid-field");
         expect(thrownCode(withChange(file => {
             (file.goals as Record<string, unknown>[])[0].metric = { label: "Sessions", target: "8", unit: "" };

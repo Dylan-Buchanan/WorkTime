@@ -1,6 +1,9 @@
 import React, { useEffect, useRef } from "react";
 import type { Goal, GoalCheckIn } from "../../state/types";
+import type { LocalDateKey } from "../../lib/todos/types";
 import type { PeriodBounds } from "../../lib/goals/periods";
+import { localDateKey } from "../../lib/todos/calendar";
+import { isGoalDateKey } from "../../lib/goals/factories";
 import { buildGoalEvidence, evidencePrefillText, formatEvidenceHours } from "../../lib/goals/evidence";
 import { usePM } from "../../state/ProjectManagerContext";
 import { useAppState } from "../../state/AppStateContext";
@@ -14,10 +17,23 @@ export interface GoalEvidencePanelProps {
 
 const button = "rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50";
 
+function todayLocalDateKey(): LocalDateKey {
+    const key = localDateKey(new Date());
+    if (!isGoalDateKey(key)) throw new RangeError("Invalid goal date");
+    return key;
+}
+
+/** `[periodStart, periodEnd)` local dates, so a past or future period is never "current". */
+function isCurrentPeriod(period: PeriodBounds, today: LocalDateKey): boolean {
+    return period.periodStart <= today && today < period.periodEnd;
+}
+
 /**
  * Read-only project evidence for one goal card. Suggestions are explicit
- * accept/reject checkboxes; the Current prefill is written once on first open
- * and frozen after any manual edit (Refresh is the only later re-sync).
+ * accept/reject checkboxes; the Current prefill is written once on first open of
+ * the current period, and frozen after any manual edit (Refresh is the only later
+ * re-sync). Callers key the panel by goal and period so those refs reset on a
+ * period switch; past and future periods never auto-prefill.
  */
 export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, checkIn, period, onChange }) => {
     const pm = usePM();
@@ -25,6 +41,7 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
     const frozenRef = useRef(goal.projectId === null || checkIn.current !== "");
     const lastSeenRef = useRef(checkIn.current);
     const prefilledRef = useRef<string | null>(null);
+    const boundPeriodRef = useRef<string | null>(null);
 
     const evidence = buildGoalEvidence({
         goal,
@@ -36,23 +53,42 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
         logs: appState?.logs ?? [],
     });
 
+    // A period switch updates the wizard's drafts one commit after the pinned
+    // period changes, so the panel can briefly see another period's row. Only the
+    // row whose natural key matches this period counts as "first open"; when that
+    // row arrives, re-baseline the freeze/prefill refs instead of treating the
+    // swap as a manual edit.
+    useEffect(() => {
+        if (checkIn.periodStart !== period.periodStart) return;
+        if (boundPeriodRef.current === period.periodStart) return;
+        boundPeriodRef.current = period.periodStart;
+        lastSeenRef.current = checkIn.current;
+        frozenRef.current = goal.projectId === null || checkIn.current !== "";
+        prefilledRef.current = null;
+    }, [checkIn.current, checkIn.periodStart, goal.projectId, period.periodStart]);
+
     // Freeze when the Current value changes from anything other than our own prefill.
     useEffect(() => {
+        if (checkIn.periodStart !== period.periodStart) return;
         if (checkIn.current === lastSeenRef.current) return;
         const ownWrite = prefilledRef.current !== null && checkIn.current === prefilledRef.current;
         if (!ownWrite) frozenRef.current = true;
         lastSeenRef.current = checkIn.current;
-    }, [checkIn.current]);
+    }, [checkIn.current, checkIn.periodStart, period.periodStart]);
 
-    // First-open prefill only. This never writes `did`.
+    // First-open prefill only, and only for the currently open period: writing
+    // today's In Progress titles into a past period would invent history.
+    // This never writes `did`.
     useEffect(() => {
+        if (checkIn.periodStart !== period.periodStart) return;
         if (frozenRef.current || prefilledRef.current !== null) return;
         if (checkIn.current !== "" || goal.projectId === null) return;
+        if (!isCurrentPeriod(period, todayLocalDateKey())) return;
         const text = evidencePrefillText(evidence.inProgress);
         if (!text) return;
         prefilledRef.current = text;
         onChange({ current: text });
-    }, [checkIn.current, evidence.inProgress, goal.projectId, onChange]);
+    }, [checkIn.current, checkIn.periodStart, evidence.inProgress, goal.projectId, onChange, period.periodStart, period.periodEnd]);
 
     if (goal.projectId === null) return null;
 

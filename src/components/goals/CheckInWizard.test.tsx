@@ -646,4 +646,61 @@ describe("CheckInWizard", () => {
         await user.click(within(card).getByRole("button", { name: "Refresh suggestions" }));
         await waitFor(() => expect(current).toHaveValue("Alpha, Beta"));
     });
+
+    it("opens a past period with an empty current and never prefills it", async () => {
+        vi.setSystemTime(new Date(2026, 10, 2, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {
+                "pm-a": pmTask({ id: "pm-a", title: "Alpha", status: "In Progress", appTaskId: undefined, sortOrder: 0 }),
+                "pm-b": pmTask({ id: "pm-b", title: "Beta", status: "In Progress", appTaskId: undefined, sortOrder: 1 }),
+            },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-11-02");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        expect(await screen.findByRole("heading", { name: goal.title })).toBeInTheDocument();
+        expect(screen.getByLabelText("Check-in period")).toHaveValue("2026-11-01");
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-18");
+
+        const card = screen.getByRole("article", { name: goal.title });
+        expect(await within(card).findByText("In Progress: Alpha, Beta")).toBeInTheDocument();
+        await waitFor(() => expect(screen.getByLabelText(`Current for ${goal.title}`)).toHaveValue(""));
+        expect(screen.getByLabelText(`Current for ${goal.title}`)).toHaveValue("");
+    });
+
+    it("re-prefills the current period after editing current in another period", async () => {
+        vi.setSystemTime(new Date(2026, 10, 2, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {
+                "pm-a": pmTask({ id: "pm-a", title: "Alpha", status: "In Progress", appTaskId: undefined, sortOrder: 0 }),
+                "pm-b": pmTask({ id: "pm-b", title: "Beta", status: "In Progress", appTaskId: undefined, sortOrder: 1 }),
+            },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-11-02");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+        await waitFor(() => expect(current()).toHaveValue("Alpha, Beta"));
+        await user.clear(current());
+        await user.type(current(), "Handwritten");
+        expect(current()).toHaveValue("Handwritten");
+
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-18");
+        await waitFor(() => expect(current()).toHaveValue(""));
+
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-11-01");
+        await waitFor(() => expect(current()).toHaveValue("Alpha, Beta"));
+    });
 });

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useGoals } from "../../state/GoalContext";
+import { usePM } from "../../state/ProjectManagerContext";
 import type { GoalCadence } from "../../state/types";
 import { localDateKey } from "../../lib/todos/calendar";
 import type { LocalDateKey } from "../../lib/todos/types";
@@ -31,6 +32,12 @@ const cadenceLabel = (cadence: GoalCadence): string => cadence.kind === "monthly
 
 const countLabel = (count: number): string => count === 1 ? "1 goal" : `${count} goals`;
 
+const EXPORT_HINT_ID = "goal-set-export-hint";
+
+const projectLinkLabel = (count: number): string => count === 1
+    ? "1 project link will be cleared because that project is not on this device."
+    : `${count} project links will be cleared because those projects are not on this device.`;
+
 /** Short, code-specific copy so a bad file names its own problem. */
 function errorCopy(error: GoalSetError): string {
     switch (error.code) {
@@ -54,19 +61,57 @@ function todayKey(): LocalDateKey {
 }
 
 /**
+ * Review is only rendered once a file parses, so its PM dependency is limited to
+ * this subtree. The project lookup decides which imported links survive.
+ */
+interface ImportReviewProps {
+    review: GoalSetFile;
+    busy: "export" | "import" | null;
+    onConfirm: (knownProjectIds: ReadonlySet<string>) => void;
+    onCancel: () => void;
+}
+
+const ImportReview: React.FC<ImportReviewProps> = ({ review, busy, onConfirm, onCancel }) => {
+    const pm = usePM();
+    const knownProjectIds = new Set(Object.keys(pm.state.projects));
+    const clearedLinks = review.goals.filter(goal => goal.projectId !== null && !knownProjectIds.has(goal.projectId)).length;
+
+    return <section aria-label="Import review" className="flex flex-col gap-2 rounded border border-neutral-800 bg-neutral-900/40 p-2">
+        <h3 className="text-xs font-semibold text-neutral-100">Review import</h3>
+        <p className="text-xs text-neutral-300">
+            Creates a new tracker <strong className="text-neutral-100">{review.tracker.name}</strong> with {countLabel(review.goals.length)}. Nothing existing is changed.
+        </p>
+        <p className="text-xs text-neutral-400">{cadenceLabel(review.tracker.cadence)}</p>
+        {clearedLinks > 0 && <p className="text-xs text-amber-200">{projectLinkLabel(clearedLinks)}</p>}
+        <ul aria-label="Imported goal titles" className="list-disc space-y-0.5 pl-4 text-xs text-neutral-300">
+            {review.goals.map((goal, index) => <li key={`${index}:${goal.title}`}>{goal.title}</li>)}
+        </ul>
+        <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className={primary} disabled={busy !== null} onClick={() => onConfirm(knownProjectIds)}>
+                {busy === "import" ? "Importing…" : "Create tracker"}
+            </button>
+            <button type="button" className={action} disabled={busy !== null} onClick={onCancel}>
+                Cancel
+            </button>
+        </div>
+    </section>;
+};
+
+/**
  * Export/import affordance for one tracker. Import is review-first and always
  * creates a new tracker: existing trackers are never replaced, merged, or edited.
  */
 export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImported }) => {
-    const { state, createTracker, createGoal, setGoalLifecycle, selectTracker } = useGoals();
+    const { state, createTracker, createGoal, setGoalLifecycle, selectTracker, persist } = useGoals();
     const tracker = state.trackers[trackerId];
     const goals = Object.values(state.goals).filter(goal => goal.trackerId === trackerId);
+    const hasGoals = goals.length > 0;
     const [review, setReview] = useState<GoalSetFile | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<"export" | "import" | null>(null);
 
     async function runExport() {
-        if (!tracker || busy !== null) return;
+        if (!tracker || busy !== null || goals.length === 0) return;
         setBusy("export");
         setError(null);
         try {
@@ -96,7 +141,7 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
         }
     }
 
-    function confirmImport() {
+    async function confirmImport(knownProjectIds: ReadonlySet<string>) {
         if (!review || busy !== null) return;
         setBusy("import");
         setError(null);
@@ -114,11 +159,22 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
                     trackerId: created.id,
                     title: goal.title,
                     notes: goal.notes,
-                    projectId: goal.projectId,
+                    // A file from another device can name projects that do not exist here.
+                    projectId: goal.projectId !== null && knownProjectIds.has(goal.projectId) ? goal.projectId : null,
                     metric: goal.metric,
                     sortOrder: goal.sortOrder,
                 });
                 if (goal.lifecycle !== "active") setGoalLifecycle(row.id, goal.lifecycle);
+            }
+            // Report success only after the provider has written the new rows; a
+            // failed save leaves the review open so the import can be retried.
+            try {
+                await persist();
+            } catch (caught) {
+                setError(caught instanceof Error && caught.message
+                    ? `Could not save the imported goal set: ${caught.message}. The review stays open; retry once saving works.`
+                    : "Could not save the imported goal set. The review stays open; retry once saving works.");
+                return;
             }
             setReview(null);
             onImported(created.id);
@@ -140,7 +196,8 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
             <button
                 type="button"
                 className={action}
-                disabled={!tracker || busy !== null}
+                disabled={!tracker || busy !== null || !hasGoals}
+                aria-describedby={hasGoals ? undefined : EXPORT_HINT_ID}
                 onClick={() => { void runExport(); }}
             >
                 {busy === "export" ? "Exporting…" : "Export goals"}
@@ -162,25 +219,15 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
             </label>
         </div>
 
+        {!hasGoals && <p id={EXPORT_HINT_ID} className="text-xs text-neutral-500">Add a goal before exporting this tracker.</p>}
+
         {error && <p role="alert" className="rounded border border-rose-800 bg-rose-950/40 p-2 text-xs text-rose-200">{error}</p>}
 
-        {review && <section aria-label="Import review" className="flex flex-col gap-2 rounded border border-neutral-800 bg-neutral-900/40 p-2">
-            <h3 className="text-xs font-semibold text-neutral-100">Review import</h3>
-            <p className="text-xs text-neutral-300">
-                Creates a new tracker <strong className="text-neutral-100">{review.tracker.name}</strong> with {countLabel(review.goals.length)}. Nothing existing is changed.
-            </p>
-            <p className="text-xs text-neutral-400">{cadenceLabel(review.tracker.cadence)}</p>
-            <ul aria-label="Imported goal titles" className="list-disc space-y-0.5 pl-4 text-xs text-neutral-300">
-                {review.goals.map((goal, index) => <li key={`${index}:${goal.title}`}>{goal.title}</li>)}
-            </ul>
-            <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className={primary} disabled={busy !== null} onClick={confirmImport}>
-                    {busy === "import" ? "Importing…" : "Create tracker"}
-                </button>
-                <button type="button" className={action} disabled={busy !== null} onClick={() => setReview(null)}>
-                    Cancel
-                </button>
-            </div>
-        </section>}
+        {review && <ImportReview
+            review={review}
+            busy={busy}
+            onConfirm={knownProjectIds => { void confirmImport(knownProjectIds); }}
+            onCancel={() => setReview(null)}
+        />}
     </section>;
 };

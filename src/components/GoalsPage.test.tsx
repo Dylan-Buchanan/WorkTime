@@ -634,7 +634,8 @@ describe("GoalsPage", () => {
         const { container } = await mount(data);
         const slot = container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         expect(slot).toHaveAttribute("data-tracker-id", tracker.id);
-        expect(within(slot).getByRole("button", { name: "Export goals" })).toBeEnabled();
+        expect(within(slot).getByRole("button", { name: "Export goals" })).toBeDisabled();
+        expect(within(slot).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
         expect(within(slot).getByLabelText("Import goals")).toHaveAttribute("type", "file");
         expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
     });
@@ -649,7 +650,8 @@ describe("GoalsPage", () => {
         expect(slot()).toHaveAttribute("data-tracker-id", first.id);
         await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), second.id);
         expect(slot()).toHaveAttribute("data-tracker-id", second.id);
-        expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeEnabled();
+        expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeDisabled();
+        expect(within(slot()).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
         expect(within(slot()).getByLabelText("Import goals")).toBeInTheDocument();
         expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
     });
