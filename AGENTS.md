@@ -6,6 +6,9 @@ WorkTime is a Windows Tauri desktop app with a React/Vite frontend. The browser 
 
 - `src/` contains React routes, auth, contexts, shared state types, display helpers, and frontend tests.
 - `src/lib/engine/` is the pure TypeScript timer/task source of truth. It has no I/O, network, wall-clock, or random-ID dependencies in command inputs.
+- Goals lives in `src/components/GoalsPage.tsx` and `src/components/goals/`; `src/lib/goals/**` contains the pure goals/deck/evidence/goal-set layer with pure unit tests, plus browser export adapters.
+- `pptxgenjs` is browser-only: keep its runtime load a function-local dynamic import in the deck renderer, never in the entry chunk or a static import of `GoalsPage`/`DeckPreview`.
+- Goal-set import always creates a new tracker with fresh IDs; never merge or replace. Write `lastBuiltPeriodStart` only through `stampBuiltPeriod` after successful download initiation.
 - `src-tauri/` contains only the native Tauri startup shell and retained plugin configuration.
 - `e2e/` contains Playwright tests against the real React app and local Supabase.
 - `supabase/` contains the schema/RLS migration, local Auth configuration, invite-signup Edge Function, and setup notes.

@@ -3,16 +3,24 @@ import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type 
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
+import { usePM } from "../state/ProjectManagerContext";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
-import { dueState, firstPeriod, goalGrid, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
+import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
+import { buildDeckPlan } from "../lib/goals/deck/plan";
+import type { DeckPlan } from "../lib/goals/deck/types";
+import { initiateBlobDownload } from "../lib/goals/deck/delivery";
 import { localDateKey } from "../lib/todos/calendar";
 import type { LocalDateKey } from "../lib/todos/types";
 import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
 import { CheckInWizard } from "./goals/CheckInWizard";
+import { DeckEntry, type DeckEntryAvailability } from "./goals/DeckEntry";
+import { DeckPreview } from "./goals/DeckPreview";
+import { GoalCountdownBadge } from "./goals/GoalCountdownBadge";
 import { GoalDueNudge } from "./goals/GoalDueNudge";
+import { GoalSetActions } from "./goals/GoalSetActions";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
 import { TrackerDueBadge } from "./goals/TrackerDueBadge";
@@ -44,6 +52,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [editingGoal, setEditingGoal] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [pinnedCheckIn, setPinnedCheckIn] = useState<{ trackerId: string; period: GoalPeriod } | null>(null);
+    const [deckPreview, setDeckPreview] = useState<{ trackerId: string; plan: DeckPlan } | null>(null);
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -60,6 +69,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const checkInGrid = tracker ? goalGrid(tracker) : null;
     const checkInCurrent = checkInGrid ? periodAt(checkInGrid, today) : null;
     const checkInFirst = checkInGrid ? firstPeriod(checkInGrid) : null;
+    const daysUntilFirstPeriod = checkInFirst ? daysUntil(checkInFirst, today) : null;
     const checkInAvailability: CheckInAvailability = checkInCurrent !== null && tracker !== undefined && !tracker.isArchived
         ? { kind: "open", periodStart: checkInCurrent.periodStart, periodLabel: periodLabel(checkInCurrent) }
         : {
@@ -71,6 +81,25 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                     : "No open period.",
             firstPeriodLabel: checkInFirst ? periodLabel(checkInFirst) : null,
         };
+    const deckCompleted = checkInGrid ? mostRecentCompletedPeriod(checkInGrid, today) : null;
+    const deckAvailability: DeckEntryAvailability = tracker === undefined
+        ? { kind: "not-ready", message: "No tracker selected." }
+        : tracker.isArchived
+            ? { kind: "not-ready", message: "This tracker is archived. Reactivate it to build a deck." }
+            : deckCompleted === null
+                ? {
+                    kind: "not-ready",
+                    message: checkInCurrent
+                        ? `No completed period yet. Build the deck after the ${periodLabel(checkInCurrent)} period completes.`
+                        : checkInFirst
+                            ? `No completed period yet. Build the deck after the first period completes; it starts on ${checkInFirst.periodStart}.`
+                            : "No completed period yet.",
+                }
+                : {
+                    kind: "ready",
+                    period: deckCompleted,
+                    built: tracker.lastBuiltPeriodStart === deckCompleted.periodStart,
+                };
     const slipCount = (goalId: string) => {
         if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
         return slipSummary(goalId, Object.values(state.checkIns), currentPeriodStart).consecutiveSlips;
@@ -90,6 +119,35 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         const visibleIds = new Set(moved);
         const fullOrder = allGoals.map(row => visibleIds.has(row.id) ? moved[index++] : row.id);
         attempt(() => goals.reorderGoals(tracker.id, fullOrder));
+    }
+    function buildDeck(period: GoalPeriod) {
+        if (!tracker) return;
+        try {
+            // Always regenerate in memory: no plan cache, persistence, or archive.
+            const plan = buildDeckPlan({
+                tracker,
+                goals: Object.values(state.goals),
+                checkIns: Object.values(state.checkIns),
+                period,
+                now: new Date(),
+            });
+            setDeckPreview({ trackerId: tracker.id, plan });
+            setError(null);
+        } catch (error) {
+            setError(errorMessage(error));
+        }
+    }
+    async function exportDeck(plan: DeckPlan): Promise<void> {
+        setError(null);
+        try {
+            const { renderDeck } = await import("../lib/goals/deck/render");
+            const { blob, fileName } = await renderDeck(plan);
+            await initiateBlobDownload(blob, fileName);
+            await goals.stampBuiltPeriod(plan.trackerId, plan.period.periodStart);
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : "Export failed. Please try again.");
+            throw caught;
+        }
     }
 
     return <div className="flex h-full min-h-0 flex-col">
@@ -133,7 +191,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 </section>}
                 {tracker && <>
                     <label className="flex items-center gap-2">Tracker
-                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); setPinnedCheckIn(null); }}>
+                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); setPinnedCheckIn(null); setDeckPreview(null); }}>
                             {trackers.map(row => <option key={row.id} value={row.id}>{row.name}{row.isArchived ? " (archived)" : ""}</option>)}
                         </select>
                     </label>
@@ -163,7 +221,10 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                         </div>
                         <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="flex flex-wrap items-center gap-3 rounded-md border border-neutral-800/70 bg-neutral-950/30 p-3">
                             {!tracker.isArchived && (checkInCurrent === null
-                                ? <p className="text-sm text-neutral-400">No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
+                                ? <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm text-neutral-400">No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
+                                    {daysUntilFirstPeriod !== null && <GoalCountdownBadge daysUntilOpen={daysUntilFirstPeriod} />}
+                                </div>
                                 : <p className="text-sm text-neutral-400">First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>)}
                             <CheckInEntry trackerId={tracker.id} availability={checkInAvailability} onOpen={periodStart => {
                                 if (!checkInGrid) return;
@@ -171,8 +232,23 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 if (pinned) setPinnedCheckIn({ trackerId: tracker.id, period: pinned });
                             }} />
                         </div>
-                        <div data-goals-slot="deck-entry" data-tracker-id={tracker.id} />
-                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id} />
+                        <div data-goals-slot="deck-entry" data-tracker-id={tracker.id}>
+                            <DeckEntry
+                                trackerId={tracker.id}
+                                trackerName={tracker.name}
+                                availability={deckAvailability}
+                                onBuild={buildDeck}
+                            />
+                        </div>
+                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id}>
+                            <GoalSetActions trackerId={tracker.id} onImported={newTrackerId => {
+                                // The component already created the tracker and its goals through the provider.
+                                goals.selectTracker(newTrackerId);
+                                setDeckPreview(null);
+                                setPinnedCheckIn(null);
+                                setEditingGoal(null);
+                            }} />
+                        </div>
                     </section>
                     {!tracker.isArchived && <QuickAdd key={tracker.id} first={allGoals.length === 0} onAdd={(title, status, notes) => {
                         const row = goals.createGoal({ trackerId: tracker.id, title, notes });
@@ -209,7 +285,14 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 onClose={() => setPinnedCheckIn(null)}
             />}
         </div>
-        <div data-goals-slot="deck-preview" />
+        <div data-goals-slot="deck-preview">
+            {deckPreview && deckPreview.trackerId === tracker?.id && <DeckPreview
+                key={`${deckPreview.trackerId}:${deckPreview.plan.period.periodStart}:${deckPreview.plan.generatedAt}`}
+                plan={deckPreview.plan}
+                onClose={() => setDeckPreview(null)}
+                onExport={exportDeck}
+            />}
+        </div>
         <div data-goals-slot="due-nudge"><GoalDueNudge today={today} /></div>
     </div>;
 };
@@ -278,12 +361,21 @@ function MetricBadge({ metric }: { metric: GoalMetric }) {
     return <span className="text-neutral-400">{metric.source === "manual" ? "Manual" : "Auto"}{metric.overridePinned ? " · Override" : ""}</span>;
 }
 
+function GoalProjectLink({ projectId }: { projectId: string }) {
+    const pm = usePM();
+    const project = pm.state.projects[projectId];
+    return project
+        ? <span className="text-xs text-neutral-400">{project.name}</span>
+        : <span className="text-xs text-neutral-500">Linked project is missing</span>;
+}
+
 function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecycle }: { goal: Goal; consecutiveSlips: number; expanded: boolean; onExpand: () => void; onEdit: () => void; onLifecycle: (value: Goal["lifecycle"]) => void }) {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id });
     return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className="rounded border border-neutral-800 bg-neutral-900/30 p-3" aria-label={goal.title}>
         <div className="flex flex-wrap items-center gap-3">
             <button className={button} {...attributes} {...listeners} aria-label={`Reorder ${goal.title}`}>⠿</button>
             <h3 className="flex-1 font-medium">{goal.title}</h3>
+            {goal.projectId !== null && <GoalProjectLink projectId={goal.projectId} />}
             <GoalStatusBadge lifecycle={goal.lifecycle} />
             <span data-goals-slot="goal-slip" data-goal-id={goal.id}><GoalSlipBadge consecutiveSlips={consecutiveSlips} /></span>
             <button className={button} onClick={onExpand} aria-expanded={expanded}>{expanded ? "Hide details" : "Show details"}</button>
@@ -299,8 +391,13 @@ function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecyc
 }
 
 function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
+    const pm = usePM();
+    const projects = Object.values(pm.state.projects).sort((left, right) =>
+        left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const [title, setTitle] = useState(goal.title);
     const [notes, setNotes] = useState(goal.notes);
+    const [projectId, setProjectId] = useState(goal.projectId ?? "");
+    const missingProject = goal.projectId !== null && !projects.some(project => project.id === goal.projectId);
     const [metric, setMetric] = useState(goal.metric !== null);
     const [label, setLabel] = useState(goal.metric?.label ?? "");
     const [current, setCurrent] = useState(String(goal.metric?.current ?? 0));
@@ -313,12 +410,17 @@ function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Pa
         try {
             if (!title.trim()) throw new RangeError("Give this goal a name.");
             if (metric && (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target)))) throw new RangeError("Metric needs a label and finite current and target values.");
-            onSave({ title, notes, metric: metric ? { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: source === goal.metric?.source ? goal.metric.overridePinned : false } : null });
+            onSave({ title, notes, projectId: projectId || null, metric: metric ? { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: source === goal.metric?.source ? goal.metric.overridePinned : false } : null });
         } catch (error) { setError(errorMessage(error)); }
     }}>
         <h3 className="font-medium">Edit goal</h3>
         <label className="grid gap-1">Name<input className={control} value={title} onChange={event => setTitle(event.target.value)} /></label>
         <label className="grid gap-1">Goal note<textarea className={control} value={notes} onChange={event => setNotes(event.target.value)} /></label>
+        <label className="grid gap-1">Project<select className={control} aria-label="Project" value={projectId} onChange={event => setProjectId(event.target.value)}>
+            <option value="">No project</option>
+            {missingProject && <option value={goal.projectId!}>Missing project</option>}
+            {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select></label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={metric} onChange={event => setMetric(event.target.checked)} />Track one metric</label>
         {metric && <fieldset className="flex flex-wrap gap-3"><legend className="mb-2">Metric {goal.metric && <MetricBadge metric={goal.metric} />}</legend>
             <label className="grid gap-1">Metric label<input className={control} value={label} onChange={event => setLabel(event.target.value)} /></label>

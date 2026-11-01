@@ -5,12 +5,17 @@ import userEvent from "@testing-library/user-event";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { GoalsPage } from "./GoalsPage";
 import { GoalProvider } from "../state/GoalContext";
+import { AppStateProvider } from "../state/AppStateContext";
+import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { DataProvider } from "../state/DataContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
+import type { Project } from "../state/types";
 import type { LocalDateKey } from "../lib/todos/types";
+import type { DeckPlan } from "../lib/goals/deck/types";
+import { serializeGoalSet } from "../lib/goals/goalSetFile";
 import {
     buildArchivedTrackerFixture,
     buildCheckInHistoryFixture,
@@ -21,6 +26,19 @@ import {
 } from "../lib/goals/testFixtures";
 
 const drag = vi.hoisted(() => ({ end: null as null | ((event: DragEndEvent) => void) }));
+const deckExport = vi.hoisted(() => ({ render: vi.fn(), deliver: vi.fn(), stamp: vi.fn() }));
+vi.mock("../lib/goals/deck/render", () => ({ renderDeck: deckExport.render }));
+vi.mock("../lib/goals/deck/delivery", () => ({ initiateBlobDownload: deckExport.deliver }));
+vi.mock("../state/GoalContext", async importOriginal => {
+    const original = await importOriginal<typeof import("../state/GoalContext")>();
+    return { ...original, useGoals: () => {
+        const goals = original.useGoals();
+        return { ...goals, stampBuiltPeriod: async (trackerId: string, periodStart: LocalDateKey) => {
+            await deckExport.stamp(trackerId, periodStart);
+            await goals.stampBuiltPeriod(trackerId, periodStart);
+        } };
+    } };
+});
 vi.mock("@dnd-kit/core", async importOriginal => {
     const original = await importOriginal<typeof import("@dnd-kit/core")>();
     return { ...original, DndContext: (props: React.ComponentProps<typeof original.DndContext>) => {
@@ -30,7 +48,7 @@ vi.mock("@dnd-kit/core", async importOriginal => {
 });
 
 function tree(data: InMemoryDataAccess, today?: LocalDateKey) {
-    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><GoalProvider><GoalsPage today={today} /></GoalProvider></SyncProvider></DataProvider></TauriCloseProvider>;
+    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><AppStateProvider><ProjectManagerProvider><GoalProvider><GoalsPage today={today} /></GoalProvider></ProjectManagerProvider></AppStateProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
 async function mount(data = new InMemoryDataAccess(makeAppState()), today?: LocalDateKey) {
     const view = render(tree(data, today));
@@ -43,7 +61,27 @@ async function oneTracker() {
     await data.saveGoals([tracker], [], []);
     return { data, tracker };
 }
-beforeEach(() => localStorage.clear());
+function project(overrides: Partial<Project> = {}): Project {
+    return {
+        id: "project-1",
+        name: "Deep Work",
+        color: "#6366F1",
+        workableStart: "09:00",
+        workableEnd: "17:00",
+        workableDays: [1, 2, 3, 4, 5],
+        isArchived: false,
+        sortOrder: 0,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+beforeEach(() => {
+    localStorage.clear();
+    deckExport.render.mockReset().mockResolvedValue({ blob: new Blob(["deck"]), fileName: "Work.pptx" });
+    deckExport.deliver.mockReset().mockResolvedValue(undefined);
+    deckExport.stamp.mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => { vi.useRealTimers(); });
 
 describe("GoalsPage", () => {
@@ -345,12 +383,25 @@ describe("GoalsPage", () => {
         expect(entry).toHaveAttribute("data-tracker-id", future.id);
         expect(entry).toHaveTextContent("No open period. First period starts on 2099-01-04.");
         expect(screen.getAllByText(/No open period. First period starts on/)).toHaveLength(1);
+        const countdown = entry.querySelector("[data-goal-countdown-tone]") as HTMLElement;
+        expect(countdown).toHaveAttribute("data-goal-countdown-tone", "green");
+        expect(countdown).toHaveTextContent(/\d+ days/);
         const control = within(entry).getByRole("button", { name: "Period not open" });
         expect(control).toBeDisabled();
         expect(control).toHaveAttribute("aria-disabled", "true");
         expect(control).toHaveClass("border-neutral-700");
         await user.click(control);
         expect(container.querySelector('[data-goals-slot="check-in-wizard"]')).toBeEmptyDOMElement();
+    });
+
+    it("colors the countdown by days remaining before the first period", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const soon = buildGoalTrackerFixture({ cadenceAnchorAt: "2026-10-25" });
+        await data.saveGoals([soon], [], []);
+        const { container } = await mount(data, "2026-10-20");
+        const countdown = container.querySelector("[data-goal-countdown-tone]") as HTMLElement;
+        expect(countdown).toHaveAttribute("data-goal-countdown-tone", "yellow");
+        expect(countdown).toHaveTextContent("5 days");
     });
 
     it("opens the wizard pinned to the current grid period and removes it on close", async () => {
@@ -377,5 +428,287 @@ describe("GoalsPage", () => {
 
         await user.click(within(slot).getByRole("button", { name: "Close check-in wizard" }));
         expect(slot).toBeEmptyDOMElement();
+    });
+
+    it("builds the most recent completed deck into the preview slot and clears it on close", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        expect(entry).toHaveAttribute("data-tracker-id", tracker.id);
+        const build = within(entry).getByRole("button", { name: "Build deck" });
+        expect(build).toBeEnabled();
+        await user.click(build);
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+        // The completed period is the one that started 2026-10-04, not the 2026-10-18 period in progress.
+        expect(within(preview).getAllByText(/Oct 4/).length).toBeGreaterThan(0);
+        expect(within(preview).getAllByLabelText("Slide title")[0]).toHaveValue(tracker.name);
+        await user.click(within(preview).getByRole("button", { name: "Close preview" }));
+        expect(preview).toBeEmptyDOMElement();
+    });
+
+    it("shows the built cue for the completed period and still allows a same-period rebuild", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ lastBuiltPeriodStart: "2026-10-04" });
+        await data.saveGoals([tracker], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        expect(within(entry).getByText("Built")).toBeInTheDocument();
+        const rebuild = within(entry).getByRole("button", { name: "Rebuild deck" });
+        expect(rebuild).toBeEnabled();
+        await user.click(rebuild);
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+    });
+
+    it("disables the deck entry without a completed period and for an archived tracker", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const inProgress = buildGoalTrackerFixture({ id: "in-progress", name: "In progress", cadenceAnchorAt: "2026-10-18", sortOrder: 0 });
+        const future = buildGoalTrackerFixture({ id: "future", name: "Future", cadenceAnchorAt: "2099-01-04", sortOrder: 1 });
+        const archived = buildArchivedTrackerFixture({ id: "archived", name: "Archived", sortOrder: 2 });
+        await data.saveGoals([inProgress, future, archived], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = () => container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        const preview = () => container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+
+        expect(entry()).toHaveAttribute("data-tracker-id", inProgress.id);
+        expect(entry()).toHaveTextContent("No completed period yet. Build the deck after the October 2026 period completes.");
+        const disabled = within(entry()).getByRole("button", { name: "Deck not ready" });
+        expect(disabled).toBeDisabled();
+        expect(disabled).toHaveAttribute("aria-disabled", "true");
+        await user.click(disabled);
+        expect(preview()).toBeEmptyDOMElement();
+        expect(screen.queryByRole("button", { name: /build deck|rebuild deck/i })).not.toBeInTheDocument();
+
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), future.id);
+        expect(entry()).toHaveAttribute("data-tracker-id", future.id);
+        expect(entry()).toHaveTextContent("it starts on 2099-01-04");
+        expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+        expect(preview()).toBeEmptyDOMElement();
+
+        await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), archived.id);
+        expect(entry()).toHaveAttribute("data-tracker-id", archived.id);
+        expect(entry()).toHaveTextContent("This tracker is archived. Reactivate it to build a deck.");
+        expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+        expect(preview()).toBeEmptyDOMElement();
+    });
+
+    it("keeps the preview open and writes no export artifacts to localStorage", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        await data.saveGoals([tracker], [], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        await user.click(within(entry).getByRole("button", { name: "Build deck" }));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        const heading = within(preview).getByRole("heading", { name: `${tracker.name} deck preview` });
+        const setItem = vi.spyOn(Storage.prototype, "setItem");
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        expect(setItem).not.toHaveBeenCalled();
+        setItem.mockRestore();
+        expect(within(preview).getByRole("heading", { name: heading.textContent! })).toBeInTheDocument();
+        expect(within(preview).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("awaits render, delivery, then stamp with the edited plan's completed period key", async () => {
+        const { data, tracker } = await oneTracker();
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        const title = within(preview).getAllByLabelText("Slide title")[0];
+        fireEvent.change(title, { target: { value: "Edited export title" } });
+        const notes = within(preview).getAllByLabelText("Speaker notes")[0];
+        fireEvent.change(notes, { target: { value: "Edited export notes" } });
+        let finishRender!: (value: { blob: Blob; fileName: string }) => void;
+        let finishDelivery!: () => void;
+        deckExport.render.mockReturnValue(new Promise(resolve => { finishRender = resolve; }));
+        deckExport.deliver.mockReturnValue(new Promise<void>(resolve => { finishDelivery = resolve; }));
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        await waitFor(() => expect(deckExport.render).toHaveBeenCalledTimes(1));
+        const edited = deckExport.render.mock.calls[0][0] as DeckPlan;
+        expect(edited.slides[0].title).toBe("Edited export title");
+        expect(edited.slides[0].notes).toBe("Edited export notes");
+        expect(edited.period.periodStart).toBe("2026-10-04");
+        expect(deckExport.deliver).not.toHaveBeenCalled();
+        expect(deckExport.stamp).not.toHaveBeenCalled();
+        const blob = new Blob(["edited deck"]);
+        await act(async () => { finishRender({ blob, fileName: "edited.pptx" }); });
+        expect(deckExport.deliver).toHaveBeenCalledExactlyOnceWith(blob, "edited.pptx");
+        expect(deckExport.stamp).not.toHaveBeenCalled();
+        expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBeNull();
+        await act(async () => { finishDelivery(); });
+        await waitFor(() => expect(deckExport.stamp).toHaveBeenCalledExactlyOnceWith(edited.trackerId, edited.period.periodStart));
+        await waitFor(async () => expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBe("2026-10-04"));
+        expect(deckExport.render.mock.invocationCallOrder[0]).toBeLessThan(deckExport.deliver.mock.invocationCallOrder[0]);
+        expect(deckExport.deliver.mock.invocationCallOrder[0]).toBeLessThan(deckExport.stamp.mock.invocationCallOrder[0]);
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+        expect(title).toHaveValue("Edited export title");
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it.each(["render", "deliver"])("surfaces a %s rejection in the page and preview without stamping", async stage => {
+        const { data } = await oneTracker();
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        deckExport[stage as "render" | "deliver"].mockRejectedValueOnce(new Error(`${stage} failed`));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+        for (const alert of screen.getAllByRole("alert")) expect(alert).toHaveTextContent(`${stage} failed`);
+        expect(deckExport.stamp).not.toHaveBeenCalled();
+        if (stage === "render") expect(deckExport.deliver).not.toHaveBeenCalled();
+        expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBeNull();
+        expect(within(preview).getByRole("button", { name: "Export deck" })).toBeEnabled();
+    });
+
+    it("rejects and shows both alerts when the awaited stamp write fails after initiation", async () => {
+        const { data } = await oneTracker();
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        const save = vi.spyOn(data, "saveGoals").mockRejectedValueOnce(new Error("Stamp storage failed"));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        await user.click(within(preview).getByRole("button", { name: "Export deck" }));
+        await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+        for (const alert of screen.getAllByRole("alert")) expect(alert).toHaveTextContent("Stamp storage failed");
+        expect(deckExport.deliver).toHaveBeenCalledTimes(1);
+        expect(deckExport.stamp).toHaveBeenCalledExactlyOnceWith("tracker-work", "2026-10-04");
+        expect(save).toHaveBeenCalledTimes(1);
+        expect((await data.loadGoals()).trackers[0].lastBuiltPeriodStart).toBeNull();
+        expect(screen.queryByText("Built")).not.toBeInTheDocument();
+        expect(within(preview).getByRole("button", { name: "Export deck" })).toBeEnabled();
+        save.mockRestore();
+    });
+
+    it("round-trips a goal project link through the editor and clears it to null", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ id: "goal-linked", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {},
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const { user } = await mount(data, "2026-10-20");
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const select = await screen.findByLabelText("Project");
+        await screen.findByRole("option", { name: "Deep Work" });
+        await user.selectOptions(select, "project-1");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectId).toBe("project-1"));
+        expect(within(screen.getByLabelText(goal.title)).getByText("Deep Work")).toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const reopened = await screen.findByLabelText("Project");
+        await waitFor(() => expect(reopened).toHaveValue("project-1"));
+        await user.selectOptions(reopened, "");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectId).toBeNull());
+        expect(screen.queryByText("Deep Work")).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("shows a quiet missing-project note instead of an error on a broken goal link", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ id: "goal-broken", trackerId: tracker.id, title: "Broken link", projectId: "project-gone" });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {},
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        await mount(data, "2026-10-20");
+
+        const row = screen.getByLabelText(goal.title);
+        expect(within(row).getByText("Linked project is missing")).toBeInTheDocument();
+        expect(within(row).queryByRole("alert")).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("mounts goal-set export and import actions in the selected tracker's slot", async () => {
+        const { data, tracker } = await oneTracker();
+        const { container } = await mount(data);
+        const slot = container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
+        expect(slot).toHaveAttribute("data-tracker-id", tracker.id);
+        expect(within(slot).getByRole("button", { name: "Export goals" })).toBeDisabled();
+        expect(within(slot).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
+        expect(within(slot).getByLabelText("Import goals")).toHaveAttribute("type", "file");
+        expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
+    });
+
+    it("moves the goal-set actions to the newly selected tracker", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const first = buildGoalTrackerFixture({ id: "tracker-alpha", name: "Alpha", sortOrder: 0 });
+        const second = buildGoalTrackerFixture({ id: "tracker-beta", name: "Beta", sortOrder: 1 });
+        await data.saveGoals([first, second], [], []);
+        const { user, container } = await mount(data);
+        const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
+        expect(slot()).toHaveAttribute("data-tracker-id", first.id);
+        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), second.id);
+        expect(slot()).toHaveAttribute("data-tracker-id", second.id);
+        expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeDisabled();
+        expect(within(slot()).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
+        expect(within(slot()).getByLabelText("Import goals")).toBeInTheDocument();
+        expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
+    });
+
+    it("selects an imported tracker and clears the deck preview, pinned check-in, and goal edit", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ cadenceAnchorAt: "2026-10-04" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
+        await data.saveGoals([tracker], [goal], []);
+        const { user, container } = await mount(data, "2026-10-20");
+        const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
+        const wizard = () => container.querySelector('[data-goals-slot="check-in-wizard"]') as HTMLElement;
+        const preview = () => container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+
+        // Put the page in the state import must clear.
+        await user.click(within(container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement)
+            .getByRole("button", { name: "Check in · October 2026" }));
+        expect(wizard()).not.toBeEmptyDOMElement();
+        await user.click(screen.getByRole("button", { name: "Build deck" }));
+        expect(preview()).not.toBeEmptyDOMElement();
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getByRole("form", { name: "Edit goal" })).toBeInTheDocument();
+
+        // Drive the real Lane B component through a validated file and confirm.
+        await user.upload(
+            within(slot()).getByLabelText("Import goals"),
+            new File([serializeGoalSet(tracker, [goal])], "goals-work-2026-10-20.json", { type: "application/json" }),
+        );
+        const review = await within(slot()).findByRole("region", { name: "Import review" });
+        expect(within(review).getByText("Ship the release")).toBeInTheDocument();
+        await user.click(within(review).getByRole("button", { name: "Create tracker" }));
+
+        await waitFor(() => expect(slot().getAttribute("data-tracker-id")).not.toBe(tracker.id));
+        const created = (await data.loadGoals()).trackers.find(row => row.id !== tracker.id)!;
+        expect(created).toBeDefined();
+        expect(slot()).toHaveAttribute("data-tracker-id", created.id);
+        expect(screen.getByRole("combobox", { name: "Tracker" })).toHaveValue(created.id);
+        expect(wizard()).toBeEmptyDOMElement();
+        expect(preview()).toBeEmptyDOMElement();
+        expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
+
+        // Import stays additive: the source tracker and goal are untouched.
+        await waitFor(async () => expect((await data.loadGoals()).goals).toHaveLength(2));
+        const saved = await data.loadGoals();
+        expect(saved.trackers).toHaveLength(2);
+        expect(saved.goals.find(row => row.id === goal.id)).toMatchObject({
+            id: goal.id,
+            trackerId: tracker.id,
+            title: goal.title,
+            lifecycle: goal.lifecycle,
+        });
+    });
+
+    it("leaves the goal-set actions slot absent in the empty state", async () => {
+        const { container } = await mount();
+        expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
+        expect(container.querySelector('[data-goals-slot="goal-set-actions"]')).toBeNull();
+        expect(screen.queryByRole("button", { name: "Export goals" })).not.toBeInTheDocument();
     });
 });
