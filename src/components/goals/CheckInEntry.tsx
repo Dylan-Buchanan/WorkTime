@@ -11,7 +11,8 @@ export interface CheckInEntryProps {
     onOpen: (periodStart: LocalDateKey) => void;
 }
 
-const button = "rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs hover:bg-neutral-800 disabled:opacity-50";
+const disabled = "rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs text-neutral-400 opacity-70 cursor-not-allowed";
+const open = "inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm ring-2 ring-indigo-400/40 hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300";
 
 /**
  * Tracker-level entry to the per-period check-in wizard. The page owns the
@@ -22,7 +23,7 @@ export const CheckInEntry: React.FC<CheckInEntryProps> = ({ trackerId, availabil
     if (availability.kind === "not-started") {
         return <button
             type="button"
-            className={button}
+            className={disabled}
             disabled
             aria-disabled="true"
             title={availability.message}
@@ -33,10 +34,12 @@ export const CheckInEntry: React.FC<CheckInEntryProps> = ({ trackerId, availabil
     }
     return <button
         type="button"
-        className={button}
+        className={open}
         onClick={() => onOpen(availability.periodStart)}
         data-check-in-tracker-id={trackerId}
     >
-        Check in · {availability.periodLabel}
+        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-300" />
+        <span>Check in · {availability.periodLabel}</span>
+        <span aria-hidden="true" className="rounded-full bg-indigo-500/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-50">Period open</span>
     </button>;
 };
