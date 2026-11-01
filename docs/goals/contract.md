@@ -492,13 +492,15 @@ ORCH ratifies status-only history: `blocked=0`, `at-risk=1`, `on-track=2`.
 `buildSparkline` returns null with fewer than two deduped, filtered points.
 `metricSnapshot` returns a clone of current metric fields for text, or null.
 
-## 5. Frozen evidence selector — #137, ownership pending Phase 12 amendment
+## 5. Frozen evidence selector — #137, Lane A (ratified Phase 12)
 
-Evidence ownership is **PENDING**, not ratified or implemented by Phase 2. Before
-#137 starts, ORCH commissions/reviews the Phase 12 ownership amendment assigning
-the selector and wizard panel together (proposed Lane A); the original workflow
-assigns the selector to Lane B. Neither lane starts this pair until that amendment
-is explicit. These signatures freeze the seam, not its implementation or owner.
+The Phase 12 amendment is **ratified**: `src/lib/goals/evidence.ts` and
+`src/components/goals/GoalEvidencePanel.tsx` are **both Lane A**, as one change. The
+original workflow's Lane B assignment for the selector is superseded, because the
+selector's only consumer is the Lane A wizard panel, so splitting them added a
+cross-lane dependency without isolating anything. This section's signature and
+semantics are unchanged by the amendment; only ownership is ratified. Lane A mounts
+the panel inside the check-in wizard; Lane B does not touch `evidence.ts`.
 
 ```ts
 import type { Goal, GoalCheckIn, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
@@ -1140,7 +1142,7 @@ export interface DeckPreviewProps {
     onClose: () => void;
     onExport: (plan: DeckPlan) => void | Promise<void>;
 }
-// src/components/goals/GoalEvidencePanel.tsx — ownership PENDING Phase 12 amendment
+// src/components/goals/GoalEvidencePanel.tsx — Lane A, #137
 export interface GoalEvidencePanelProps {
     goal: Goal;
     checkIn: GoalCheckIn;
@@ -1293,7 +1295,7 @@ they have no provenance. These are distinct rules, not conflicting fixture claim
 | `src/lib/goals/deck/**` | Lane B #138, export implementation #140 delegated IMPL+ | Pure plan separated from renderer/delivery |
 | `src/components/goals/DeckPreview.tsx` | Lane B #139 | Lane A owns GoalsPage mount only |
 | `src/lib/goals/goalSetFile.ts`, `src/components/goals/GoalSetActions.tsx` | Lane B #141 | Lane A mounts actions |
-| `src/lib/goals/evidence.ts`, `src/components/goals/GoalEvidencePanel.tsx` | **PENDING Phase 12 ownership amendment** | Selector+wizard panel move together; no current ratification/implementation |
+| `src/lib/goals/evidence.ts`, `src/components/goals/GoalEvidencePanel.tsx` | Lane A #137 | Ratified Phase 12: selector and wizard panel are one Lane A change |
 | `docs/research/**` | RESEARCH within its configured write profile | Authorized research notes, including Phase 9 dogfood findings |
 | `AGENTS.md`, `docs/FEATURES.md`, shared planning/issue docs, dependencies/lockfile, `src-tauri/**` | Authorized integrator child; IMPL+ for escalated/native/data/version work | No ordinary lane ownership or ORCH direct edits |
 
@@ -1310,7 +1312,7 @@ they have no provenance. These are distinct rules, not conflicting fixture claim
 | 9 real-period dogfood | User; RESEARCH writes `docs/research/goals-dogfood-1.md` | ORCH + human check |
 | 10 #139 preview | Lane B IMPL, Lane A mount | ORCH |
 | 11 #140 pptx/delivery | IMPL+ in main worktree | ORCH + human check |
-| 12 #137 / #141 | IMPL after pending evidence ownership amendment | ORCH; independent RESEARCH review |
+| 12 #137 / #141 | Lane A #137 IMPL, Lane B #141 IMPL | ORCH; independent RESEARCH review |
 | 13 docs/version | Delegated **IMPL+** docs and `pnpm run version` | ORCH verifies test:version, MSI, final gates, merges |
 | 14 #143 then #142 | IMPL+ follow-ups | ORCH |
 
