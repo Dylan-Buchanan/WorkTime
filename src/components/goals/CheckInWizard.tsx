@@ -258,6 +258,11 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                                             {item.dueDate && <span className="text-xs text-neutral-500">Due <time dateTime={item.dueDate}>{item.dueDate}</time></span>}
                                         </li>)}
                                     </ul>}
+                            <label className="mt-2 grid gap-1">
+                                <span className="text-xs font-medium text-neutral-400">Why not</span>
+                                <textarea className={control} rows={2} aria-label={`Miss reason for ${goal.title}`} placeholder="Add a note about why this was not done." value={draft.missReason} onChange={event => patchDraft(goal.id, { missReason: event.target.value })} />
+                                <span className="text-xs text-neutral-500">Optional notes explaining the items above.</span>
+                            </label>
                         </section>
                         <label className="grid gap-1">Currently working on
                             <textarea className={control} aria-label={`Current for ${goal.title}`} value={draft.current} onChange={event => patchDraft(goal.id, { current: event.target.value })} />
@@ -275,11 +280,6 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                             </div>)}
                             <button type="button" className={button} aria-label={`Add planned item for ${goal.title}`} onClick={() => addPlanned(goal.id)}>Add planned item</button>
                         </fieldset>
-                        <label className="grid gap-1">
-                            <span>Why not / miss reason</span>
-                            <input className={control} aria-label={`Miss reason for ${goal.title}`} value={draft.missReason} onChange={event => patchDraft(goal.id, { missReason: event.target.value })} />
-                            <span className="text-xs text-neutral-500">Explains the items above.</span>
-                        </label>
                     </article>;
                 })}
             </div>}

@@ -345,12 +345,25 @@ describe("GoalsPage", () => {
         expect(entry).toHaveAttribute("data-tracker-id", future.id);
         expect(entry).toHaveTextContent("No open period. First period starts on 2099-01-04.");
         expect(screen.getAllByText(/No open period. First period starts on/)).toHaveLength(1);
+        const countdown = entry.querySelector("[data-goal-countdown-tone]") as HTMLElement;
+        expect(countdown).toHaveAttribute("data-goal-countdown-tone", "green");
+        expect(countdown).toHaveTextContent(/\d+ days/);
         const control = within(entry).getByRole("button", { name: "Period not open" });
         expect(control).toBeDisabled();
         expect(control).toHaveAttribute("aria-disabled", "true");
         expect(control).toHaveClass("border-neutral-700");
         await user.click(control);
         expect(container.querySelector('[data-goals-slot="check-in-wizard"]')).toBeEmptyDOMElement();
+    });
+
+    it("colors the countdown by days remaining before the first period", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const soon = buildGoalTrackerFixture({ cadenceAnchorAt: "2026-10-25" });
+        await data.saveGoals([soon], [], []);
+        const { container } = await mount(data, "2026-10-20");
+        const countdown = container.querySelector("[data-goal-countdown-tone]") as HTMLElement;
+        expect(countdown).toHaveAttribute("data-goal-countdown-tone", "yellow");
+        expect(countdown).toHaveTextContent("5 days");
     });
 
     it("opens the wizard pinned to the current grid period and removes it on close", async () => {

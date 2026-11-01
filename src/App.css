@@ -11,8 +11,9 @@
   line-height: 24px;
   font-weight: 400;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  /* No canvas color here: the app owns its surfaces (index.css paints the body
+     and #root). A hard-coded canvas leaks through as a mismatched gray
+     whenever the document scrolls past the fixed-height app shell. */
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -74,11 +75,6 @@ button {
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
   a:hover {
     color: #24c8db;
   }

@@ -5,6 +5,13 @@ body,
 #root {
     height: 100%;
 }
+
+/* Match the app shell so overscroll and any exposed canvas stay the app's
+   color instead of the user agent's default. */
+html {
+    @apply bg-neutral-950;
+}
+
 body {
     @apply bg-neutral-900 text-neutral-200 text-sm;
     font-family: system-ui, sans-serif;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+    daysUntil,
     dueState,
     firstPeriod,
     goalGrid,
@@ -301,6 +302,20 @@ describe("period labels", () => {
         const period = required(periodAt(grid, "2026-12-28"));
         expect(period.monthKey).toBe("2026-12");
         expect(periodRangeLabel(period)).toBe("Dec 27, 2026 – Jan 9, 2027");
+    });
+});
+
+describe("daysUntil", () => {
+    const period: GoalPeriod = { periodStart: "2026-11-01", periodEnd: "2026-11-15", monthKey: "2026-11" };
+
+    it("counts whole days to the open date and goes negative once it has started", () => {
+        expect(daysUntil(period, "2026-10-20")).toBe(12);
+        expect(daysUntil(period, "2026-11-01")).toBe(0);
+        expect(daysUntil(period, "2026-11-02")).toBe(-1);
+    });
+
+    it("counts across a daylight-saving change", () => {
+        expect(daysUntil({ periodStart: "2026-03-09", periodEnd: "2026-03-23", monthKey: "2026-03" }, "2026-03-07")).toBe(2);
     });
 });
 

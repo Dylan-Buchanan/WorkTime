@@ -133,8 +133,9 @@ describe("CheckInWizard", () => {
         expect(within(comparison).getByText("Ship the migration")).toBeInTheDocument();
         expect(within(comparison).getByText("Write the retro")).toBeInTheDocument();
         expect(within(comparison).getByText("2026-10-10")).toBeInTheDocument();
-        expect(within(card).getByText("Why not / miss reason")).toBeInTheDocument();
-        expect(within(card).getByText("Explains the items above.")).toBeInTheDocument();
+        expect(within(comparison).getByText("Why not")).toBeInTheDocument();
+        expect(within(comparison).getByLabelText(`Miss reason for ${goal.title}`).tagName).toBe("TEXTAREA");
+        expect(within(comparison).getByText("Optional notes explaining the items above.")).toBeInTheDocument();
 
         const did = screen.getByLabelText(`Did for ${goal.title}`);
         await user.type(did, "Ship the migration");
@@ -146,7 +147,9 @@ describe("CheckInWizard", () => {
         expect(within(comparison).queryByText("Write the retro")).not.toBeInTheDocument();
         expect(within(comparison).getByText("Everything from the previous check-in is marked done.")).toBeInTheDocument();
 
-        await user.type(screen.getByLabelText(`Miss reason for ${goal.title}`), "Waited on review");
+        const whyNote = within(comparison).getByLabelText(`Miss reason for ${goal.title}`);
+        await user.type(whyNote, "Waited on review");
+        expect(whyNote).toHaveValue("Waited on review");
         await user.click(screen.getByRole("button", { name: "Save check-ins" }));
         await waitFor(() => expect(onClose).toHaveBeenCalled());
 
@@ -168,8 +171,9 @@ describe("CheckInWizard", () => {
         await mountWizard(data, tracker.id, period, vi.fn());
 
         const card = await screen.findByRole("article", { name: goal.title });
-        expect(within(card).getByRole("heading", { name: "Did not do" })).toBeInTheDocument();
-        expect(within(card).getByText("No previous plans to compare.")).toBeInTheDocument();
+        const comparison = within(card).getByRole("heading", { name: "Did not do" }).closest("section") as HTMLElement;
+        expect(within(comparison).getByText("No previous plans to compare.")).toBeInTheDocument();
+        expect(within(comparison).getByLabelText(`Miss reason for ${goal.title}`)).toBeInTheDocument();
     });
 
     it("reflects the selected status pill in a colored chip", async () => {

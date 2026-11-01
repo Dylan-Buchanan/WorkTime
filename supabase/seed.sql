@@ -467,3 +467,210 @@ on conflict (owner_id, id) do update set
     is_archived = excluded.is_archived,
     created_at = excluded.created_at,
     updated_at = now();
+
+-- Goals test data: a weekly tracker with two active goals and three periods of
+-- check-in history. The anchor is the most recent Sunday minus three weeks, so
+-- the current period is always open and the previous period is always complete
+-- and ready for the deck builder, whenever the fixed local user signs in.
+-- Dates are relative to the reset date rather than fixed calendar dates.
+
+insert into public.goal_trackers (
+    id, owner_id, name, purpose, cadence, cadence_anchor_at, color,
+    sort_order, is_archived, last_built_period_start, created_at, updated_at
+)
+select
+    '70000000-0000-4000-8000-000000000001'::uuid,
+    owner.owner_id,
+    'Weekly review (test)',
+    'A ready-to-use tracker for the check-in wizard and deck builder.',
+    jsonb_build_object('kind', 'every-n-weeks', 'weekday', 0, 'intervalWeeks', 1),
+    grid.anchor,
+    '#6366F1',
+    -1,
+    false,
+    null,
+    (grid.anchor - 2)::timestamptz + interval '12 hours',
+    now()
+from (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+cross join lateral (
+    -- Most recent Sunday, then three weekly periods back.
+    select (current_date - extract(dow from current_date)::integer - 21)::date as anchor
+) grid
+on conflict (owner_id, id) do update set
+    name = excluded.name,
+    purpose = excluded.purpose,
+    cadence = excluded.cadence,
+    cadence_anchor_at = excluded.cadence_anchor_at,
+    color = excluded.color,
+    sort_order = excluded.sort_order,
+    is_archived = excluded.is_archived,
+    last_built_period_start = excluded.last_built_period_start,
+    updated_at = now();
+
+insert into public.goals (
+    id, owner_id, tracker_id, title, notes, project_id, metric,
+    lifecycle, achieved_at, dropped_at, sort_order, created_at, updated_at
+)
+select
+    seed.id,
+    owner.owner_id,
+    '70000000-0000-4000-8000-000000000001'::uuid,
+    seed.title,
+    seed.notes,
+    null,
+    seed.metric,
+    'active',
+    null,
+    null,
+    seed.sort_order,
+    (grid.anchor - 2)::timestamptz + interval '12 hours',
+    now()
+from (
+    values
+        (
+            '70000000-0000-4000-8000-000000000002'::uuid,
+            'Run a full check-in',
+            'Walk every wizard field: status, focus, did, current, plans, and miss reason.',
+            null::jsonb,
+            0
+        ),
+        (
+            '70000000-0000-4000-8000-000000000003'::uuid,
+            'Build the first deck',
+            'Generate a deck from the completed period and review every slide.',
+            jsonb_build_object(
+                'label', 'Slides reviewed',
+                'current', 2,
+                'target', 6,
+                'unit', 'slides',
+                'source', 'manual',
+                'overridePinned', false
+            ),
+            1
+        )
+) as seed(id, title, notes, metric, sort_order)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+cross join lateral (
+    select (current_date - extract(dow from current_date)::integer - 21)::date as anchor
+) grid
+on conflict (owner_id, id) do update set
+    tracker_id = excluded.tracker_id,
+    title = excluded.title,
+    notes = excluded.notes,
+    project_id = excluded.project_id,
+    metric = excluded.metric,
+    lifecycle = excluded.lifecycle,
+    achieved_at = excluded.achieved_at,
+    dropped_at = excluded.dropped_at,
+    sort_order = excluded.sort_order,
+    updated_at = now();
+
+-- Three past periods per goal: enough for the deck sparkline, a completed
+-- deck period, and the wizard's "did not do" comparison. The current period is
+-- intentionally left without check-ins so the wizard opens on a fresh draft.
+insert into public.goal_check_ins (
+    id, owner_id, goal_id, period_start, did, current, planned,
+    status_pill, miss_reason, is_focus, evidence_task_ids, created_at, updated_at
+)
+select
+    seed.id,
+    owner.owner_id,
+    seed.goal_id,
+    (grid.anchor + seed.period_offset)::date,
+    seed.did,
+    seed.current,
+    jsonb_build_array(jsonb_build_object(
+        'text', seed.plan_text,
+        'dueDate', to_char(grid.anchor + seed.due_offset, 'YYYY-MM-DD')
+    )),
+    seed.status_pill,
+    seed.miss_reason,
+    seed.is_focus,
+    '[]'::jsonb,
+    (grid.anchor + seed.period_offset)::timestamptz + interval '18 hours',
+    now()
+from (
+    values
+        (
+            '70000000-0000-4000-8000-000000000101'::uuid,
+            '70000000-0000-4000-8000-000000000002'::uuid,
+            0,
+            'Set up the tracker and sketched the first goals.',
+            'Choosing a weekly review cadence.',
+            'Draft the check-in fields', 6,
+            'on-track', '', true
+        ),
+        (
+            '70000000-0000-4000-8000-000000000102'::uuid,
+            '70000000-0000-4000-8000-000000000002'::uuid,
+            7,
+            E'Draft the check-in fields\nTested the wizard end to end.',
+            'Reviewing the deck outline.',
+            'Review the deck draft', 13,
+            'at-risk', '', true
+        ),
+        (
+            '70000000-0000-4000-8000-000000000103'::uuid,
+            '70000000-0000-4000-8000-000000000002'::uuid,
+            14,
+            'Reviewed the wizard copy and fixed two rough edges.',
+            'Ready for a full dry run.',
+            'Run a complete check-in', 20,
+            'on-track',
+            'The deck draft slipped because the wizard copy took longer than planned.',
+            true
+        ),
+        (
+            '70000000-0000-4000-8000-000000000201'::uuid,
+            '70000000-0000-4000-8000-000000000003'::uuid,
+            0,
+            'Picked the deck sections to include.',
+            'Gathering completed period history.',
+            'Wire the deck preview', 6,
+            'on-track', '', true
+        ),
+        (
+            '70000000-0000-4000-8000-000000000202'::uuid,
+            '70000000-0000-4000-8000-000000000003'::uuid,
+            7,
+            E'Wire the deck preview\nTested the slide order.',
+            'Reviewing the closing slide.',
+            'Adjust the closing slide', 13,
+            'at-risk', '', false
+        ),
+        (
+            '70000000-0000-4000-8000-000000000203'::uuid,
+            '70000000-0000-4000-8000-000000000003'::uuid,
+            14,
+            E'Adjust the closing slide\nRegenerated the deck.',
+            'Reviewing the appendix roster.',
+            'Publish the deck', 20,
+            'on-track', '', false
+        )
+) as seed(id, goal_id, period_offset, did, current, plan_text, due_offset, status_pill, miss_reason, is_focus)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+cross join lateral (
+    select (current_date - extract(dow from current_date)::integer - 21)::date as anchor
+) grid
+on conflict (owner_id, goal_id, period_start) do update set
+    did = excluded.did,
+    current = excluded.current,
+    planned = excluded.planned,
+    status_pill = excluded.status_pill,
+    miss_reason = excluded.miss_reason,
+    is_focus = excluded.is_focus,
+    evidence_task_ids = excluded.evidence_task_ids,
+    created_at = excluded.created_at,
+    updated_at = now();

@@ -699,7 +699,14 @@ export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExpor
         }
     }
 
-    return <section aria-label="Deck preview" className="min-h-full bg-neutral-950 text-neutral-100">
+    // The preview is a full-height surface with its own scroller. Mounting it in
+    // normal flow would push it past the page box (the goals page is a
+    // fixed-height flex column whose only scroller is <main>), so the deck would
+    // be clipped instead of reachable.
+    return <section
+        aria-label="Deck preview"
+        className="app-scrollbar fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-neutral-950 text-neutral-100"
+    >
         <div className="mx-auto flex max-w-5xl flex-col gap-4 p-3 sm:p-6">
             <header className="flex flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>

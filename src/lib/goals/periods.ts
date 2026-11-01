@@ -287,6 +287,11 @@ export function dueState(grid: GoalGridInput, today: LocalDateKey): DueState {
     return { kind: "not-due", current, mostRecentCompleted: completed, lastBuiltPeriodStart: built };
 }
 
+/** Whole days from today until the period opens; zero or negative once it has started. */
+export function daysUntil(period: GoalPeriod, today: LocalDateKey): number {
+    return dayDifference(parseKey(today), parseKey(period.periodStart));
+}
+
 export function periodLabel(period: GoalPeriod): string {
     const { year, month } = splitMonthKey(period.monthKey);
     return `${MONTH_NAMES[month]} ${year}`;
