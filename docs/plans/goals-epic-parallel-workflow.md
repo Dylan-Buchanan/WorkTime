@@ -106,8 +106,9 @@ below is still the tip.
 - **The exact monthly Mon/Tue rule outranks the workflow's approximate 27–35-day description:** Friday
   May 2021 `2021-05-07 → 2021-05-28` is 21 days; Wednesday July 2025 `2025-06-25 → 2025-08-06` is 42 days.
   These should be fixed cases in Phase 5 — no guessed length cap.
-- **Later evidence ownership amendment remains pending Phase 12.** `DeckPreview` body stays Lane B;
-  the `GoalsPage` mount stays Lane A. No source or contract signatures changed for this handoff.
+- **Evidence ownership was ratified in Phase 12** (`evidence.ts` + `GoalEvidencePanel.tsx`
+  are one Lane A change); `DeckPreview` body stays Lane B; the `GoalsPage` mount stays Lane A.
+  No source or contract signatures changed for this handoff.
 
 ### Environment, gates, and resume procedure
 
