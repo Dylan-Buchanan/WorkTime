@@ -6,7 +6,7 @@ import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
-import { dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
+import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
 import type { DeckPlan } from "../lib/goals/deck/types";
@@ -16,6 +16,7 @@ import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
 import { CheckInWizard } from "./goals/CheckInWizard";
 import { DeckEntry, type DeckEntryAvailability } from "./goals/DeckEntry";
 import { DeckPreview } from "./goals/DeckPreview";
+import { GoalCountdownBadge } from "./goals/GoalCountdownBadge";
 import { GoalDueNudge } from "./goals/GoalDueNudge";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
@@ -65,6 +66,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const checkInGrid = tracker ? goalGrid(tracker) : null;
     const checkInCurrent = checkInGrid ? periodAt(checkInGrid, today) : null;
     const checkInFirst = checkInGrid ? firstPeriod(checkInGrid) : null;
+    const daysUntilFirstPeriod = checkInFirst ? daysUntil(checkInFirst, today) : null;
     const checkInAvailability: CheckInAvailability = checkInCurrent !== null && tracker !== undefined && !tracker.isArchived
         ? { kind: "open", periodStart: checkInCurrent.periodStart, periodLabel: periodLabel(checkInCurrent) }
         : {
@@ -208,7 +210,10 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                         </div>
                         <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="flex flex-wrap items-center gap-3 rounded-md border border-neutral-800/70 bg-neutral-950/30 p-3">
                             {!tracker.isArchived && (checkInCurrent === null
-                                ? <p className="text-sm text-neutral-400">No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
+                                ? <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm text-neutral-400">No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
+                                    {daysUntilFirstPeriod !== null && <GoalCountdownBadge daysUntilOpen={daysUntilFirstPeriod} />}
+                                </div>
                                 : <p className="text-sm text-neutral-400">First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>)}
                             <CheckInEntry trackerId={tracker.id} availability={checkInAvailability} onOpen={periodStart => {
                                 if (!checkInGrid) return;
