@@ -7,8 +7,7 @@ description: Run a multi-issue feature epic as a read-only orchestrator (ORCH) t
 
 Use this skill when a request spans many issues or features and you want one
 integrator agent to coordinate specialists instead of editing the codebase
-yourself. It works for any repo; the appendix records the WorkTime specifics
-that were actually used.
+yourself. It works for any repo.
 
 ## 1. The contract
 
@@ -38,6 +37,15 @@ redirection to change repository content.
 **Truth source order:** git state > frozen contract/decision docs > issue text >
 chat history. Re-derive state at the start of every session; never trust a
 summary table over `git status`/`git log`.
+
+**Product decisions belong to the user.** ORCH may clarify scope, surface
+tradeoffs, and recommend an option, but must not choose new user-visible
+behavior, requirements, or priority on the user's behalf. Carry forward
+decisions already recorded in authoritative docs or explicitly made in chat.
+When a material feature decision is still open, pause dependent implementation
+and ask the user a focused question with the relevant options and consequences.
+Keep progressing on independent, already-decided work. Routine implementation
+details that do not change intended behavior remain delegated to the children.
 
 ## 2. Roles and how to launch them
 
@@ -74,14 +82,18 @@ service. If a child reports either:
    contract, the issues). If they disagree with the code, git wins.
 2. **Split into lanes by file ownership**, not by feature convenience. Two lanes
    may run in parallel only if their file sets are disjoint.
-3. **Freeze the interfaces first.** Types, signatures, formats, and semantics go
-   into a contract file before lanes start. Lanes implement against it; they do
-   not renegotiate it.
+3. **Freeze agreed interfaces first.** Types, signatures, formats, and semantics
+   go into a contract file before lanes start. Record only decisions already
+   authorized by the user or established by authoritative project docs. If
+   defining the contract requires a new product decision, present the smallest
+   useful set of options to the user and hold dependent lanes until they decide.
+   Lanes implement against the approved contract; they do not renegotiate it.
 4. **Declare the gates per tier** (lane / merge / phase / final) and the exact
    commands. Write them into every brief.
-5. **Find the human pauses.** Only pause where a machine genuinely cannot
-   verify: real OS/webview behavior, visual fidelity, destructive operations, or
-   an irreversible external effect.
+5. **Find the human pauses.** Pause for material feature decisions the user
+   must make, and for verification a machine genuinely cannot provide: real
+   OS/webview behavior, visual fidelity, destructive operations, or irreversible
+   external effects. Keep independent, decided work moving.
 
 ## 4. The dispatch contract (brief template)
 
@@ -125,8 +137,10 @@ Commit:
     git status --short
 
 If the contract is ambiguous, a frozen signature must change, or a file outside
-the list is required, STOP and report instead of improvising. Do not weaken or
-delete existing tests.
+the list is required, STOP and report instead of improvising. ORCH then either
+authorizes the narrowly scoped adjustment when it preserves agreed behavior, or
+asks the user when it changes a feature decision. Do not weaken or delete
+existing tests.
 
 Report: branch, commit SHA, files touched, tests added, gate exit codes/counts,
 contract deviations, clean status, and confirmation nothing was pushed.
@@ -190,16 +204,22 @@ Rules that prevent false reds:
 
 ## 8. Human verification protocol
 
-Pause only where the machine cannot answer. At a pause, hand the human:
+Pause for user input when either a material feature decision is unresolved or a
+machine cannot answer. For a feature decision, use the available questions tool
+when possible, with concise suggested answers and consequences; include a
+recommendation when useful without treating it as approval. Hold only dependent
+work. For platform checks that require human observation, hand the human:
 
 1. **Frozen refs** — branch, SHA, what is merged and what is not.
 2. **Automated proof** — gate results and what you verified yourself.
 3. **Exact artifacts** — absolute paths, sizes, timestamps.
-4. **A numbered yes/no checklist** — one question per observable behavior.
+4. **A numbered yes/no checklist** — one question per observable platform
+   behavior, such as whether an installer launches or an export opens correctly.
 5. **What happens next** — merge, release, or fallback work.
 6. **Explicit unknowns** — never claim platform behavior you did not observe.
 
-Ask for the outcome, not for permission to continue. Example:
+For platform checks, ask for the observed outcome, not for permission to
+continue. Example:
 
 > Install `<msi path>` (3,932,160 B). 1) Does Export save a `.pptx` to Downloads? 2) Does PowerPoint open it with editable text? If (1) fails, I implement the
 > agreed fallback instead of merging.
@@ -229,19 +249,7 @@ Add one adversarial review pass for any T3/T4 epic:
 7. Merge to the default branch `--no-ff`, push both refs, keep the epic branch
    until production has run once.
 
-## 11. Recovery playbook
-
-| Symptom                                                           | Cause                                        | Action                                                                   |
-| ----------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------ |
-| `504 Outdated Optimize Dep` on one route                          | stale Vite dep cache after a lockfile change | stop the dev server, clear `node_modules/.vite`, rerun                   |
-| `ERR_PNPM_UNEXPECTED_STORE`                                       | worktree linked to a project-local store     | reinstall with `--store-dir .pnpm-store` and `CI=1`                      |
-| `EACCES`/`ENOENT` on `.git/index.lock`                            | child sandbox cannot write `.git`            | commit via an IMPL child; do not change sandbox policy                   |
-| WiX `light.exe` "Windows Installer Service could not be accessed" | sandbox cannot reach `msiserver`             | run `pnpm tauri build` from ORCH's shell                                 |
-| Child stops asking to change a forbidden file                     | brief was too narrow                         | authorize the minimal change explicitly, in writing, and rerun the gates |
-| Two identical gate failures                                       | implementation, not environment              | escalate that issue to IMPL+                                             |
-| Flaky E2E in one area only                                        | worker contention or cold dev server         | rerun that spec with fewer workers before blaming code                   |
-
-## 12. Reporting to the user
+## 11. Reporting to the user
 
 Match the user's altitude, not the transcript's. Default shape:
 
@@ -253,40 +261,3 @@ Match the user's altitude, not the transcript's. Default shape:
 
 Never bury a blocker, never present an unverified platform claim as verified,
 and never dump raw child logs.
-
-## 13. WorkTime appendix
-
-Worktrees (one agent each):
-
-| Path                                            | Role                                               |
-| ----------------------------------------------- | -------------------------------------------------- |
-| `C:\Users\dylan\Desktop\Coding\VSCode\WorkTime` | ORCH + integration + native/release                |
-| `...\WorkTime-ui`                               | Lane A: page, wizard, providers, mounts            |
-| `...\WorkTime-engine`                           | Lane B: pure `src/lib/goals/**`, deck plan/preview |
-
-Core docs: `docs/plans/goals-epic-parallel-workflow.md`,
-`docs/plans/issue-133-decisions.md`, `docs/goals/contract.md`,
-`docs/research/issue-140-research.md`, `docs/issues/issue-*.md`.
-
-Commands:
-
-```powershell
-pnpm lint:app                      # tsc --noEmit
-pnpm test:unit [paths]             # vitest
-pnpm build                         # tsc && vite build
-pnpm test:pwa                      # build + artifact checks
-pnpm test:platform                 # slim-shell + cargo check
-pnpm test:integration              # destructive db reset, main worktree only
-pnpm test:e2e                      # Playwright on :3000
-pnpm test:all                      # unit+pwa+platform+integration+e2e
-pnpm supabase:start/status/serve   # local stack + edge functions
-pnpm tauri build                   # MSI under src-tauri/target/release/bundle/msi
-pnpm run version minor|major|patch # single release bump
-pnpm test:version
-```
-
-Environment gotchas: production builds need `VITE_SUPABASE_URL`,
-`VITE_SUPABASE_ANON_KEY`, `VITE_PUBLIC_APP_URL`; never print secrets. E2E needs
-port 3000 free and the local stack; one invite-signup spec is conditionally
-skipped. `pptxgenjs` must stay a function-local dynamic import with its own
-chunk.
