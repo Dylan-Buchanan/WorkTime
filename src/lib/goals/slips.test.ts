@@ -428,6 +428,12 @@ describe("isGoalIncludedInPeriod", () => {
 });
 
 describe("metricSnapshot", () => {
+    it("retains the habit link in an isolated snapshot", () => {
+        const goal = buildGoalFixture({ metric: { label: "Practice", current: 0, target: 3, unit: "", source: "habit", habitId: "h", overridePinned: false } });
+        expect(metricSnapshot(goal)).toEqual(goal.metric);
+        expect(metricSnapshot(goal)).not.toBe(goal.metric);
+    });
+
     it("returns null when the goal has no metric", () => {
         expect(metricSnapshot(buildGoalFixture())).toBeNull();
     });

@@ -1,4 +1,6 @@
 import { createGoalTracker, createGoal, createGoalCheckIn } from "../src/lib/goals/factories";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
@@ -577,6 +579,49 @@ describe("SupabaseDataAccess transport", () => {
 
 
 describe("goals RPC and RLS", () => {
+    it("replays the actual metric migration while preserving existing rows and a validated check", () => {
+        const migration = readFileSync("supabase/migrations/20261101000000_goal_habit_metrics.sql", "utf8");
+        const sql = `begin;
+            create temporary table original_goal_metrics as select owner_id, id, metric from public.goals;
+            ${migration}
+            ${migration}
+            select json_build_object(
+                'validated', (select count(*) from pg_constraint where conrelid = 'public.goals'::regclass and conname = 'goals_metric_check' and convalidated),
+                'preserved', not exists (select * from original_goal_metrics except select owner_id, id, metric from public.goals));
+            rollback;`;
+        const result = spawnSync("docker", ["exec", "-i", "supabase_db_worktime", "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], { input: sql, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        const summary = result.stdout.split(/\r?\n/).find(line => line.startsWith("{"));
+        expect(JSON.parse(summary!)).toEqual({ validated: 1, preserved: true });
+    });
+
+    it("round trips habit metrics through sync and enforces source/link pairing on direct writes", async () => {
+        user = await createLocalUser();
+        const data = new SupabaseDataAccess(user.client);
+        const tracker = createGoalTracker({ name: "Habits", cadence: { kind: "every-n-weeks", weekday: 0, intervalWeeks: 1 }, cadenceAnchorAt: "2026-01-04" }, new Date(T0), "00000000-0000-4000-8000-100000000041");
+        const metric = { label: "Practice", target: 5, current: 0, unit: "sessions", source: "habit" as const, habitId: "missing-habit-is-allowed", overridePinned: false };
+        const goal = createGoal({ trackerId: tracker.id, title: "Practice", metric }, new Date(T0), "00000000-0000-4000-8000-100000000042");
+        await data.push(user.userId, { ...emptyPlan(), goalTrackerUpserts: [{ value: tracker, updatedAt: T0 }], goalUpserts: [{ value: goal, updatedAt: T0 }] });
+        expect((await data.pull(user.userId)).goals[goal.id].value.metric).toEqual(metric);
+        const updated = { ...metric, habitId: "another-habit", target: 6 };
+        await data.push(user.userId, { ...emptyPlan(), goalUpserts: [{ value: { ...goal, metric: updated }, updatedAt: LATER }] });
+        expect((await data.pull(user.userId)).goals[goal.id].value.metric).toEqual(updated);
+
+        const { habitId: _link, ...withoutLink } = metric;
+        for (const invalid of [withoutLink, ...[null, "", " \t\n", "\u00a0\ufeff\u2003", 7].map(habitId => ({ ...metric, habitId })),
+            { ...metric, source: "manual" }, { ...metric, source: "liftingtracker" }, { ...metric, source: "unknown" },
+            { ...metric, source: "manual", habitId: null }, { ...metric, source: "liftingtracker", habitId: "" },
+            { ...metric, overridePinned: true }, { ...metric, current: "2" }]) {
+            const response = await user.client.from("goals").update({ metric: invalid }).eq("id", goal.id);
+            expect(response.error?.code).toBe("23514");
+            expect(response.error?.message).toContain("goals_metric_check");
+        }
+        for (const source of ["manual", "liftingtracker"]) {
+            expect((await user.client.from("goals").update({ metric: { ...withoutLink, source, overridePinned: true } }).eq("id", goal.id)).error).toBeNull();
+        }
+        expect((await user.client.from("goals").update({ metric: null }).eq("id", goal.id)).error).toBeNull();
+    });
+
     it("round trips JSON rows, replays idempotently, LWW gates, preserves built keys and survives scoped wipe", async () => {
         user = await createLocalUser(); const data = new SupabaseDataAccess(user.client);
         const tracker = createGoalTracker({ name: "Work", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-01-04", lastBuiltPeriodStart: "2026-01-04" }, new Date(T0), "00000000-0000-4000-8000-100000000031");

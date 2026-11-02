@@ -2,6 +2,11 @@
 
 Implementation status: **Phases 1–12 are implemented; the Phase 12 ownership amendment is ratified.** This contract remains binding for the #143/#142 follow-ups.
 
+**#145 amendment:** section 14 freezes the habit metric foundation under the
+current implementation request. It supersedes the earlier two-source declarations
+and metric-history restrictions for habit-derived readings. The historical phase
+and lane routing below describes the original epic workflow.
+
 Status: **Signatures FROZEN by ORCH review, contingent on the normal Phase 2 gate;
 not a gate record.** RESEARCH authored the chat draft at foundation HEAD
 `4d365119e0b46d5c7e213de71b6e61f4d8093c5c`; IMPL+ materialized the contract and
@@ -68,7 +73,8 @@ export interface GoalMetric {
     target: number;
     current: number;
     unit: string;
-    source: "manual" | "liftingtracker";
+    source: "manual" | "liftingtracker" | "habit";
+    habitId?: string;
     overridePinned: boolean;
 }
 export interface Goal {
@@ -102,7 +108,8 @@ export interface GoalCheckIn {
 ```
 
 There is no persisted `periodEnd` (the validator rejects it), planned completion
-boolean, historical metric snapshot, deck state, or additional completion field.
+boolean, persisted historical metric snapshot, deck state, or additional completion
+field. Habit metric history is derived live by section 14, never stored on check-ins.
 
 ### Existing exports and defaults
 
@@ -406,7 +413,8 @@ export interface GoalMetricSnapshot {
     readonly current: number;
     readonly target: number;
     readonly unit: string;
-    readonly source: "manual" | "liftingtracker";
+    readonly source: GoalMetric["source"];
+    readonly habitId?: string;
     readonly overridePinned: boolean;
 }
 export function normalizeSlipText(value: string): string;
@@ -488,11 +496,13 @@ Missing achievedAt cannot establish inclusion for an achieved row. The optional
 `localDateOf` defaults to validated `localDateKey(new Date(iso))`; tests inject it.
 `DeckPlanInput.localDateOf` uses this same type and projection for inclusion and
 `achievedInPeriod`, preventing later achievement from leaking backwards. No
-historical metric snapshot exists: current metric is explicitly current text only.
+persisted historical metric snapshot exists. Manual/liftingtracker metrics use
+current text only; section 14 provides live per-period habit readings.
 
 ORCH ratifies status-only history: `blocked=0`, `at-risk=1`, `on-track=2`.
 `buildSparkline` returns null with fewer than two deduped, filtered points.
-`metricSnapshot` returns a clone of current metric fields for text, or null.
+`metricSnapshot` returns a clone of current metric fields (including a habit link
+when present), or null. It does not derive a habit reading from stored `current`.
 
 ## 5. Frozen evidence selector — #137, Lane A (ratified Phase 12)
 
@@ -603,7 +613,8 @@ export interface DeckMetricView {
     current: number;
     target: number;
     unit: string;
-    source: "manual" | "liftingtracker";
+    source: GoalMetric["source"];
+    habitId?: string;
     overridePinned: boolean;
 }
 export interface DeckSlideBase<K extends DeckSlideKind> {
@@ -783,8 +794,10 @@ through the roster, not again as body slides.
 Misses come from unmet prior plans for goals with both previous and current stored
 rows; reason is current missReason. Next-plans uses current planned items, closing
 uses their texts with an honest placeholder when absent. Progress uses status-only
-series through the requested period; no metric history is invented. Metric values
-are current text on recaps/appendix. All notes are nonempty strings, seconds numeric.
+series through the requested period in the current builder. Manual/liftingtracker
+metrics have no historical values. Habit history can be derived live through
+section 14; deck consumption is the #148 follow-up. Until then, the builder retains
+its current text behavior on recaps/appendix. All notes are nonempty strings, seconds numeric.
 `generatedAt = now.toISOString()` is the only clock seam. Same input deep-equals
 same plan, including IDs/order/warnings/estimate. All copy is editable in memory.
 
@@ -837,8 +850,9 @@ ORCH's decision **at freeze** is **hand-authored SVG + canvas PNG**, selected fr
 the researched options for its small dependency footprint and identical numeric
 series across preview/export. RESEARCH compared options; it did not choose this
 renderer. #140 implements and tests it. Series remain plain numeric status values
-and date labels; `DeckSeries.kind` retains its future metric alternative, but v1
-builders emit only status. Fewer than two points means no series.
+and date labels; `DeckSeries.kind` retains its metric alternative. Current builders
+emit only status; #148 can consume section 14's derived habit history without
+inventing manual/liftingtracker history. Fewer than two points means no series.
 
 Load the pptx library by a function-local dynamic import in the export handler,
 never in the entry chunk or preview's static imports. Browser delivery direction
@@ -1472,3 +1486,107 @@ and #142 output enhancement are Phase 14 follow-ups, outside Phases 2–13.
 Freeze authority remains ORCH; drafts remain credited to RESEARCH; authorized
 children materialize/edit/commit; ORCH has only the agent-resolved merge
 add-A/commit-no-edit exception.
+
+## 14. Frozen habit metric foundation — #145
+
+**Shape and persistence.** `GoalMetric.source` is `"manual" | "liftingtracker" |
+"habit"`, with optional `habitId: string`. Runtime validation and
+`public.goals.goals_metric_check` enforce strict pairing: a habit source requires a
+nonblank string `habitId` and `overridePinned: false`; either other source rejects
+the `habitId` key entirely, including null. `current` remains a required finite
+number on every metric. A habit metric's stored `current` is not its reading.
+Other existing metric validation is unchanged. `GoalMetricSnapshot` and
+`DeckMetricView` retain the widened source and optional link; `metricSnapshot`
+clones the link without deriving a value. No new entity, column, RPC argument,
+check-in field, or persistence surface is introduced.
+
+**Calendar rule.** Both numerator and denominator use canonical habit bucket
+starts in `[periodStart, periodEnd)`, with exclusive `periodEnd`. Daily buckets
+start on that local date, weekly buckets on Sunday, monthly buckets on the 1st.
+A bucket starting before the window is excluded; one starting inside counts even
+when it extends beyond the window. Adjacent periods cannot count the same start.
+Enumeration reuses `src/lib/habits/calendar.ts` and uses local-noon date arithmetic.
+
+The pure module `src/lib/goals/habitMetric.ts` accepts plain habit/completion data
+and explicit `today`. It reads no clock, provider, network, or storage. Types
+`Goal`, `GoalMetric`, `GoalCadence`, `Habit`, `HabitCompletion`, `HabitFrequency`
+come from `src/state/types.ts`; `LocalDateKey` from `src/lib/todos/types.ts`;
+`PeriodBounds` and `GoalGridInput` from `src/lib/goals/periods.ts`.
+
+```ts
+export interface HabitMetricHit {
+    readonly met: boolean;
+    readonly delta: number;
+}
+interface ReadingWindow {
+    readonly partial: boolean;
+    readonly daysRemaining: number;
+}
+export type HabitMetricReading = ReadingWindow & (
+    | ({ readonly unavailable: false; readonly completed: number;
+         readonly totalBuckets: number; readonly availableBuckets: number } & HabitMetricHit)
+    | { readonly unavailable: true; readonly completed: null;
+        readonly totalBuckets: null; readonly availableBuckets: null;
+        readonly met: null; readonly delta: null }
+);
+export function habitMetricBuckets(
+    frequency: HabitFrequency, period: PeriodBounds,
+): string[];
+export function habitMetricHit(completed: number, target: number): HabitMetricHit;
+export function readHabitMetric(
+    metric: GoalMetric, habits: readonly Habit[], completions: readonly HabitCompletion[],
+    period: PeriodBounds, today: LocalDateKey,
+): HabitMetricReading;
+export function maxHabitMetricBuckets(cadence: GoalCadence, frequency: HabitFrequency): number;
+export function habitMetricStreak(
+    goal: Pick<Goal, "metric" | "createdAt">, grid: GoalGridInput,
+    habits: readonly Habit[], completions: readonly HabitCompletion[],
+    today: LocalDateKey, throughPeriodStart?: LocalDateKey,
+): number | null;
+```
+
+**Reading decisions (confirmed for #145).** `completed` counts distinct canonical
+bucket keys for the linked habit, restricted to non-future buckets; malformed,
+off-frequency, out-of-window, other-habit, and duplicate completion rows cannot
+inflate it. `totalBuckets` counts the full window; `availableBuckets` counts its
+starts through the current bucket of that frequency. `partial` means today is
+inside the window, including its last day. Completed and future windows are not
+partial. `daysRemaining` is the calendar-day distance to `periodEnd - 1`, clamped
+at zero; it is zero on the last day. `met = completed >= target` and
+`delta = completed - target`, with no prose. A zero-bucket window is available
+with `completed = totalBuckets = availableBuckets = 0`; target comparison still
+applies, so a zero target is met. Missing habits (or a non-habit input metric)
+return `unavailable: true` and null counts/hit/delta, never a fabricated zero.
+Window flags remain calculable. Archived habits remain fully countable. Callers
+must gate on hydration before interpreting an absent habit as unavailable; #145
+does not change provider readiness or mount topology.
+
+**Exact cadence maxima.** This helper is independent of anchor and enumerates no
+concrete goal periods or date ranges. Weekly cadences allow `7 * intervalWeeks`
+daily starts and `intervalWeeks` Sunday starts. Month-first maxima depend on the
+stride and weekday, with no fixed cap of one: e.g. 5 weeks can contain two,
+12 weeks three, and 52 weeks twelve. A fixed numeric Gregorian cycle of 400
+years / 4,800 months / 146,097 days supplies exact month-first maxima, with whole
+cycles removed arithmetically for large intervals. Monthly cadences retain the
+existing snapping behavior: Tuesday–Thursday allow at most 42 daily / 6 Sunday
+starts; Sunday, Monday, Friday, Saturday allow at most 35 / 5. All allow at most
+two month-firsts. Individual monthly windows may be 21–42 days and may contain
+zero month-firsts; maxima never replace per-window enumeration.
+
+**Streak decisions (confirmed for #145).** Count consecutive met grid periods
+backward, stopping at a completed miss, the tracker floor, or before the goal's
+creation period. The period containing the goal's local creation date is eligible;
+periods ending on/before it are excluded. An unfinished current period adds one
+as soon as it is met; an unfinished miss preserves the completed streak. The
+optional `throughPeriodStart` defaults to today, clamps future selections to
+today, and resolves off-grid historical keys to their containing grid period
+before walking backward. It never passes a stored off-grid key to
+`previousPeriod`. Before the floor (or before goal creation) the streak is zero.
+A missing linked habit or absent/non-habit metric yields null. No check-in or
+status-pill history participates in this computation.
+
+**Interchange and downstream scope.** Goal-set version 1 stays definitions-only:
+habit metrics export exactly label/target/unit and import as manual/current 0
+with no link and `overridePinned: false`. The editor, check-in strip, and deck
+consume these derivations in #146, #147, and #148 respectively; they must not
+implement competing bucket arithmetic. No persisted metric history is added.

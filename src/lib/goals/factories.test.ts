@@ -1,8 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { createGoal, createGoalCheckIn, createGoalTracker, isGoal, isGoalCheckIn, isGoalTracker } from "./factories";
+import { createGoal, createGoalCheckIn, createGoalTracker, isGoal, isGoalCheckIn, isGoalMetric, isGoalTracker } from "./factories";
 
 const now = new Date("2026-10-31T12:00:00.000Z");
 describe("goal foundation factories", () => {
+    const habitMetric = { label: "Practice", target: 5, current: 0, unit: "sessions", source: "habit" as const, habitId: "practice", overridePinned: false };
+
+    it("validates and clones habit metrics without persisting readings on check-ins", () => {
+        expect(isGoalMetric(habitMetric)).toBe(true);
+        const goal = createGoal({ trackerId: "t", title: "Practice", metric: habitMetric }, now, "g");
+        expect(goal.metric).toEqual(habitMetric);
+        expect(goal.metric).not.toBe(habitMetric);
+        const checkIn = createGoalCheckIn({ goalId: goal.id, periodStart: "2026-11-01" }, now, "c");
+        expect(isGoalCheckIn(checkIn)).toBe(true);
+        expect(checkIn).not.toHaveProperty("metric");
+    });
+
+    it.each([undefined, null, "", " \t\n", "\u00a0\ufeff\u2003", 42])("rejects invalid habit links (%s)", habitId => {
+        expect(isGoalMetric({ ...habitMetric, habitId })).toBe(false);
+    });
+
+    it("rejects missing links, unknown sources, pinned habit metrics and invalid numbers", () => {
+        const { habitId: _link, ...missing } = habitMetric;
+        for (const metric of [missing, { ...habitMetric, source: "unknown" }, { ...habitMetric, overridePinned: true },
+            { ...habitMetric, current: NaN }, { ...habitMetric, current: undefined }, { ...habitMetric, target: Infinity }]) {
+            expect(isGoalMetric(metric)).toBe(false);
+            expect(() => createGoal({ trackerId: "t", title: "Practice", metric: metric as typeof habitMetric }, now, "g")).toThrow(RangeError);
+        }
+    });
+
+    it.each(["manual", "liftingtracker"] as const)("keeps %s validation and rejects any habitId key", source => {
+        const { habitId: _link, ...base } = habitMetric;
+        expect(isGoalMetric({ ...base, source, overridePinned: true, unit: "", extra: "retained" })).toBe(true);
+        for (const habitId of ["habit", "", null, undefined]) expect(isGoalMetric({ ...base, source, habitId })).toBe(false);
+    });
+
     it("creates deterministic defaults with injected time and ids", () => {
         const input = { name: " Work ", cadence: { kind: "every-n-weeks", weekday: 0, intervalWeeks: 2 } as const, cadenceAnchorAt: "2026-11-01" as const };
         const tracker = createGoalTracker(input, now, "tracker");

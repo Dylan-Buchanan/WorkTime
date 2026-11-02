@@ -332,6 +332,17 @@ describe("goalSetFile parseGoalSet", () => {
 });
 
 describe("goalSetFile materializeGoalSet", () => {
+    it("exports habit definitions without the link and imports them as manual with zero progress", () => {
+        const tracker = buildEveryNWeeksTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: { label: "Practice", current: 17, target: 5, unit: "sessions", source: "habit", habitId: "private-habit", overridePinned: false } });
+        const json = serializeGoalSet(tracker, [goal]);
+        expect(JSON.parse(json).goals[0].metric).toEqual({ label: "Practice", target: 5, unit: "sessions" });
+        expect(json).not.toContain("habitId");
+        expect(json).not.toContain("private-habit");
+        const imported = materializeGoalSet(parseGoalSet(json), NOW, ids());
+        expect(imported.goals[0].metric).toEqual({ label: "Practice", target: 5, unit: "sessions", source: "manual", current: 0, overridePinned: false });
+    });
+
     it("preserves lifecycle while stamping import time and resetting metric progress", () => {
         const tracker = buildEveryNWeeksTrackerFixture();
         const active = { ...buildMetricGoalFixture(tracker.id), sortOrder: 0 };
