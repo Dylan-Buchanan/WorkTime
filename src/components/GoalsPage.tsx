@@ -3,10 +3,12 @@ import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type 
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
+import { useHabits } from "../state/HabitContext";
 import { usePM } from "../state/ProjectManagerContext";
-import type { Goal, GoalCadence, GoalMetric, GoalTracker, Weekday } from "../state/types";
+import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
+import { maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
 import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
@@ -34,6 +36,17 @@ const achieveButton = "rounded border border-emerald-700 bg-emerald-950/40 px-3 
 const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-900/40";
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
+/** Singular/plural words for a habit frequency; the count only ever affects the plural. */
+const HABIT_UNIT_WORDS: Record<HabitFrequency, readonly [string, string]> = {
+    daily: ["day", "days"],
+    weekly: ["week", "weeks"],
+    monthly: ["month", "months"],
+};
+const habitUnitWord = (count: number, frequency: HabitFrequency) => HABIT_UNIT_WORDS[frequency][count === 1 ? 0 : 1];
+const habitUnitSuggestion = (frequency: HabitFrequency) => HABIT_UNIT_WORDS[frequency][1];
+const cadenceHoldMessage = (max: number, frequency: HabitFrequency) => `This cadence can hold at most ${max} ${habitUnitWord(max, frequency)}.`;
+const orderedHabits = (habits: Record<string, Habit>) => Object.values(habits)
+    .sort((left, right) => left.position - right.position || left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
 /** One clock read per render; the optional prop is a test-only seam. */
 const pageToday = (today?: LocalDateKey): LocalDateKey => {
     if (today !== undefined) return today;
@@ -265,12 +278,13 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                         <SortableContext items={visible.map(row => row.id)} strategy={verticalListSortingStrategy}>
                             <div className="space-y-2" aria-label="Goals list">
                                 {visible.map(row => <GoalRow key={row.id} goal={row} consecutiveSlips={slipCount(row.id)} expanded={!!state.ui.expandedGoalIds[row.id]}
+                                    cadence={tracker.cadence} period={checkInCurrent} today={today}
                                     onExpand={() => goals.setGoalExpanded(row.id, !state.ui.expandedGoalIds[row.id])}
                                     onEdit={() => setEditingGoal(row.id)} onLifecycle={value => attempt(() => goals.setGoalLifecycle(row.id, value))} />)}
                             </div>
                         </SortableContext>
                     </DndContext>
-                    {edit && edit.trackerId === tracker.id && <GoalEditor key={edit.id} goal={edit} onCancel={() => setEditingGoal(null)} onSave={patch => {
+                    {edit && edit.trackerId === tracker.id && <GoalEditor key={edit.id} goal={edit} cadence={tracker.cadence} onCancel={() => setEditingGoal(null)} onSave={patch => {
                         goals.updateGoal(edit.id, patch);
                         setEditingGoal(null);
                     }} />}
@@ -358,7 +372,8 @@ function QuickAdd({ first, onAdd }: { first: boolean; onAdd: (title: string, sta
 }
 
 function MetricBadge({ metric }: { metric: GoalMetric }) {
-    return <span className="text-neutral-400">{metric.source === "manual" ? "Manual" : "Auto"}{metric.overridePinned ? " · Override" : ""}</span>;
+    const source = metric.source === "manual" ? "Manual" : metric.source === "habit" ? "Habit" : "Auto";
+    return <span className="text-neutral-400">{source}{metric.source !== "habit" && metric.overridePinned ? " · Override" : ""}</span>;
 }
 
 function GoalProjectLink({ projectId }: { projectId: string }) {
@@ -369,7 +384,63 @@ function GoalProjectLink({ projectId }: { projectId: string }) {
         : <span className="text-xs text-neutral-500">Linked project is missing</span>;
 }
 
-function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecycle }: { goal: Goal; consecutiveSlips: number; expanded: boolean; onExpand: () => void; onEdit: () => void; onLifecycle: (value: Goal["lifecycle"]) => void }) {
+function GoalMetricLine({ metric, period, today, cadence }: {
+    metric: GoalMetric;
+    period: GoalPeriod | null;
+    today: LocalDateKey;
+    cadence: GoalCadence;
+}) {
+    if (metric.source !== "habit") {
+        return <p className="mt-2" data-goals-slot="goal-metric">{metric.label}: {metric.current} / {metric.target} {metric.unit} <MetricBadge metric={metric} /></p>;
+    }
+    return <HabitMetricLine metric={metric} period={period} today={today} cadence={cadence} />;
+}
+
+/** The live reading is derived from habit completions; the stored `current` is never shown. */
+function HabitMetricLine({ metric, period, today, cadence }: {
+    metric: GoalMetric;
+    period: GoalPeriod | null;
+    today: LocalDateKey;
+    cadence: GoalCadence;
+}) {
+    const habits = useHabits();
+    const habit = metric.habitId ? habits.state.habits[metric.habitId] : undefined;
+    const max = habit ? maxHabitMetricBuckets(cadence, habit.frequency) : null;
+    const hint = habit && max !== null && Number.isFinite(metric.target) && metric.target > max
+        ? cadenceHoldMessage(max, habit.frequency)
+        : null;
+    let body: React.ReactNode;
+    if (!habits.hydrated) {
+        body = <>{metric.label}: <span className="text-neutral-500">Loading habit progress…</span></>;
+    } else if (!habit) {
+        body = <>{metric.label}: <span className="text-neutral-500">Linked habit is missing</span></>;
+    } else if (!period) {
+        body = <>{metric.label}: <span className="text-neutral-500">No current period</span></>;
+    } else {
+        const reading = readHabitMetric(metric, [habit], Object.values(habits.state.completions), period, today);
+        const unit = metric.unit ? ` ${metric.unit}` : "";
+        const left = reading.partial ? ` · ${reading.daysRemaining} ${reading.daysRemaining === 1 ? "day" : "days"} left` : "";
+        body = reading.unavailable
+            ? <>{metric.label}: <span className="text-neutral-500">Linked habit is missing</span></>
+            : <span>{metric.label}: {reading.completed} / {metric.target}{unit}{left}</span>;
+    }
+    return <>
+        <p className="mt-2" data-goals-slot="goal-metric">{body} <MetricBadge metric={metric} /></p>
+        {hint && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">{hint}</p>}
+    </>;
+}
+
+function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onExpand, onEdit, onLifecycle }: {
+    goal: Goal;
+    consecutiveSlips: number;
+    expanded: boolean;
+    cadence: GoalCadence;
+    period: GoalPeriod | null;
+    today: LocalDateKey;
+    onExpand: () => void;
+    onEdit: () => void;
+    onLifecycle: (value: Goal["lifecycle"]) => void;
+}) {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id });
     return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className="rounded border border-neutral-800 bg-neutral-900/30 p-3" aria-label={goal.title}>
         <div className="flex flex-wrap items-center gap-3">
@@ -385,13 +456,14 @@ function GoalRow({ goal, consecutiveSlips, expanded, onExpand, onEdit, onLifecyc
                 <button className={dropButton} onClick={() => onLifecycle("dropped")}>Drop</button>
             </> : <button className={button} onClick={() => onLifecycle("active")}>Reactivate</button>}
         </div>
-        {goal.metric && <p className="mt-2">{goal.metric.label}: {goal.metric.current} / {goal.metric.target} {goal.metric.unit} <MetricBadge metric={goal.metric} /></p>}
+        {goal.metric && <GoalMetricLine metric={goal.metric} period={period} today={today} cadence={cadence} />}
         {expanded && <p className="mt-2 whitespace-pre-wrap text-neutral-400">{goal.notes || "No note."}</p>}
     </article>;
 }
 
-function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
+function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: GoalCadence; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
     const pm = usePM();
+    const habits = useHabits();
     const projects = Object.values(pm.state.projects).sort((left, right) =>
         left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const [title, setTitle] = useState(goal.title);
@@ -404,13 +476,51 @@ function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Pa
     const [target, setTarget] = useState(String(goal.metric?.target ?? 0));
     const [unit, setUnit] = useState(goal.metric?.unit ?? "");
     const [source, setSource] = useState<GoalMetric["source"]>(goal.metric?.source ?? "manual");
+    const [sourceTouched, setSourceTouched] = useState(false);
+    const [habitId, setHabitId] = useState(goal.metric?.source === "habit" ? goal.metric.habitId ?? "" : "");
     const [error, setError] = useState<string | null>(null);
+    // Linked habits stay visible even after archiving; only fresh options are active.
+    const habitOptions = orderedHabits(habits.state.habits).filter(habit => !habit.isArchived || habit.id === habitId);
+    const selectedHabit = habitId ? habits.state.habits[habitId] : undefined;
+    const targetValue = target.trim() === "" ? Number.NaN : Number(target);
+    const maxBuckets = selectedHabit ? maxHabitMetricBuckets(cadence, selectedHabit.frequency) : null;
+    const unreachable = selectedHabit && maxBuckets !== null && Number.isFinite(targetValue) && targetValue > maxBuckets
+        ? cadenceHoldMessage(maxBuckets, selectedHabit.frequency)
+        : null;
+    function changeSource(next: GoalMetric["source"]) {
+        if (next === source) return;
+        // A source change never carries the other source's stored reading forward.
+        setCurrent("0");
+        setSourceTouched(true);
+        setSource(next);
+        if (next !== "habit") setHabitId("");
+    }
+    function chooseHabit(nextId: string) {
+        const next = habits.state.habits[nextId];
+        setHabitId(nextId);
+        if (!next) return;
+        const previous = habits.state.habits[habitId];
+        // Only default the label while it is empty or untouched from the prior habit.
+        if (!label.trim() || (previous !== undefined && label === previous.name)) setLabel(next.name);
+        setUnit(habitUnitSuggestion(next.frequency));
+    }
     return <form aria-label="Edit goal" className="space-y-3 rounded border border-neutral-800 p-4" onSubmit={event => {
         event.preventDefault();
         try {
             if (!title.trim()) throw new RangeError("Give this goal a name.");
-            if (metric && (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target)))) throw new RangeError("Metric needs a label and finite current and target values.");
-            onSave({ title, notes, projectId: projectId || null, metric: metric ? { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: source === goal.metric?.source ? goal.metric.overridePinned : false } : null });
+            let nextMetric: GoalMetric | null = null;
+            if (metric && source === "habit") {
+                if (!label.trim() || !target.trim() || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and a finite target value.");
+                const habit = habits.state.habits[habitId];
+                if (!habit) throw new RangeError("Choose a habit for this metric.");
+                const max = maxHabitMetricBuckets(cadence, habit.frequency);
+                if (Number(target) > max) throw new RangeError(cadenceHoldMessage(max, habit.frequency));
+                nextMetric = { label: label.trim(), current: 0, target: Number(target), unit, source: "habit", habitId: habit.id, overridePinned: false };
+            } else if (metric) {
+                if (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and finite current and target values.");
+                nextMetric = { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: !sourceTouched && source === goal.metric?.source ? goal.metric.overridePinned : false };
+            }
+            onSave({ title, notes, projectId: projectId || null, metric: nextMetric });
         } catch (error) { setError(errorMessage(error)); }
     }}>
         <h3 className="font-medium">Edit goal</h3>
@@ -424,12 +534,28 @@ function GoalEditor({ goal, onSave, onCancel }: { goal: Goal; onSave: (patch: Pa
         <label className="flex items-center gap-2"><input type="checkbox" checked={metric} onChange={event => setMetric(event.target.checked)} />Track one metric</label>
         {metric && <fieldset className="flex flex-wrap gap-3"><legend className="mb-2">Metric {goal.metric && <MetricBadge metric={goal.metric} />}</legend>
             <label className="grid gap-1">Metric label<input className={control} value={label} onChange={event => setLabel(event.target.value)} /></label>
-            <label className="grid gap-1">Current<input className={`${control} w-28`} type="number" step="any" value={current} onChange={event => setCurrent(event.target.value)} /></label>
+            {source !== "habit" && <label className="grid gap-1">Current<input className={`${control} w-28`} type="number" step="any" value={current} onChange={event => setCurrent(event.target.value)} /></label>}
             <label className="grid gap-1">Target<input className={`${control} w-28`} type="number" step="any" value={target} onChange={event => setTarget(event.target.value)} /></label>
             <label className="grid gap-1">Unit<input className={control} value={unit} onChange={event => setUnit(event.target.value)} /></label>
-            <label className="grid gap-1">Source<select className={control} value={source} onChange={event => setSource(event.target.value as typeof source)}>
-                <option value="manual">Manual</option>{goal.metric?.source === "liftingtracker" && <option value="liftingtracker" disabled>Auto</option>}
+            <label className="grid gap-1">Source<select className={control} value={source} onChange={event => changeSource(event.target.value as typeof source)}>
+                <option value="manual">Manual</option>
+                <option value="habit">Habit</option>
+                {goal.metric?.source === "liftingtracker" && <option value="liftingtracker" disabled>Auto</option>}
             </select></label>
+            {source === "habit" && <>
+                <label className="grid gap-1">Habit<select className={control} value={habitId} onChange={event => chooseHabit(event.target.value)}>
+                    <option value="">Select a habit</option>
+                    {habitOptions.map(habit => {
+                        const habitMax = maxHabitMetricBuckets(cadence, habit.frequency);
+                        const impossible = Number.isFinite(targetValue) && targetValue > habitMax;
+                        return <option key={habit.id} value={habit.id} disabled={impossible}>
+                            {habit.name}{habit.isArchived ? " (archived)" : ""}{impossible ? ` (max ${habitMax} ${habitUnitWord(habitMax, habit.frequency)} for this cadence)` : ""}
+                        </option>;
+                    })}
+                </select></label>
+                {unreachable && <p className="w-full text-xs text-amber-300" data-goals-slot="goal-metric-hint">{unreachable}</p>}
+                <p className="w-full text-xs text-neutral-500">Current progress is counted from this habit's completions in each goal period.</p>
+            </>}
         </fieldset>}
         {error && <p role="alert" className="text-red-300">{error}</p>}
         <div className="flex gap-2"><button className={primary} type="submit">Save goal</button><button className={button} type="button" onClick={onCancel}>Cancel</button></div>

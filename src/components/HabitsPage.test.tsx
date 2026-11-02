@@ -3,12 +3,16 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HabitsPage } from "./HabitsPage";
 import { HabitProvider } from "../state/HabitContext";
+import { GoalProvider } from "../state/GoalContext";
+import { AppStateProvider } from "../state/AppStateContext";
+import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { DataProvider } from "../state/DataContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
-import type { Habit } from "../state/types";
+import type { Habit, HabitCompletion } from "../state/types";
 import { makeAppState } from "../test/mockTauri";
+import { buildGoalFixture, buildGoalTrackerFixture } from "../lib/goals/testFixtures";
 
 const OWNER = "habit-page-owner";
 
@@ -32,11 +36,25 @@ function wrap(data: InMemoryDataAccess) {
         <TauriCloseProvider>
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId={OWNER}>
-                    <HabitProvider><HabitsPage /></HabitProvider>
+                    <AppStateProvider>
+                        <ProjectManagerProvider>
+                            <GoalProvider><HabitProvider><HabitsPage /></HabitProvider></GoalProvider>
+                        </ProjectManagerProvider>
+                    </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
         </TauriCloseProvider>
     );
+}
+
+function completion(id: string, habitId: string, bucket: string): HabitCompletion {
+    return {
+        id,
+        habitId,
+        bucket,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+    };
 }
 
 beforeEach(() => localStorage.clear());
@@ -141,5 +159,49 @@ describe("HabitsPage", () => {
             selected: "weekly",
             expanded: { daily: true, weekly: true },
         });
+    });
+
+    it("names a linked goal in the delete confirmation and only deletes once confirmed", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        await data.saveGoals([tracker], [
+            buildGoalFixture({
+                trackerId: tracker.id,
+                title: "Ship the release",
+                metric: { label: "Walks", current: 0, target: 5, unit: "days", source: "habit", habitId: "morning", overridePinned: false },
+            }),
+        ], []);
+        await data.saveHabits([habit("morning", { name: "Morning walk" })], [completion("completion-1", "morning", "2026-10-31")]);
+        const user = userEvent.setup();
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+        render(wrap(data));
+        await screen.findByText("Morning walk");
+        const card = () => within(screen.getByText("Morning walk").closest("article")!);
+
+        await user.click(card().getByRole("button", { name: "Delete" }));
+        expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The goal Ship the release uses this habit as its metric."));
+        expect(screen.getByText("Morning walk")).toBeInTheDocument();
+        expect((await data.loadHabits()).completions).toHaveLength(1);
+
+        confirm.mockReturnValue(true);
+        await user.click(card().getByRole("button", { name: "Delete" }));
+        await waitFor(() => expect(screen.queryByText("Morning walk")).not.toBeInTheDocument());
+        await waitFor(async () => expect(await data.loadHabits()).toEqual({ habits: [], completions: [] }));
+        confirm.mockRestore();
+    });
+
+    it("keeps the existing delete confirmation wording when no goal links the habit", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.saveHabits([habit("morning", { name: "Morning walk" })], []);
+        const user = userEvent.setup();
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+        render(wrap(data));
+        await screen.findByText("Morning walk");
+        await user.click(within(screen.getByText("Morning walk").closest("article")!).getByRole("button", { name: "Delete" }));
+        expect(confirm).toHaveBeenCalledWith("Delete “Morning walk”? This also deletes its completion history.");
+        expect(screen.getByText("Morning walk")).toBeInTheDocument();
+        confirm.mockRestore();
     });
 });
