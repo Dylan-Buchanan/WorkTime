@@ -1,7 +1,7 @@
 import type PptxGenJS from "pptxgenjs";
 import { buildSeriesSvg, rasterizeSvgToPng } from "./chart";
 import { sanitizeDownloadFileName } from "./delivery";
-import { suggestedSecondsForSlide } from "./plan";
+import { metricTextOf, suggestedSecondsForSlide } from "./plan";
 import type { DeckPlan, DeckRecapSlide, DeckSlide } from "./types";
 
 const STATUS = { "on-track": "On track", "at-risk": "At risk", blocked: "Blocked" };
@@ -38,14 +38,16 @@ function recap(slide: Slide, source: DeckRecapSlide) {
     const cues = [
         ...(source.achievedInPeriod ? ["Achieved this period"] : []),
         ...(source.slipBadge ? [`${source.slipCount} consecutive slips`] : []),
+        ...(source.habitStreak !== null && source.habitStreak >= 2 ? [`hit target ${source.habitStreak} periods running`] : []),
     ];
     text(slide, cues.join(" · "), 3.05, 1.85, 9.6, 0.5, 20);
     bullets(slide, [`Did: ${source.did}`, `Current: ${source.current}`], 0.65, 2.65, 5.7, 2.15);
     text(slide, "Planned", 6.95, 2.65, 5.7, 0.45, 24);
     bullets(slide, source.planned.map(item => item.text + due(item.dueDate)), 6.95, 3.2, 5.7, 1.6);
+    const metricText = metricTextOf(source.metric);
     const details = [
         ...(source.missReason ? [`Miss reason: ${source.missReason}`] : []),
-        ...(source.metric ? [`${source.metric.label}: ${source.metric.current} / ${source.metric.target}${source.metric.unit ? ` ${source.metric.unit}` : ""}`] : []),
+        ...(metricText !== null ? [metricText] : []),
         ...(source.evidenceTaskTitles.length ? [`Evidence: ${source.evidenceTaskTitles.join("; ")}`] : []),
     ];
     bullets(slide, details, 0.65, 5.05, 12.03, 1.85);

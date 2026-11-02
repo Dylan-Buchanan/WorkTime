@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGoalTrackerFixture } from "../testFixtures";
+import { buildGoalCheckInFixture, buildGoalFixture, buildGoalTrackerFixture } from "../testFixtures";
 import { buildDeckPlan, suggestedSecondsForSlide } from "./plan";
 import type { DeckPlan, DeckSeries, DeckSlide } from "./types";
 import { deckFileName, renderDeck } from "./render";
@@ -38,7 +38,7 @@ function fixture(): DeckPlan {
     const common = { notes: "Edited speaker notes", suggestedSeconds: 9999, isHidden: false };
     const slides: DeckSlide[] = [
         { ...common, id: "title", kind: "title", title: "Edited cover", trackerName: "Edited tracker", purpose: "Edited purpose", periodLabel: "Edited period", periodRangeLabel: "Edited range" },
-        { ...common, id: "recap:g1", kind: "recap", title: "Edited recap", goalId: "g1", goalTitle: "Edited goal", placement: "body", statusPill: "at-risk", did: "Edited did", current: "Edited current", planned: [{ text: "Edited planned", dueDate: "2026-10-30" }], missReason: "Edited miss reason", metric: { label: "Sessions", current: 3, target: 8, unit: "visits", source: "manual", overridePinned: false }, slipBadge: true, slipCount: 2, achievedInPeriod: true, evidenceTaskTitles: ["Edited evidence"] },
+        { ...common, id: "recap:g1", kind: "recap", title: "Edited recap", goalId: "g1", goalTitle: "Edited goal", placement: "body", statusPill: "at-risk", did: "Edited did", current: "Edited current", planned: [{ text: "Edited planned", dueDate: "2026-10-30" }], missReason: "Edited miss reason", metric: { label: "Sessions", current: 3, target: 8, unit: "visits", source: "manual", overridePinned: false }, habitStreak: null, slipBadge: true, slipCount: 2, achievedInPeriod: true, evidenceTaskTitles: ["Edited evidence"] },
         { ...common, id: "misses", kind: "misses", title: "Edited misses", items: [{ goalId: "g1", goalTitle: "Miss goal", text: "Edited miss", dueDate: "2026-10-17", reason: "Edited reason" }] },
         { ...common, id: "next-plans", kind: "next-plans", title: "Edited next", items: [{ goalId: "g1", goalTitle: "Plan goal", text: "Edited next plan", dueDate: "2026-11-14" }] },
         { ...common, id: "progress", kind: "progress", title: "Edited progress", series: [series, { ...series, goalId: "g2", points: series.points.slice(0, 1) }, { ...series, goalId: "g3", points: [] }, { ...series, goalId: "g4", goalTitle: "Second trend" }] },
@@ -46,6 +46,27 @@ function fixture(): DeckPlan {
         { ...common, id: "appendix", kind: "appendix", title: "Edited appendix", entries: [{ goalId: "g5", goalTitle: "Retained edited roster", recapSlideId: "recap:g5", statusPill: "blocked", slipCount: 3, metricText: "Edited roster metric" }] },
     ];
     return { ...base, slides };
+}
+
+function habitPlan(count: number): DeckPlan {
+    const tracker = buildGoalTrackerFixture();
+    const goals = ["body", "roster"].map(id => buildGoalFixture({
+        id, trackerId: tracker.id, title: `Practice ${id}`,
+        metric: { label: "Practice", current: 9999, target: 3, unit: "sessions", source: "habit", habitId: "habit", overridePinned: false },
+    }));
+    return buildDeckPlan({
+        tracker, goals, period: { periodStart: "2026-10-18", periodEnd: "2026-11-01", monthKey: "2026-10" },
+        now: new Date(2026, 10, 2, 12),
+        checkIns: goals.flatMap(goal => (["2026-10-04", "2026-10-18"] as const).map(periodStart => buildGoalCheckInFixture({
+            id: `${goal.id}:${periodStart}`, goalId: goal.id, periodStart, isFocus: goal.id === "body",
+        }))),
+        habits: [{ id: "habit", name: "Practice", description: "", color: "", frequency: "daily", position: 0,
+            isArchived: false, createdAt: tracker.createdAt, updatedAt: tracker.createdAt }],
+        completions: [4, 5, 6, ...Array.from({ length: count }, (_, i) => 18 + i)].map(day => ({
+            id: `day-${day}`, habitId: "habit", bucket: `2026-10-${String(day).padStart(2, "0")}`,
+            createdAt: tracker.createdAt, updatedAt: tracker.createdAt,
+        })),
+    });
 }
 const copy = (index: number): string => mock.slides[index].addText.mock.calls.map(([value]) =>
     typeof value === "string" ? value : value.map((run: { text: string }) => run.text).join("\n")).join("\n");
@@ -58,6 +79,44 @@ beforeEach(() => {
 });
 
 describe("renderDeck", () => {
+    it.each([
+        [2, "Practice: 2 / 3 sessions · short by 1"],
+        [3, "Practice: 3 / 3 sessions"],
+        [4, "Practice: 4 / 3 sessions · 1 over"],
+    ])("renders derived phrasing for %i completions in recap details and appendix roster", async (count, expected) => {
+        const plan = habitPlan(count);
+        await renderDeck(plan);
+        const rendered = plan.slides.filter(slide => !slide.isHidden && !(slide.kind === "recap" && slide.placement === "appendix"));
+        const recapCopy = copy(rendered.findIndex(slide => slide.kind === "recap"));
+        const appendixCopy = copy(rendered.findIndex(slide => slide.kind === "appendix"));
+        expect(recapCopy).toContain(expected);
+        expect(appendixCopy).toContain(expected);
+        expect(recapCopy + appendixCopy).not.toContain("9999");
+        if (count >= 3) expect(recapCopy).toContain("hit target 2 periods running");
+        else expect(recapCopy).not.toContain("periods running");
+    });
+
+    it("rasterizes habit metric history with the target reference alongside status history", async () => {
+        await renderDeck(habitPlan(4));
+        expect(mock.rasterize).toHaveBeenCalledTimes(4);
+        const svgs = mock.rasterize.mock.calls.map(([svg]) => svg as string);
+        expect(svgs.filter(svg => svg.includes('stroke-dasharray'))).toHaveLength(2);
+        expect(svgs[1]).toContain('aria-label="Target: 3"');
+        expect(svgs[1]).toContain("Practice (sessions)");
+        expect(svgs[1]).toContain("2026-10-18: 4");
+        expect(svgs[0]).toContain("Blocked");
+    });
+
+    it.each([1, 2, 3])("only renders the hit cue when a streak of %i reaches two periods", async streak => {
+        const plan = fixture();
+        const recap = plan.slides[1];
+        if (recap.kind !== "recap") throw new Error("Missing recap");
+        recap.habitStreak = streak;
+        await renderDeck(plan);
+        if (streak >= 2) expect(copy(1)).toContain(`hit target ${streak} periods running`);
+        else expect(copy(1)).not.toContain("periods running");
+    });
+
     it("renders matching cover and recap names exactly once across text runs", async () => {
         const plan = fixture();
         plan.slides = plan.slides.map(slide => {

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CheckInWizard, type CheckInWizardProps } from "./CheckInWizard";
 import { GoalProvider, useGoals } from "../../state/GoalContext";
+import { HabitProvider, useHabits } from "../../state/HabitContext";
 import { AppStateProvider } from "../../state/AppStateContext";
 import { ProjectManagerProvider } from "../../state/ProjectManagerContext";
 import { DataProvider } from "../../state/DataContext";
@@ -17,8 +19,9 @@ import {
     buildGoalFixture,
     buildGoalTrackerFixture,
 } from "../../lib/goals/testFixtures";
-import type { GoalTracker, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
+import type { GoalTracker, GoalMetric, Habit, HabitCompletion, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
 import type { LocalDateKey } from "../../lib/todos/types";
+import { unmetPlannedItems } from "../../lib/goals/slips";
 
 function WizardHarness(props: CheckInWizardProps) {
     const { hydrated } = useGoals();
@@ -29,6 +32,40 @@ function periodFor(tracker: GoalTracker, today: LocalDateKey): GoalPeriod {
     const period = periodAt(goalGrid(tracker), today);
     if (!period) throw new RangeError("Tracker has no open period");
     return period;
+}
+
+function habit(id: string, frequency: Habit["frequency"] = "daily"): Habit {
+    return {
+        id,
+        name: id,
+        description: "",
+        color: "#6366F1",
+        frequency,
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-09-20T12:00:00.000Z",
+        updatedAt: "2026-09-20T12:00:00.000Z",
+    };
+}
+
+function habitCompletion(habitId: string, bucket: string): HabitCompletion {
+    return {
+        id: `${habitId}:${bucket}`,
+        habitId,
+        bucket,
+        createdAt: "2026-09-20T12:00:00.000Z",
+        updatedAt: "2026-09-20T12:00:00.000Z",
+    };
+}
+
+function habitMetric(habitId: string, target: number, unit = "sessions"): GoalMetric {
+    return { label: "Sessions", target, current: 0, unit, source: "habit", habitId, overridePinned: false };
+}
+
+/** Test-only control: records a completion through the habits provider. */
+function HabitCheckButton({ habitId, bucket }: { habitId: string; bucket: string }) {
+    const { hydrated, checkCompletion } = useHabits();
+    return <button type="button" disabled={!hydrated} onClick={() => checkCompletion(habitId, bucket)}>check {bucket}</button>;
 }
 
 function project(overrides: Partial<Project> = {}): Project {
@@ -94,16 +131,25 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
     };
 }
 
-async function mountWizard(data: InMemoryDataAccess, trackerId: string, period: GoalPeriod, onClose: () => void) {
+async function mountWizard(
+    data: InMemoryDataAccess,
+    trackerId: string,
+    period: GoalPeriod,
+    onClose: () => void,
+    controls?: ReactNode,
+) {
     const view = render(
         <TauriCloseProvider>
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId="wizard-owner">
                     <AppStateProvider>
                         <ProjectManagerProvider>
-                            <GoalProvider>
-                                <WizardHarness trackerId={trackerId} period={period} onClose={onClose} />
-                            </GoalProvider>
+                            <HabitProvider>
+                                <GoalProvider>
+                                    <WizardHarness trackerId={trackerId} period={period} onClose={onClose} />
+                                    {controls}
+                                </GoalProvider>
+                            </HabitProvider>
                         </ProjectManagerProvider>
                     </AppStateProvider>
                 </SyncProvider>
@@ -702,5 +748,329 @@ describe("CheckInWizard", () => {
 
         await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-11-01");
         await waitFor(() => expect(current()).toHaveValue("Alpha, Beta"));
+    });
+
+    it("renders the habit metric strip only for habit-linked goals", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const linked = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", sortOrder: 0, metric: habitMetric("habit-1", 3) });
+        const manual = buildGoalFixture({
+            id: "goal-manual", trackerId: tracker.id, title: "Read books", sortOrder: 1,
+            metric: { label: "Books", target: 2, current: 1, unit: "books", source: "manual", overridePinned: false },
+        });
+        const plain = buildGoalFixture({ id: "goal-plain", trackerId: tracker.id, title: "No metric", sortOrder: 2 });
+        await data.saveGoals([tracker], [linked, manual, plain], []);
+        await data.saveHabits([habit("habit-1")], []);
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: linked.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${linked.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions so far · 11 days left"));
+        expect(within(card).getByRole("button", { name: `Insert habit metric into current for ${linked.title}` })).toBeInTheDocument();
+        expect(screen.queryByLabelText(`Habit metric for ${manual.title}`)).not.toBeInTheDocument();
+        expect(screen.queryByLabelText(`Habit metric for ${plain.title}`)).not.toBeInTheDocument();
+    });
+
+    it("uses the metric target instead of the 14 daily buckets for both the strip and inserted prose", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits(
+            [habit("habit-1")],
+            ["2026-10-18", "2026-10-19", "2026-10-20"].map(bucket => habitCompletion("habit-1", bucket)),
+        );
+        const period = periodFor(tracker, "2026-10-20");
+        expect(period).toMatchObject({ periodStart: "2026-10-18", periodEnd: "2026-11-01" });
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+        const strip = await screen.findByLabelText(`Habit metric for ${goal.title}`);
+        const sentence = "3 of 3 sessions so far · 11 days left · target hit";
+        await waitFor(() => expect(within(strip).getByText(sentence, { exact: true })).toBeInTheDocument());
+        const current = screen.getByLabelText(`Current for ${goal.title}`);
+        expect(current).toHaveValue("");
+        await user.click(within(strip).getByRole("button", { name: `Insert habit metric into current for ${goal.title}` }));
+        expect(current).toHaveValue(sentence);
+    });
+
+    it("shows completed-period copy with short-by, over, and an exact hit for a past period", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const short = buildGoalFixture({ id: "goal-short", trackerId: tracker.id, title: "Short goal", sortOrder: 0, metric: habitMetric("habit-short", 8) });
+        const over = buildGoalFixture({ id: "goal-over", trackerId: tracker.id, title: "Over goal", sortOrder: 1, metric: habitMetric("habit-over", 3) });
+        const hit = buildGoalFixture({ id: "goal-hit", trackerId: tracker.id, title: "Hit goal", sortOrder: 2, metric: habitMetric("habit-hit", 5) });
+        const buckets = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"];
+        await data.saveGoals([tracker], [short, over, hit], []);
+        await data.saveHabits(
+            [habit("habit-short"), habit("habit-over"), habit("habit-hit")],
+            [
+                ...buckets.map(bucket => habitCompletion("habit-short", bucket)),
+                ...buckets.map(bucket => habitCompletion("habit-over", bucket)),
+                ...buckets.map(bucket => habitCompletion("habit-hit", bucket)),
+            ],
+        );
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        await screen.findByRole("article", { name: short.title });
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+
+        const strip = (title: string) => screen.getByLabelText(`Habit metric for ${title}`);
+        await waitFor(() => expect(strip(short.title)).toHaveTextContent("5 of 8 sessions · short by 3"));
+        expect(strip(over.title)).toHaveTextContent("5 of 3 sessions · 2 over");
+        expect(strip(hit.title)).toHaveTextContent("5 of 5 sessions · target hit");
+        expect(strip(short.title)).not.toHaveTextContent("so far");
+        expect(strip(short.title)).not.toHaveTextContent("left");
+    });
+
+    it("singularizes one day left in an in-progress period", async () => {
+        vi.setSystemTime(new Date(2026, 9, 30, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-1")], []);
+        const period = periodFor(tracker, "2026-10-30");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions so far · 1 day left"));
+        expect(strip()).not.toHaveTextContent("days left");
+    });
+
+    it("clamps days remaining at zero on the final day of the period", async () => {
+        vi.setSystemTime(new Date(2026, 9, 31, 12));
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-1")], []);
+        const period = periodFor(tracker, "2026-10-31");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions so far · 0 days left"));
+        expect(strip()).not.toHaveTextContent("-1");
+    });
+
+    it("shows the explicit zero-bucket message without a fabricated rate or insert", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 2) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-1", "monthly")], []);
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("No buckets in this period."));
+        expect(strip()).not.toHaveTextContent("0 of 0");
+        expect(within(strip()).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("shows the unavailable state for a broken habit link without an insert affordance", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-missing", 3) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-other")], []);
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("Habit metric unavailable: linked habit is missing."));
+        expect(strip()).not.toHaveTextContent("0 of");
+        expect(within(strip()).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("never writes current on mount or when habit completions change", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        const stored = buildGoalCheckInFixture({
+            id: "habit-row", goalId: goal.id, periodStart: "2026-10-18", current: "Typed by hand",
+        });
+        await data.saveGoals([tracker], [goal], [stored]);
+        await data.saveHabits([habit("habit-1")], [habitCompletion("habit-1", "2026-10-18")]);
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(
+            data, tracker.id, period, vi.fn(),
+            <HabitCheckButton habitId="habit-1" bucket="2026-10-19" />,
+        );
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
+        expect(current()).toHaveValue("Typed by hand");
+
+        await user.click(screen.getByRole("button", { name: "check 2026-10-19" }));
+        await waitFor(() => expect(strip()).toHaveTextContent("2 of 3 sessions so far · 11 days left"));
+        expect(current()).toHaveValue("Typed by hand");
+        expect(screen.getByLabelText(`Did for ${goal.title}`)).toHaveValue("");
+    });
+
+    it("preserves authored current byte-for-byte when switching periods with a habit strip", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        const authored = "  Typed by hand.\nKeep this spacing:  α & β.  ";
+        const stored = buildGoalCheckInFixture({ goalId: goal.id, periodStart: "2026-10-18", current: authored });
+        await data.saveGoals([tracker], [goal], [stored]);
+        await data.saveHabits([habit("habit-1")], [habitCompletion("habit-1", "2026-10-18")]);
+        const save = vi.spyOn(data, "saveGoals");
+        try {
+            const { user } = await mountWizard(data, tracker.id, periodFor(tracker, "2026-10-20"), vi.fn());
+            const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+            const strip = () => screen.getByLabelText(`Habit metric for ${goal.title}`);
+            await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
+            expect(current()).toHaveValue(authored);
+
+            await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+            await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions · short by 3"));
+            expect(current()).toHaveValue("");
+
+            await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-18");
+            await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
+            expect(current()).toHaveValue(authored);
+            expect((await data.loadGoals()).checkIns).toEqual([stored]);
+            expect(save).not.toHaveBeenCalled();
+        } finally {
+            save.mockRestore();
+        }
+    });
+
+    it("keeps evidence prefill on the first open of the current period with a habit metric present", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({
+            id: "goal-habit", trackerId: tracker.id, title: "Practice",
+            projectId: "project-1", metric: habitMetric("habit-1", 3),
+        });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-1")], [habitCompletion("habit-1", "2026-10-18")]);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {
+                "pm-a": pmTask({ id: "pm-a", title: "Alpha", status: "In Progress", appTaskId: undefined, sortOrder: 0 }),
+                "pm-b": pmTask({ id: "pm-b", title: "Beta", status: "In Progress", appTaskId: undefined, sortOrder: 1 }),
+            },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+        await waitFor(() => expect(current()).toHaveValue("Alpha, Beta"));
+        await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
+
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+        await waitFor(() => expect(current()).toHaveValue(""));
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions · short by 3"));
+    });
+
+    it("inserts the reading once, never duplicates it, and leaves the slip comparison unchanged", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        const previousRow = buildGoalCheckInFixture({
+            id: "previous-row", goalId: goal.id, periodStart: "2026-10-04",
+            planned: [{ text: "Ship the migration", dueDate: null }],
+        });
+        await data.saveGoals([tracker], [goal], [previousRow]);
+        await data.saveHabits(
+            [habit("habit-1")],
+            ["2026-10-18", "2026-10-19", "2026-10-20"].map(bucket => habitCompletion("habit-1", bucket)),
+        );
+        const period = periodFor(tracker, "2026-10-20");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        const sentence = "3 of 3 sessions so far · 11 days left · target hit";
+        await waitFor(() => expect(strip()).toHaveTextContent(sentence));
+
+        const comparison = within(card).getByRole("heading", { name: "Did not do" }).closest("section") as HTMLElement;
+        expect(within(comparison).getByText("Ship the migration")).toBeInTheDocument();
+
+        const insert = () => screen.getByRole("button", { name: `Insert habit metric into current for ${goal.title}` });
+        const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+        await user.click(insert());
+        expect(current()).toHaveValue(sentence);
+        expect(within(comparison).getByText("Ship the migration")).toBeInTheDocument();
+        expect(screen.getByLabelText(`Did for ${goal.title}`)).toHaveValue("");
+
+        await user.click(insert());
+        expect(current()).toHaveValue(sentence);
+
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+        const saved = (await data.loadGoals()).checkIns.find(row => row.periodStart === period.periodStart)!;
+        expect(saved.current).toBe(sentence);
+        expect(saved.did).toBe("");
+        expect(unmetPlannedItems(previousRow, saved)).toEqual([{ text: "Ship the migration", dueDate: null }]);
+    });
+
+    it("appends the reading as a new line when current already has authored prose", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        const stored = buildGoalCheckInFixture({
+            id: "habit-row", goalId: goal.id, periodStart: "2026-10-18", current: "Typed by hand",
+        });
+        await data.saveGoals([tracker], [goal], [stored]);
+        await data.saveHabits(
+            [habit("habit-1")],
+            ["2026-10-18", "2026-10-19", "2026-10-20"].map(bucket => habitCompletion("habit-1", bucket)),
+        );
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        const sentence = "3 of 3 sessions so far · 11 days left · target hit";
+        await waitFor(() => expect(strip()).toHaveTextContent(sentence));
+
+        const insert = () => screen.getByRole("button", { name: `Insert habit metric into current for ${goal.title}` });
+        const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+        await user.click(insert());
+        expect(current()).toHaveValue(`Typed by hand\n${sentence}`);
+        await user.click(insert());
+        expect(current()).toHaveValue(`Typed by hand\n${sentence}`);
+    });
+
+    it("updates the in-progress reading as completions arrive and shows a past period's final count", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ id: "goal-habit", trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits(
+            [habit("habit-1")],
+            ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-18", "2026-10-19"].map(bucket => habitCompletion("habit-1", bucket)),
+        );
+        const period = periodFor(tracker, "2026-10-20");
+        const { user } = await mountWizard(
+            data, tracker.id, period, vi.fn(),
+            <HabitCheckButton habitId="habit-1" bucket="2026-10-20" />,
+        );
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
+        await waitFor(() => expect(strip()).toHaveTextContent("2 of 3 sessions so far · 11 days left"));
+
+        await user.click(screen.getByRole("button", { name: "check 2026-10-20" }));
+        await waitFor(() => expect(strip()).toHaveTextContent("3 of 3 sessions so far · 11 days left · target hit"));
+
+        await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+        await waitFor(() => expect(strip()).toHaveTextContent("3 of 3 sessions · target hit"));
+        expect(strip()).not.toHaveTextContent("so far");
     });
 });

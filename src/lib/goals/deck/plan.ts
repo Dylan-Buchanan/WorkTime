@@ -1,8 +1,9 @@
-import type { Goal, GoalCheckIn, GoalTracker } from "../../../state/types";
+import type { Goal, GoalCheckIn, GoalTracker, Habit, HabitCompletion } from "../../../state/types";
 import type { LocalDateKey } from "../../todos/types";
 import { isGoalDateKey } from "../factories";
 import type { GoalPeriod } from "../periods";
-import { periodLabel, periodRangeLabel } from "../periods";
+import { goalGrid, periodAt, periodLabel, periodRangeLabel } from "../periods";
+import { habitMetricStreak, readHabitMetric } from "../habitMetric";
 import type { LifecycleDateProjection } from "../slips";
 import {
     buildSparkline,
@@ -45,6 +46,8 @@ export interface DeckPlanInput {
     checkIns: readonly GoalCheckIn[];
     period: GoalPeriod;
     now: Date;
+    habits?: readonly Habit[];
+    completions?: readonly HabitCompletion[];
     evidenceTitlesByGoal?: Readonly<Record<string, readonly string[]>>;
     localDateOf?: LifecycleDateProjection;
 }
@@ -102,13 +105,19 @@ function previousStoredRow(rows: readonly GoalCheckIn[], current: GoalCheckIn): 
     return previous;
 }
 
-function metricTextOf(metric: DeckMetricView | null): string | null {
+export function metricTextOf(metric: DeckMetricView | null): string | null {
     if (!metric) return null;
     const label = metric.label.trim();
     const unit = metric.unit.trim();
+    if (metric.source === "habit" && metric.unavailable) {
+        return label ? `${label}: unavailable` : "unavailable";
+    }
     const values = `${metric.current} / ${metric.target}`;
     const withUnit = unit ? `${values} ${unit}` : values;
-    return label ? `${label}: ${withUnit}` : withUnit;
+    const text = label ? `${label}: ${withUnit}` : withUnit;
+    if (metric.source !== "habit") return text;
+    if (!metric.met) return `${text} · short by ${Math.abs(metric.delta ?? 0)}`;
+    return (metric.delta ?? 0) > 0 ? `${text} · ${metric.delta} over` : text;
 }
 
 function appendixEntryFromRecap(recap: DeckRecapSlide): DeckAppendixEntry {
@@ -148,10 +157,30 @@ function buildRecapSlide(
     period: GoalPeriod,
     achievedInPeriod: boolean,
     evidenceTaskTitles: string[],
+    input: DeckPlanInput,
+    today: LocalDateKey,
 ): DeckRecapSlide {
     const summary = slipSummary(goal.id, rows, period.periodStart);
     const statusPill = current?.statusPill ?? "on-track";
     const placement = current ? (current.isFocus ? "body" : "appendix") : "body";
+    let metric: DeckMetricView | null;
+    let habitStreak: number | null = null;
+    if (goal.metric?.source === "habit") {
+        const { label, target, unit, habitId } = goal.metric;
+        const habits = input.habits ?? [];
+        const completions = input.completions ?? [];
+        const reading = readHabitMetric(goal.metric, habits, completions, period, today);
+        metric = {
+            label, current: reading.completed, target, unit, source: "habit", habitId, overridePinned: false,
+            ...(reading.unavailable ? { unavailable: true } : { met: reading.met, delta: reading.delta }),
+        };
+        habitStreak = habitMetricStreak(
+            { metric: goal.metric, createdAt: goal.createdAt }, goalGrid(input.tracker),
+            habits, completions, today, period.periodStart,
+        );
+    } else {
+        metric = metricSnapshot(goal);
+    }
     return {
         id: `recap:${goal.id}`,
         kind: "recap",
@@ -169,7 +198,8 @@ function buildRecapSlide(
         current: current ? current.current : "",
         planned: current ? current.planned.map(item => ({ text: item.text, dueDate: item.dueDate })) : [],
         missReason: current ? current.missReason : "",
-        metric: metricSnapshot(goal),
+        metric,
+        habitStreak,
         slipCount: summary.consecutiveSlips,
         slipBadge: summary.escalated,
         achievedInPeriod,
@@ -248,10 +278,10 @@ function buildAppendixSlide(entries: DeckAppendixEntry[]): DeckAppendixSlide {
     };
 }
 
-function buildSeries(goal: Goal, rows: readonly GoalCheckIn[], period: GoalPeriod): DeckSeries | null {
-    const sparkline = buildSparkline(goal.id, rows, period.periodStart);
-    if (!sparkline) return null;
-    return {
+function buildSeries(goal: Goal, rows: readonly GoalCheckIn[], input: DeckPlanInput, today: LocalDateKey): DeckSeries[] {
+    const sparkline = buildSparkline(goal.id, rows, input.period.periodStart);
+    const series: DeckSeries[] = [];
+    if (sparkline) series.push({
         goalId: goal.id,
         goalTitle: goal.title,
         kind: "status",
@@ -260,7 +290,25 @@ function buildSeries(goal: Goal, rows: readonly GoalCheckIn[], period: GoalPerio
         current: null,
         target: null,
         points: sparkline.points.map(point => ({ periodStart: point.periodStart, value: point.value })),
-    };
+    });
+    const metric = goal.metric;
+    if (metric?.source !== "habit") return series;
+    const habits = input.habits ?? [];
+    const completions = input.completions ?? [];
+    const reading = readHabitMetric(metric, habits, completions, input.period, today);
+    if (reading.unavailable) return series;
+    const grid = goalGrid(input.tracker);
+    const points = rows.flatMap(row => {
+        const candidate = periodAt(grid, row.periodStart);
+        if (!candidate || candidate.periodStart !== row.periodStart) return [];
+        const point = readHabitMetric(metric, habits, completions, candidate, today);
+        return point.unavailable ? [] : [{ periodStart: row.periodStart, value: point.completed }];
+    });
+    if (points.length >= 2) series.push({
+        goalId: goal.id, goalTitle: goal.title, kind: "metric", label: metric.label, unit: metric.unit,
+        current: reading.completed, target: metric.target, points,
+    });
+    return series;
 }
 
 /**
@@ -273,6 +321,7 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
     }
 
     const localDateOf = input.localDateOf ?? defaultLocalDateOf;
+    const today = localDateKey(input.now) as LocalDateKey;
     const goals = sortGoals(input.goals.filter(goal =>
         goal.trackerId === input.tracker.id &&
         isGoalIncludedInPeriod(goal, input.period, localDateOf)));
@@ -297,6 +346,8 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
             input.period,
             isAchievedInPeriod(goal, input.period, localDateOf),
             evidenceTitlesFor(goal.id, input.evidenceTitlesByGoal),
+            input,
+            today,
         ));
 
         if (current && previous) {
@@ -324,8 +375,7 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
             }
         }
 
-        const goalSeries = buildSeries(goal, rows, input.period);
-        if (goalSeries) series.push(goalSeries);
+        series.push(...buildSeries(goal, rows, input, today));
     }
 
     const slides: DeckSlide[] = [
@@ -467,6 +517,16 @@ export function findThinWarnings(plan: DeckPlan): DeckThinWarning[] {
             kind: "goal-without-plans",
             goalId: recap.goalId,
             message: `${recap.goalTitle} has no plans for the next period.`,
+        });
+    }
+
+    for (const recap of recaps) {
+        if (recap.metric?.unavailable !== true) continue;
+        warnings.push({
+            id: `thin:habit-link-missing:${recap.goalId}`,
+            kind: "habit-link-missing",
+            goalId: recap.goalId,
+            message: `${recap.goalTitle}'s linked habit is missing.`,
         });
     }
 
