@@ -422,15 +422,19 @@ describe("GoalsPage", () => {
         expect(within(row).queryByText("Linked habit is missing")).not.toBeInTheDocument();
     });
 
-    it("keeps a linked archived habit as the selected picker value", async () => {
+    it("keeps a linked archived habit as the selected picker value and counts its completions", async () => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ label: "Read" }) });
         await data.saveGoals([tracker], [goal], []);
         await data.saveHabits([
             habit("habit-read", { name: "Read", isArchived: true }),
             habit("habit-walk", { name: "Walk", position: 1 }),
-        ], []);
+        ], [{
+            id: "archived-completion", habitId: "habit-read", bucket: "2026-11-01",
+            createdAt: "2026-11-01T12:00:00.000Z", updatedAt: "2026-11-01T12:00:00.000Z",
+        }]);
         const { user } = await mount(data, "2026-11-02");
+        expect(await within(screen.getByLabelText(goal.title)).findByText("Read: 1 / 6 days · 12 days left")).toBeInTheDocument();
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
         const picker = screen.getByLabelText("Habit");
         expect(picker).toHaveValue("habit-read");
@@ -638,6 +642,61 @@ describe("GoalsPage", () => {
         expect(within(preview).getAllByLabelText("Slide title")[0]).toHaveValue(tracker.name);
         await user.click(within(preview).getByRole("button", { name: "Close preview" }));
         expect(preview).toBeEmptyDOMElement();
+    });
+
+    it("waits for habit hydration before enabling a linked tracker's deck", async () => {
+        const { data, tracker } = await oneTracker();
+        const plainTracker = buildGoalTrackerFixture({ id: "plain-tracker", name: "Plain tracker", sortOrder: 1 });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric() });
+        await data.saveGoals([tracker, plainTracker], [goal], []);
+        await data.saveHabits([habit("habit-read")], []);
+        const loadedHabits = await data.loadHabits();
+        let finishLoading!: (value: typeof loadedHabits) => void;
+        const load = vi.spyOn(data, "loadHabits").mockReturnValue(new Promise(resolve => { finishLoading = resolve; }));
+        try {
+            const { user, container } = await mount(data, "2026-10-20");
+            const entry = () => container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+            expect(load).toHaveBeenCalled();
+            expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+            expect(entry()).toHaveTextContent("Habits are still loading. Try again when they finish.");
+            expect(within(entry()).queryByRole("button", { name: "Build deck" })).not.toBeInTheDocument();
+            expect(container.querySelector('[data-goals-slot="deck-preview"]')).toBeEmptyDOMElement();
+
+            await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), plainTracker.id);
+            expect(within(entry()).getByRole("button", { name: "Build deck" })).toBeEnabled();
+            await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), tracker.id);
+            expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+
+            await act(async () => { finishLoading(loadedHabits); });
+            expect(await within(entry()).findByRole("button", { name: "Build deck" })).toBeEnabled();
+            expect(within(entry()).queryByText("Habits are still loading. Try again when they finish.")).not.toBeInTheDocument();
+        } finally {
+            load.mockRestore();
+        }
+    });
+
+    it("builds the deck preview from habit completions instead of the stored metric current", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 9, 20, 12));
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({
+            trackerId: tracker.id, title: "Practice goal",
+            metric: habitMetric({ label: "Practice", current: 9999, target: 3, unit: "sessions" }),
+        });
+        const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: "2026-10-04", did: "Practiced twice", isFocus: true });
+        await data.saveGoals([tracker], [goal], [checkIn]);
+        await data.saveHabits([habit("habit-read")], ["2026-10-05", "2026-10-06"].map(bucket => ({
+            id: `habit-read:${bucket}`, habitId: "habit-read", bucket,
+            createdAt: `${bucket}T12:00:00.000Z`, updatedAt: `${bucket}T12:00:00.000Z`,
+        })));
+        const { user, container } = await mount(data, "2026-10-20");
+        await user.click(await screen.findByRole("button", { name: "Build deck" }));
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        expect(within(preview).getByRole("heading", { name: `${tracker.name} deck preview` })).toBeInTheDocument();
+        expect(within(preview).getAllByText("Practice: 2 / 3 sessions · short by 1").length).toBeGreaterThan(0);
+        expect(preview).not.toHaveTextContent("9999");
+        for (const field of within(preview).getAllByRole("textbox")) expect(field).not.toHaveValue(expect.stringContaining("9999"));
+        expect((await data.loadGoals()).goals[0].metric?.current).toBe(9999);
     });
 
     it("shows the built cue for the completed period and still allows a same-period rebuild", async () => {

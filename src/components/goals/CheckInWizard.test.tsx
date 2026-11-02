@@ -766,10 +766,31 @@ describe("CheckInWizard", () => {
 
         const card = await screen.findByRole("article", { name: linked.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${linked.title}`);
-        await waitFor(() => expect(strip()).toHaveTextContent("0 of 14 sessions so far · 11 days left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions so far · 11 days left"));
         expect(within(card).getByRole("button", { name: `Insert habit metric into current for ${linked.title}` })).toBeInTheDocument();
         expect(screen.queryByLabelText(`Habit metric for ${manual.title}`)).not.toBeInTheDocument();
         expect(screen.queryByLabelText(`Habit metric for ${plain.title}`)).not.toBeInTheDocument();
+    });
+
+    it("uses the metric target instead of the 14 daily buckets for both the strip and inserted prose", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits(
+            [habit("habit-1")],
+            ["2026-10-18", "2026-10-19", "2026-10-20"].map(bucket => habitCompletion("habit-1", bucket)),
+        );
+        const period = periodFor(tracker, "2026-10-20");
+        expect(period).toMatchObject({ periodStart: "2026-10-18", periodEnd: "2026-11-01" });
+        const { user } = await mountWizard(data, tracker.id, period, vi.fn());
+        const strip = await screen.findByLabelText(`Habit metric for ${goal.title}`);
+        const sentence = "3 of 3 sessions so far · 11 days left · target hit";
+        await waitFor(() => expect(within(strip).getByText(sentence, { exact: true })).toBeInTheDocument());
+        const current = screen.getByLabelText(`Current for ${goal.title}`);
+        expect(current).toHaveValue("");
+        await user.click(within(strip).getByRole("button", { name: `Insert habit metric into current for ${goal.title}` }));
+        expect(current).toHaveValue(sentence);
     });
 
     it("shows completed-period copy with short-by, over, and an exact hit for a past period", async () => {
@@ -795,9 +816,9 @@ describe("CheckInWizard", () => {
         await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
 
         const strip = (title: string) => screen.getByLabelText(`Habit metric for ${title}`);
-        await waitFor(() => expect(strip(short.title)).toHaveTextContent("5 of 14 sessions · short by 3"));
-        expect(strip(over.title)).toHaveTextContent("5 of 14 sessions · 2 over");
-        expect(strip(hit.title)).toHaveTextContent("5 of 14 sessions · target hit");
+        await waitFor(() => expect(strip(short.title)).toHaveTextContent("5 of 8 sessions · short by 3"));
+        expect(strip(over.title)).toHaveTextContent("5 of 3 sessions · 2 over");
+        expect(strip(hit.title)).toHaveTextContent("5 of 5 sessions · target hit");
         expect(strip(short.title)).not.toHaveTextContent("so far");
         expect(strip(short.title)).not.toHaveTextContent("left");
     });
@@ -814,7 +835,7 @@ describe("CheckInWizard", () => {
 
         const card = await screen.findByRole("article", { name: goal.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
-        await waitFor(() => expect(strip()).toHaveTextContent("0 of 14 sessions so far · 1 day left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions so far · 1 day left"));
         expect(strip()).not.toHaveTextContent("days left");
     });
 
@@ -830,7 +851,7 @@ describe("CheckInWizard", () => {
 
         const card = await screen.findByRole("article", { name: goal.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
-        await waitFor(() => expect(strip()).toHaveTextContent("0 of 14 sessions so far · 0 days left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions so far · 0 days left"));
         expect(strip()).not.toHaveTextContent("-1");
     });
 
@@ -884,13 +905,43 @@ describe("CheckInWizard", () => {
         const card = await screen.findByRole("article", { name: goal.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
         const current = () => screen.getByLabelText(`Current for ${goal.title}`);
-        await waitFor(() => expect(strip()).toHaveTextContent("1 of 14 sessions so far · 11 days left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
         expect(current()).toHaveValue("Typed by hand");
 
         await user.click(screen.getByRole("button", { name: "check 2026-10-19" }));
-        await waitFor(() => expect(strip()).toHaveTextContent("2 of 14 sessions so far · 11 days left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("2 of 3 sessions so far · 11 days left"));
         expect(current()).toHaveValue("Typed by hand");
         expect(screen.getByLabelText(`Did for ${goal.title}`)).toHaveValue("");
+    });
+
+    it("preserves authored current byte-for-byte when switching periods with a habit strip", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, title: "Practice", metric: habitMetric("habit-1", 3) });
+        const authored = "  Typed by hand.\nKeep this spacing:  α & β.  ";
+        const stored = buildGoalCheckInFixture({ goalId: goal.id, periodStart: "2026-10-18", current: authored });
+        await data.saveGoals([tracker], [goal], [stored]);
+        await data.saveHabits([habit("habit-1")], [habitCompletion("habit-1", "2026-10-18")]);
+        const save = vi.spyOn(data, "saveGoals");
+        try {
+            const { user } = await mountWizard(data, tracker.id, periodFor(tracker, "2026-10-20"), vi.fn());
+            const current = () => screen.getByLabelText(`Current for ${goal.title}`);
+            const strip = () => screen.getByLabelText(`Habit metric for ${goal.title}`);
+            await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
+            expect(current()).toHaveValue(authored);
+
+            await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
+            await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions · short by 3"));
+            expect(current()).toHaveValue("");
+
+            await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-18");
+            await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
+            expect(current()).toHaveValue(authored);
+            expect((await data.loadGoals()).checkIns).toEqual([stored]);
+            expect(save).not.toHaveBeenCalled();
+        } finally {
+            save.mockRestore();
+        }
     });
 
     it("keeps evidence prefill on the first open of the current period with a habit metric present", async () => {
@@ -917,11 +968,11 @@ describe("CheckInWizard", () => {
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
         const current = () => screen.getByLabelText(`Current for ${goal.title}`);
         await waitFor(() => expect(current()).toHaveValue("Alpha, Beta"));
-        await waitFor(() => expect(strip()).toHaveTextContent("1 of 14 sessions so far · 11 days left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("1 of 3 sessions so far · 11 days left"));
 
         await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
         await waitFor(() => expect(current()).toHaveValue(""));
-        await waitFor(() => expect(strip()).toHaveTextContent("0 of 14 sessions · short by 3"));
+        await waitFor(() => expect(strip()).toHaveTextContent("0 of 3 sessions · short by 3"));
     });
 
     it("inserts the reading once, never duplicates it, and leaves the slip comparison unchanged", async () => {
@@ -943,7 +994,7 @@ describe("CheckInWizard", () => {
 
         const card = await screen.findByRole("article", { name: goal.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
-        const sentence = "3 of 14 sessions so far · 11 days left · target hit";
+        const sentence = "3 of 3 sessions so far · 11 days left · target hit";
         await waitFor(() => expect(strip()).toHaveTextContent(sentence));
 
         const comparison = within(card).getByRole("heading", { name: "Did not do" }).closest("section") as HTMLElement;
@@ -985,7 +1036,7 @@ describe("CheckInWizard", () => {
 
         const card = await screen.findByRole("article", { name: goal.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
-        const sentence = "3 of 14 sessions so far · 11 days left · target hit";
+        const sentence = "3 of 3 sessions so far · 11 days left · target hit";
         await waitFor(() => expect(strip()).toHaveTextContent(sentence));
 
         const insert = () => screen.getByRole("button", { name: `Insert habit metric into current for ${goal.title}` });
@@ -1013,13 +1064,13 @@ describe("CheckInWizard", () => {
 
         const card = await screen.findByRole("article", { name: goal.title });
         const strip = () => within(card).getByLabelText(`Habit metric for ${goal.title}`);
-        await waitFor(() => expect(strip()).toHaveTextContent("2 of 14 sessions so far · 11 days left"));
+        await waitFor(() => expect(strip()).toHaveTextContent("2 of 3 sessions so far · 11 days left"));
 
         await user.click(screen.getByRole("button", { name: "check 2026-10-20" }));
-        await waitFor(() => expect(strip()).toHaveTextContent("3 of 14 sessions so far · 11 days left · target hit"));
+        await waitFor(() => expect(strip()).toHaveTextContent("3 of 3 sessions so far · 11 days left · target hit"));
 
         await user.selectOptions(screen.getByLabelText("Check-in period"), "2026-10-04");
-        await waitFor(() => expect(strip()).toHaveTextContent("3 of 14 sessions · target hit"));
+        await waitFor(() => expect(strip()).toHaveTextContent("3 of 3 sessions · target hit"));
         expect(strip()).not.toHaveTextContent("so far");
     });
 });

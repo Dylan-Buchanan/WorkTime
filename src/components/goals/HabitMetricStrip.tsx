@@ -17,10 +17,10 @@ type AvailableReading = Extract<HabitMetricReading, { unavailable: false }>;
 
 const button = "rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50";
 
-/** Count against the period's bucket target; prose is derived, never stored. */
-function readingCopy(reading: AvailableReading, unit: string): string {
+/** Count against the metric target; prose is derived, never stored. */
+function readingCopy(reading: AvailableReading, target: number, unit: string): string {
     const trimmedUnit = unit.trim();
-    const label = `${reading.completed} of ${reading.totalBuckets}${trimmedUnit ? ` ${trimmedUnit}` : ""}`;
+    const label = `${reading.completed} of ${target}${trimmedUnit ? ` ${trimmedUnit}` : ""}`;
     if (reading.partial) {
         const days = reading.daysRemaining === 1 ? "day" : "days";
         return `${label} so far · ${reading.daysRemaining} ${days} left${reading.met ? " · target hit" : ""}`;
@@ -52,7 +52,7 @@ const HabitMetricReading: React.FC<HabitMetricReadingProps> = ({ goal, period, c
         ? readHabitMetric(metric, Object.values(state.habits), Object.values(state.completions), period, today)
         : null;
     const text = reading !== null && !reading.unavailable && reading.totalBuckets > 0
-        ? readingCopy(reading, metric.unit)
+        ? readingCopy(reading, metric.target, metric.unit)
         : null;
     const status = reading === null
         ? "Loading habit progress…"
