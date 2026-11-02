@@ -13,12 +13,15 @@ export const DECK_TARGET_SECONDS = 300;
 
 export interface DeckMetricView {
     label: string;
-    current: number;
+    current: number | null;
     target: number;
     unit: string;
     source: GoalMetric["source"];
     habitId?: string;
     overridePinned: boolean;
+    met?: boolean;
+    delta?: number;
+    unavailable?: boolean;
 }
 export interface DeckSlideBase<K extends DeckSlideKind> {
     readonly id: string;
@@ -48,6 +51,7 @@ export interface DeckRecapSlide extends DeckSlideBase<"recap"> {
     planned: DeckRecapItem[];
     missReason: string;
     metric: DeckMetricView | null;
+    habitStreak: number | null;
     slipCount: number;
     slipBadge: boolean;
     achievedInPeriod: boolean;
@@ -112,7 +116,7 @@ export type DeckSlide =
     | DeckTitleSlide | DeckRecapSlide | DeckMissesSlide | DeckNextPlansSlide
     | DeckProgressSlide | DeckClosingSlide | DeckAppendixSlide;
 export type DeckThinWarningKind =
-    | "miss-without-reason" | "goal-without-plans" | "empty-period";
+    | "miss-without-reason" | "goal-without-plans" | "habit-link-missing" | "empty-period";
 export interface DeckThinWarning {
     id: string;
     kind: DeckThinWarningKind;

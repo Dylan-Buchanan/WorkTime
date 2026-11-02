@@ -57,6 +57,7 @@ const pageToday = (today?: LocalDateKey): LocalDateKey => {
 
 export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp }) => {
     const goals = useGoals();
+    const habits = useHabits();
     const { state, hydrated } = goals;
     const today = pageToday(todayProp);
     const [trackerForm, setTrackerForm] = useState<GoalTracker | "new" | null>(null);
@@ -141,6 +142,8 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 tracker,
                 goals: Object.values(state.goals),
                 checkIns: Object.values(state.checkIns),
+                habits: Object.values(habits.state.habits),
+                completions: Object.values(habits.state.completions),
                 period,
                 now: new Date(),
             });

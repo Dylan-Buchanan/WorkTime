@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GoalCheckIn } from "../../../state/types";
+import type { GoalCheckIn, Habit, HabitCompletion } from "../../../state/types";
 import type { LocalDateKey } from "../../todos/types";
 import type { GoalPeriod } from "../periods";
 import { goalGrid, periodAt } from "../periods";
@@ -20,6 +20,7 @@ import {
     moveGoalToAppendix,
     moveGoalToBody,
     moveSlide,
+    metricTextOf,
     refreshDeckDerivations,
     setSlideHidden,
     suggestedSecondsForSlide,
@@ -178,6 +179,161 @@ describe("buildDeckPlan archived trackers", () => {
     it("rejects an archived tracker", () => {
         expect(() => buildDeckPlan(buildInput({ tracker: buildArchivedTrackerFixture() })))
             .toThrow(new RangeError("Cannot build a deck for an archived tracker"));
+    });
+});
+
+describe("habit metrics in the deck plan", () => {
+    const metric = { label: "Practice", current: 9999, target: 3, unit: "sessions", source: "habit" as const, habitId: "habit", overridePinned: false };
+    const habit: Habit = {
+        id: "habit", name: "Practice", description: "", color: "", frequency: "daily", position: 0,
+        isArchived: false, createdAt: TRACKER.createdAt, updatedAt: TRACKER.createdAt,
+    };
+    const completed = (...buckets: string[]): HabitCompletion[] => buckets.map(bucket => ({
+        id: bucket, habitId: habit.id, bucket, createdAt: TRACKER.createdAt, updatedAt: TRACKER.createdAt,
+    }));
+    const target = goal("habit-goal", { title: "Practice goal", metric });
+    const habitInput = (overrides: Partial<DeckPlanInput> = {}): DeckPlanInput => buildInput({
+        goals: [target], habits: [habit], completions: completed("2026-10-18", "2026-10-19"),
+        checkIns: [checkIn(target.id, PERIOD.periodStart, { isFocus: false })],
+        now: new Date(2026, 10, 2, 12), ...overrides,
+    });
+
+    it("derives the requested recap and appendix reading, ignores stored current, and stays deterministic without mutation", () => {
+        const input = habitInput();
+        const before = snapshot(input);
+        const plan = buildDeckPlan(input);
+        expect(recap(plan, target.id).metric).toEqual({
+            label: "Practice", current: 2, target: 3, unit: "sessions", source: "habit", habitId: "habit",
+            overridePinned: false, met: false, delta: -1,
+        });
+        expect(plan.appendixEntriesByGoal[target.id].metricText).toBe("Practice: 2 / 3 sessions · short by 1");
+        expect(buildDeckPlan(input)).toEqual(plan);
+        expect(snapshot(input)).toEqual(before);
+    });
+
+    it.each(["manual", "liftingtracker"] as const)("keeps the exact %s metric snapshot shape and copy", source => {
+        const stored = { label: "Sessions", current: 7, target: 9, unit: "visits", source, overridePinned: true };
+        const plan = buildDeckPlan(habitInput({ goals: [goal(target.id, { metric: stored })] }));
+        expect(recap(plan, target.id).metric).toEqual(stored);
+        expect(recap(plan, target.id).habitStreak).toBeNull();
+        expect(metricTextOf(recap(plan, target.id).metric)).toBe("Sessions: 7 / 9 visits");
+        expect(recap(buildPlan({ goals: [goal("no-metric")] }), "no-metric").habitStreak).toBeNull();
+    });
+
+    it("derives historical periods from completions even with a newly linked stored metric", () => {
+        const historical = periodAt(goalGrid(TRACKER), "2026-10-04")!;
+        const plan = buildDeckPlan(habitInput({
+            period: historical, completions: completed("2026-10-04", "2026-10-05", "2026-10-18"),
+        }));
+        expect(recap(plan, target.id).metric).toMatchObject({ current: 2, met: false, delta: -1 });
+        expect(metricTextOf(recap(plan, target.id).metric)).not.toContain("9999");
+    });
+
+    it.each([
+        [2, "Practice: 2 / 3 sessions · short by 1"],
+        [3, "Practice: 3 / 3 sessions"],
+        [4, "Practice: 4 / 3 sessions · 1 over"],
+    ])("formats %i completions with the shared short/exact/over wording", (count, expected) => {
+        const plan = buildDeckPlan(habitInput({ completions: completed(...Array.from({ length: count }, (_, i) => `2026-10-${18 + i}`)) }));
+        const reading = recap(plan, target.id).metric!;
+        expect(metricTextOf(reading)).toBe(expected);
+        expect(plan.appendixEntriesByGoal[target.id].metricText).toBe(expected);
+        expect(metricTextOf({ ...reading, label: "", unit: "" })).toBe(expected.replace("Practice: ", "").replace(" sessions", ""));
+    });
+
+    it("marks missing links unavailable, adds a plan-only warning in order, and never renders a zero reading", () => {
+        const plan = buildDeckPlan(habitInput({ habits: [], checkIns: [] }));
+        const item = recap(plan, target.id);
+        expect(item.metric).toEqual({
+            label: "Practice", current: null, target: 3, unit: "sessions", source: "habit", habitId: "habit",
+            overridePinned: false, unavailable: true,
+        });
+        expect(item.habitStreak).toBeNull();
+        expect(metricTextOf(item.metric)).toBe("Practice: unavailable");
+        expect(plan.appendixEntriesByGoal[target.id].metricText).not.toContain("0 / 3");
+        expect(plan.warnings.map(warning => warning.kind)).toEqual(["goal-without-plans", "habit-link-missing", "empty-period"]);
+        expect(plan.warnings[1]).toEqual({
+            id: `thin:habit-link-missing:${target.id}`, kind: "habit-link-missing", goalId: target.id,
+            message: "Practice goal's linked habit is missing.",
+        });
+        expect(findThinWarnings(plan)).toEqual(plan.warnings);
+        const progress = slide(plan, "progress");
+        expect(progress.kind === "progress" && progress.series).toEqual([]);
+    });
+
+    it("adds a metric series after unchanged status history using only on-grid stored rows", () => {
+        const rows = ["2026-09-20", "2026-10-04", "2026-10-05", "2026-10-18", "2026-11-01"] as LocalDateKey[];
+        const plan = buildDeckPlan(habitInput({
+            checkIns: rows.map((start, index) => checkIn(target.id, start, { id: `row-${index}` })),
+            completions: completed("2026-10-04", "2026-10-18", "2026-10-19", "2026-11-01"),
+        }));
+        const progress = slide(plan, "progress");
+        if (progress.kind !== "progress") throw new Error("Missing progress");
+        expect(progress.series.map(series => series.kind)).toEqual(["status", "metric"]);
+        expect(progress.series[0].points.map(point => point.periodStart)).toEqual(rows.slice(0, 4));
+        expect(progress.series[1]).toEqual({
+            goalId: target.id, goalTitle: target.title, kind: "metric", label: "Practice", unit: "sessions",
+            current: 2, target: 3,
+            points: [{ periodStart: "2026-10-04", value: 1 }, { periodStart: "2026-10-18", value: 2 }],
+        });
+        const manual = buildDeckPlan(habitInput({
+            goals: [goal(target.id, { title: target.title })], checkIns: rows.map((start, index) => checkIn(target.id, start, { id: `row-${index}` })),
+        }));
+        const manualProgress = slide(manual, "progress");
+        expect(manualProgress.kind === "progress" && manualProgress.series[0]).toEqual(progress.series[0]);
+    });
+
+    it.each([0, 1])("keeps status history but omits metric history with %i on-grid rows", count => {
+        const starts: LocalDateKey[] = ["2026-10-05", "2026-10-06", ...(["2026-10-18"] as LocalDateKey[]).slice(0, count)];
+        const plan = buildDeckPlan(habitInput({ checkIns: starts.map(start => checkIn(target.id, start)) }));
+        const progress = slide(plan, "progress");
+        expect(progress.kind === "progress" && progress.series.map(series => series.kind)).toEqual(["status"]);
+    });
+
+    it("walks included periods for hit streaks, breaking at zero counts and stopping at creation", () => {
+        const through = periodAt(goalGrid(TRACKER), "2026-11-01")!;
+        const oneTarget = { ...target, metric: { ...metric, target: 1 } };
+        const input = habitInput({
+            goals: [oneTarget], period: through, now: new Date(2026, 10, 16, 12),
+            completions: completed("2026-10-04", "2026-10-18", "2026-11-01"),
+        });
+        expect(recap(buildDeckPlan(input), target.id).habitStreak).toBe(3);
+        expect(recap(buildDeckPlan({ ...input, completions: completed("2026-10-04", "2026-11-01") }), target.id).habitStreak).toBe(1);
+        expect(recap(buildDeckPlan({ ...input, goals: [{ ...oneTarget, createdAt: "2026-10-18T12:00:00" }] }), target.id).habitStreak).toBe(2);
+    });
+
+    it("does not count numeric metric or streak fields as recap words, while counting appendix copy", () => {
+        const plan = buildDeckPlan(habitInput());
+        const item = recap(plan, target.id);
+        const numbersOnly: DeckRecapSlide = {
+            ...item, habitStreak: null, metric: { ...item.metric!, current: 50, target: 100, met: undefined, delta: undefined },
+        };
+        expect(countDeckWords(item)).toBe(countDeckWords(numbersOnly));
+        expect(countDeckWords({ ...item, habitStreak: 123, metric: { ...item.metric!, met: true, delta: 45 } })).toBe(countDeckWords(item));
+        const appendix = slide(plan, "appendix") as DeckAppendixSlide;
+        const withoutMetric = { ...appendix, entries: appendix.entries.map(entry => ({ ...entry, metricText: null })) };
+        expect(countDeckWords(appendix) - countDeckWords(withoutMetric)).toBe(metricTextOf(item.metric)!.split(/\s+/).length);
+    });
+
+    it("retains edited appendix copy through derived recap edits and promote/demote without mutating the original", () => {
+        const original = buildDeckPlan(habitInput());
+        const before = snapshot(original);
+        const edited: DeckPlan = {
+            ...original, appendixEntriesByGoal: {
+                ...original.appendixEntriesByGoal,
+                [target.id]: { ...original.appendixEntriesByGoal[target.id], metricText: "My edited metric line" },
+            },
+            slides: original.slides.map(item => item.kind === "recap"
+                ? { ...item, habitStreak: 2, metric: { ...item.metric!, current: 4, met: true, delta: 1 } } : item),
+        };
+        const body = moveGoalToBody(refreshDeckDerivations(edited), target.id);
+        const restored = moveGoalToAppendix(body, target.id);
+        expect((slide(restored, "appendix") as DeckAppendixSlide).entries[0].metricText).toBe("My edited metric line");
+        expect(metricTextOf(recap(restored, target.id).metric)).toBe("Practice: 4 / 3 sessions · 1 over");
+        expect(recap(restored, target.id).habitStreak).toBe(2);
+        recap(restored, target.id).metric!.delta = 10;
+        expect(recap(edited, target.id).metric!.delta).toBe(1);
+        expect(original).toEqual(before);
     });
 });
 

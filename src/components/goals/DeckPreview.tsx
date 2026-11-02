@@ -19,6 +19,7 @@ import { findDeckCopyChanges, type DeckSlideCopyChange } from "../../lib/goals/d
 import { periodLabel, periodRangeLabel } from "../../lib/goals/periods";
 import {
     estimateDeck,
+    metricTextOf,
     moveGoalToAppendix,
     moveGoalToBody,
     moveSlide,
@@ -560,9 +561,12 @@ export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExpor
                         {slide.slipBadge && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-800">
                             {slide.slipCount} consecutive slips
                         </span>}
+                        {slide.habitStreak !== null && slide.habitStreak >= 2 && <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-emerald-800">
+                            hit target {slide.habitStreak} periods running
+                        </span>}
                     </div>
                     {slide.metric && <p className="text-sm text-neutral-600">
-                        Metric: {slide.metric.label} · {slide.metric.current} / {slide.metric.target} {slide.metric.unit}
+                        {metricTextOf(slide.metric)}
                     </p>}
                     <label className="block text-xs font-medium text-neutral-600">
                         Did
@@ -689,7 +693,7 @@ export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExpor
                     {slide.series.length === 0
                         ? <p className="text-sm text-neutral-500">No status history is available yet.</p>
                         : <ul className="space-y-2">
-                            {slide.series.map(series => <li key={`${slide.id}:series:${series.goalId}`} className="rounded border border-neutral-200 bg-white/60 p-2">
+                            {slide.series.map(series => <li key={`${slide.id}:series:${series.goalId}:${series.kind}`} className="rounded border border-neutral-200 bg-white/60 p-2">
                                 <p className="text-sm font-medium">{series.goalTitle}</p>
                                 <p className="text-xs text-neutral-500">{series.label}{series.unit ? ` (${series.unit})` : ""}</p>
                                 <p className="text-xs text-neutral-600">
