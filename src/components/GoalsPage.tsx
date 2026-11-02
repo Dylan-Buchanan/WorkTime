@@ -36,6 +36,7 @@ const achieveButton = "rounded border border-emerald-700 bg-emerald-950/40 px-3 
 const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-900/40";
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
+const habitsLoadingMessage = "Habits are still loading. Try again when they finish.";
 /** Singular/plural words for a habit frequency; the count only ever affects the plural. */
 const HABIT_UNIT_WORDS: Record<HabitFrequency, readonly [string, string]> = {
     daily: ["day", "days"],
@@ -75,6 +76,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const hasTrackers = Object.keys(state.trackers).length > 0;
     const tracker = trackers.find(row => row.id === state.ui.selectedTrackerId) ?? trackers[0];
     const allGoals = tracker ? ordered(Object.values(state.goals).filter(row => row.trackerId === tracker.id)) : [];
+    const hasHabitMetric = allGoals.some(goal => goal.metric?.source === "habit");
     const visible = allGoals.filter(row => lifecycle === "all" || row.lifecycle === lifecycle);
     const edit = editingGoal ? state.goals[editingGoal] : null;
     const due = tracker ? dueState(goalGrid(tracker), today) : null;
@@ -96,7 +98,9 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
             firstPeriodLabel: checkInFirst ? periodLabel(checkInFirst) : null,
         };
     const deckCompleted = checkInGrid ? mostRecentCompletedPeriod(checkInGrid, today) : null;
-    const deckAvailability: DeckEntryAvailability = tracker === undefined
+    const deckAvailability: DeckEntryAvailability = hasHabitMetric && !habits.hydrated
+        ? { kind: "not-ready", message: habitsLoadingMessage }
+        : tracker === undefined
         ? { kind: "not-ready", message: "No tracker selected." }
         : tracker.isArchived
             ? { kind: "not-ready", message: "This tracker is archived. Reactivate it to build a deck." }
@@ -135,6 +139,10 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         attempt(() => goals.reorderGoals(tracker.id, fullOrder));
     }
     function buildDeck(period: GoalPeriod) {
+        if (hasHabitMetric && !habits.hydrated) {
+            setError(habitsLoadingMessage);
+            return;
+        }
         if (!tracker) return;
         try {
             // Always regenerate in memory: no plan cache, persistence, or archive.
