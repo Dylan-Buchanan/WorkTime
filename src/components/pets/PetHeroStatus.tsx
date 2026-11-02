@@ -83,7 +83,7 @@ export const PetHeroStatus: React.FC<PetHeroStatusProps> = ({ name, schedule, no
         >
             <div className="relative h-32 w-32" role="img" aria-label={`Countdown to ${due ? due.label.toLowerCase() : "nothing due"}`}>
                 <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
-                    <circle cx="60" cy="60" r={RING_RADIUS} fill="none" stroke="#262626" strokeWidth="8" />
+                    <circle cx="60" cy="60" r={RING_RADIUS} fill="none" stroke="var(--color-neutral-800)" strokeWidth="8" />
                     <circle
                         cx="60"
                         cy="60"

@@ -7,6 +7,7 @@ import { TimerPanel } from "./components/TimerPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useSounds } from "./hooks/useSounds";
 import { useMediaQuery } from "./hooks/useMediaQuery";
+import { useThemePreference } from "./hooks/useThemePreference";
 import { ProjectManagerProvider, usePM } from "./state/ProjectManagerContext";
 import { HabitProvider } from "./state/HabitContext";
 import { GoalProvider } from "./state/GoalContext";
@@ -65,39 +66,46 @@ const RouteLoadingFallback: React.FC = () => (
     </div>
 );
 
-const App: React.FC = () => (
-    <BrowserRouter>
-        <AuthProvider>
-            <TauriCloseProvider>
-                <Suspense fallback={<RouteLoadingFallback />}>
-                <Routes>
-                <Route element={<RedirectIfAuthenticated />}>
-                    <Route path="/login" element={<LoginPage />} />
-                    <Route path="/signup" element={<SignupPage />} />
-                </Route>
-                <Route path="/reset-password" element={<ResetPasswordPage />} />
-                <Route path="/auth/github/callback" element={<GithubOAuthCallbackPage />} />
-                <Route path={TAURI_WINDOWS_ENTRY_PATH} element={<GithubOAuthCallbackPage />} />
-                <Route element={<RequireAuth />}>
-                    <Route element={<AuthenticatedShell />}>
-                        <Route path="/" element={<MainLayout />} />
-                        <Route path="/projects" element={<ErrorBoundary><ProjectManagerRoute /></ErrorBoundary>} />
-                        <Route path="/analytics" element={<AnalyticsPage />} />
-                        <Route path="/habits" element={<HabitsPage />} />
-                        <Route path="/goals" element={<GoalsPage />} />
-                        <Route path="/todos" element={<TodosPage />} />
-                        <Route path="/pet" element={<PetPage />} />
-                        <Route path="/week" element={<WeekOverviewPage />} />
-                        <Route path="/integrations" element={<ErrorBoundary><AuthenticatedIntegrationsRoute /></ErrorBoundary>} />
-                    </Route>
-                </Route>
-                <Route path="*" element={<UnknownRoute />} />
-                </Routes>
-                </Suspense>
-            </TauriCloseProvider>
-        </AuthProvider>
-    </BrowserRouter>
-);
+const App: React.FC = () => {
+    // Mount the theme controller above the router so the public auth pages are
+    // themed too. index.html already applied the stored theme before first paint;
+    // this keeps System in sync with the OS and reacts to settings changes.
+    useThemePreference();
+
+    return (
+        <BrowserRouter>
+            <AuthProvider>
+                <TauriCloseProvider>
+                    <Suspense fallback={<RouteLoadingFallback />}>
+                        <Routes>
+                            <Route element={<RedirectIfAuthenticated />}>
+                                <Route path="/login" element={<LoginPage />} />
+                                <Route path="/signup" element={<SignupPage />} />
+                            </Route>
+                            <Route path="/reset-password" element={<ResetPasswordPage />} />
+                            <Route path="/auth/github/callback" element={<GithubOAuthCallbackPage />} />
+                            <Route path={TAURI_WINDOWS_ENTRY_PATH} element={<GithubOAuthCallbackPage />} />
+                            <Route element={<RequireAuth />}>
+                                <Route element={<AuthenticatedShell />}>
+                                    <Route path="/" element={<MainLayout />} />
+                                    <Route path="/projects" element={<ErrorBoundary><ProjectManagerRoute /></ErrorBoundary>} />
+                                    <Route path="/analytics" element={<AnalyticsPage />} />
+                                    <Route path="/habits" element={<HabitsPage />} />
+                                    <Route path="/goals" element={<GoalsPage />} />
+                                    <Route path="/todos" element={<TodosPage />} />
+                                    <Route path="/pet" element={<PetPage />} />
+                                    <Route path="/week" element={<WeekOverviewPage />} />
+                                    <Route path="/integrations" element={<ErrorBoundary><AuthenticatedIntegrationsRoute /></ErrorBoundary>} />
+                                </Route>
+                            </Route>
+                            <Route path="*" element={<UnknownRoute />} />
+                        </Routes>
+                    </Suspense>
+                </TauriCloseProvider>
+            </AuthProvider>
+        </BrowserRouter>
+    );
+};
 
 const ProjectManagerRoute: React.FC = () => {
     const { session } = useAuth();

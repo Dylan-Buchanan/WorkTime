@@ -30,6 +30,27 @@ vi.mock("./lib/data/defaultDataAccess", () => ({
 
 beforeEach(() => { auth.session = { user: { id: "pet-route-owner" } }; vi.mocked(createDefaultDataAccess).mockClear(); });
 
+describe("App theme bootstrap", () => {
+    it("applies the stored theme at the document root for a public auth route", async () => {
+        localStorage.setItem("worktime:theme:v1", "light");
+        auth.session = null;
+        window.history.pushState({}, "", "/login");
+        render(<App />);
+
+        expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+        await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "light"));
+    });
+
+    it("falls back to Dark at the document root when no preference is stored", async () => {
+        auth.session = null;
+        window.history.pushState({}, "", "/login");
+        render(<App />);
+
+        expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+        await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "dark"));
+    });
+});
+
 describe("App /pet routing", () => {
     it("registers the lazy /pet route behind the authenticated shell", async () => {
         window.history.pushState({}, "", "/pet");

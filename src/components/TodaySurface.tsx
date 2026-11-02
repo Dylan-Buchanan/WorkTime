@@ -47,7 +47,7 @@ const TaskRow: React.FC<{
         <button
             type="button"
             onClick={() => onSelectTask(task.id)}
-            className="min-w-0 flex-1 rounded text-left transition-colors hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+            className="min-w-0 flex-1 rounded text-left transition-colors hover:text-neutral-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
             aria-label={`Select ${task.title}`}
         >
             <span className="flex flex-wrap items-center gap-1.5">
@@ -171,7 +171,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                 onClick={toggleExpanded}
                 aria-expanded={expanded}
                 aria-controls={CONTENT_ID}
-                className="relative flex w-full items-start gap-2.5 p-3 text-left transition-colors hover:bg-white/[0.02] focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+                className="relative flex w-full items-start gap-2.5 p-3 text-left transition-colors hover:bg-neutral-500/[0.05] focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
             >
                 <span className="mt-0.5 shrink-0 text-neutral-500" aria-hidden>
                     {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -182,13 +182,13 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                 <span className="min-w-0 flex-1">
                     <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Today</span>
                     <span className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-neutral-400">
-                        <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5">
+                        <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
                             {tasks.length === 0 ? "No tasks" : `${taskCountLabel(tasks.length)} · ${formatPomodoroCount(remainingPomodoros)} left`}
                         </span>
-                        <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5">
+                        <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
                             {habits.length === 0 ? "No habits" : `${habitsCompleted}/${habits.length} habits`}
                         </span>
-                        <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5">
+                        <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
                             {pomodoros.count === 0 ? "No pomodoros" : `${formatPomodoroCount(pomodoros.count)} · ${formatDurationMinutes(pomodoros.minutes)}`}
                         </span>
                     </span>
@@ -196,7 +196,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
             </button>
 
             {expanded && (
-                <div id={CONTENT_ID} className="app-scrollbar relative max-h-[min(65vh,32rem)] overflow-y-auto border-t border-white/5 px-3 pb-3">
+                <div id={CONTENT_ID} className="app-scrollbar relative max-h-[min(65vh,32rem)] overflow-y-auto border-t border-neutral-500/15 px-3 pb-3">
                     {notice && (
                         <p role="status" className="mt-3 rounded-md bg-amber-400/5 px-2.5 py-1.5 text-[10px] text-amber-300/90 ring-1 ring-inset ring-amber-400/10">
                             {notice}

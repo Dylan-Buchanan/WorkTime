@@ -101,7 +101,7 @@ const ScheduleTimeSelect: React.FC<{ label: string; value: string; options: stri
                     id={listboxId}
                     role="listbox"
                     aria-label={`${label} time options`}
-                    className="absolute left-0 right-0 top-full z-30 mt-1 max-h-44 overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-950 p-1 shadow-xl shadow-black/40 [scrollbar-color:#525252_#171717] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-neutral-600 [&::-webkit-scrollbar-track]:bg-neutral-900"
+                    className="absolute left-0 right-0 top-full z-30 mt-1 max-h-44 overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-950 p-1 shadow-xl shadow-black/40 [scrollbar-color:var(--color-neutral-600)_var(--color-neutral-950)] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-neutral-600 [&::-webkit-scrollbar-track]:bg-neutral-900"
                 >
                     {options.map((time, index) => {
                         const selected = time === value;
@@ -232,7 +232,7 @@ export const ProjectsSidebar: React.FC<{ onSelectProject?: () => void }> = ({ on
                                     type="button"
                                     onMouseEnter={() => play("hover")}
                                     onClick={() => setNewProjectColor(color)}
-                                    className={`h-7 w-7 rounded-full border transition ${newProjectColor === color ? "border-white shadow-[0_0_0_2px_rgba(99,102,241,0.4)]" : "border-transparent"}`}
+                                    className={`h-7 w-7 rounded-full border transition ${newProjectColor === color ? "border-neutral-50 shadow-[0_0_0_2px_rgba(99,102,241,0.4)]" : "border-transparent"}`}
                                     style={{ background: color }}
                                     title={`Use ${color}`}
                                 />

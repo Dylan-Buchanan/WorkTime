@@ -13,6 +13,8 @@ import {
     subscribeToAgentProvider,
 } from "../lib/agent";
 import { DEFAULT_START_OF_DAY, isTimeOfDay } from "../lib/settings";
+import { THEME_PREFERENCE_OPTIONS } from "../lib/theme";
+import { useThemePreference } from "../hooks/useThemePreference";
 import { TimeOfDayInput } from "./TimeOfDayInput";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
@@ -30,6 +32,8 @@ export const SettingsPanel: React.FC = () => {
     const [agentSaveMessage, setAgentSaveMessage] = useState("");
     const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
     const toggleSection = (section: string) => setExpandedSections((current) => ({ ...current, [section]: !current[section] }));
+    const { preference: themePreference, resolvedTheme, setPreference: setThemePreference } = useThemePreference();
+    const resolvedThemeLabel = THEME_PREFERENCE_OPTIONS.find((option) => option.id === resolvedTheme)?.label ?? "Dark";
     React.useEffect(() => {
         setLocal(s || null);
     }, [s]);
@@ -51,6 +55,39 @@ export const SettingsPanel: React.FC = () => {
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
                 Settings
             </h3>
+            <section className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button type="button" aria-expanded={Boolean(expandedSections.appearance)} aria-controls="settings-appearance-content" onClick={() => toggleSection("appearance")} className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-800/40">
+                    {expandedSections.appearance ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                    <span>Appearance</span>
+                </button>
+                <div id="settings-appearance-content" hidden={!expandedSections.appearance} className="space-y-2 p-2">
+                    <p className="text-[10px] text-neutral-500 leading-relaxed">
+                        Stored only in this browser or Tauri webview. System follows your device setting and updates live.
+                    </p>
+                    <fieldset className="grid grid-cols-3 gap-1 rounded border border-neutral-700 bg-neutral-950/40 p-1">
+                        <legend className="sr-only">Theme</legend>
+                        {THEME_PREFERENCE_OPTIONS.map((option) => (
+                            <label
+                                key={option.id}
+                                className={`flex cursor-pointer items-center justify-center rounded px-2 py-1.5 text-[10px] font-medium transition-colors focus-within:ring-1 focus-within:ring-indigo-400 ${themePreference === option.id ? "bg-indigo-600 text-white" : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"}`}
+                            >
+                                <input
+                                    type="radio"
+                                    name="theme-preference"
+                                    value={option.id}
+                                    checked={themePreference === option.id}
+                                    onChange={() => { setThemePreference(option.id); play("pressSide"); }}
+                                    className="sr-only"
+                                />
+                                {option.label}
+                            </label>
+                        ))}
+                    </fieldset>
+                    <p role="status" aria-live="polite" className="text-[10px] text-neutral-500">
+                        Current theme: {resolvedThemeLabel}{themePreference === "system" ? " (system)" : ""}
+                    </p>
+                </div>
+            </section>
             <section className="rounded-md border border-neutral-800 bg-neutral-900/30">
                 <button type="button" aria-expanded={Boolean(expandedSections.base)} aria-controls="settings-base-content" onClick={() => toggleSection("base")} className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-800/40">
                     {expandedSections.base ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
@@ -154,7 +191,7 @@ export const SettingsPanel: React.FC = () => {
                         } catch {
                             setAgentSaveStatus("error"); setAgentSaveMessage("Unable to save the API key locally. Check browser storage permissions and try again.");
                         }
-                    }} className="flex-1 px-2 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-[11px] font-medium">Save API key</button>
+                    }} className="flex-1 px-2 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-[11px] font-medium text-white">Save API key</button>
                     <button type="button" disabled={!hasAgentApiKey} onMouseEnter={() => hasAgentApiKey && play("hover")} onClick={() => {
                         try {
                             clearAgentApiKey(); setAgentSaveStatus("success"); setAgentSaveMessage("API key cleared from this surface."); play("pressSide");
@@ -171,7 +208,7 @@ export const SettingsPanel: React.FC = () => {
                     disabled={!isTimeOfDay(local.start_of_day) || !isTimeOfDay(local.end_of_day)}
                     onMouseEnter={() => play("hover")}
                     onClick={() => { updateSettings(local); play("pressSide"); }}
-                    className="w-full mt-2 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 text-[11px] font-medium tracking-wide"
+                    className="w-full mt-2 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 text-[11px] font-medium tracking-wide text-white"
                 >Save</button>
             )}
             <div className="pt-1 border-t border-neutral-800" />
@@ -239,10 +276,10 @@ export const SettingsPanel: React.FC = () => {
                                     setShowReset(false);
                                     setConfirm("");
                                 }}
-                                className={`flex-1 px-2 py-1 rounded font-semibold border text-white transition-colors ${
+                                className={`flex-1 px-2 py-1 rounded font-semibold border transition-colors ${
                                     confirm.trim().toLowerCase() === "yes"
-                                        ? "bg-red-600 hover:bg-red-500 active:bg-red-700 border-red-500"
-                                        : "bg-neutral-800 border-neutral-700 opacity-40 cursor-not-allowed"
+                                        ? "bg-red-600 hover:bg-red-500 active:bg-red-700 border-red-500 text-white"
+                                        : "bg-neutral-800 border-neutral-700 opacity-40 cursor-not-allowed text-neutral-500"
                                 }`}
                             >
                                 Delete Data

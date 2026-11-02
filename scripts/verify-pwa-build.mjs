@@ -24,7 +24,7 @@ if (exists("manifest.webmanifest")) {
 
 if (exists("index.html")) {
     const html = read("index.html");
-    for (const marker of ["<title>WorkTime</title>", "rel=\"manifest\"", "apple-touch-icon", "theme-color", "apple-mobile-web-app-capable", "apple-mobile-web-app-status-bar-style"]) {
+    for (const marker of ["<title>WorkTime</title>", "rel=\"manifest\"", "apple-touch-icon", "theme-color", "apple-mobile-web-app-capable", "apple-mobile-web-app-status-bar-style", "data-theme=\"dark\"", "worktime:theme:v1"]) {
         if (!html.includes(marker)) failures.push(`dist/index.html is missing ${marker}`);
     }
 }

@@ -161,7 +161,7 @@ export const PetTimelineTab: React.FC = () => {
                                 </div>
                                 <button
                                     type="submit"
-                                    className="self-start rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                                    className="self-start rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                                 >
                                     Add event
                                 </button>
@@ -242,7 +242,7 @@ export const PetTimelineTab: React.FC = () => {
                                                         <button
                                                             type="button"
                                                             onClick={saveEdit}
-                                                            className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                                                            className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                                                         >
                                                             Save
                                                         </button>

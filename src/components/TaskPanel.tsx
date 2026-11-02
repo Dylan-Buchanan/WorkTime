@@ -282,7 +282,7 @@ export const TaskPanel: React.FC = () => {
                     }}
                     className="w-14 bg-neutral-800/60 border border-neutral-700 rounded px-1 py-1.5 sm:py-1 text-[11px] text-center focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
-                <button type="submit" onMouseEnter={() => play("hover")} className="px-3 py-1.5 sm:px-2 sm:py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
+                <button type="submit" onMouseEnter={() => play("hover")} className="px-3 py-1.5 sm:px-2 sm:py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white transition-colors">
                     Add
                 </button>
             </form>

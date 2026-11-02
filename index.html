@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/pwa-192x192.png" />
@@ -10,6 +10,28 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>WorkTime</title>
+    <script>
+      // Apply the surface-local theme before first paint so a Light or System
+      // preference never flashes the Dark default while the app boots. The key
+      // and accepted values mirror src/lib/theme/themePreference.ts.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("worktime:theme:v1");
+          var dark =
+            stored === "light"
+              ? false
+              : stored === "system"
+                ? window.matchMedia("(prefers-color-scheme: dark)").matches
+                : true;
+          var theme = dark ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", theme);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#0a0a0a" : "#fafafa");
+        } catch (error) {
+          // Unavailable storage keeps the static Dark default from <html>.
+        }
+      })();
+    </script>
   </head>
 
   <body>

@@ -119,7 +119,7 @@ export const PetProfileCard: React.FC<PetProfileCardProps> = ({
                         <button
                             type="button"
                             onClick={submitProfile}
-                            className="rounded bg-neutral-100 px-2 py-1 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                            className="rounded bg-neutral-100 px-2 py-1 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                         >
                             Save profile
                         </button>

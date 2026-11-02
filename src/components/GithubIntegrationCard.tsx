@@ -646,7 +646,7 @@ function RepoRow({
             {expanded && (
                 <div className="mt-2 rounded border border-neutral-800 bg-neutral-950/40 p-2">
                     {repo.isStale && (
-                        <p className="mb-2 text-[9px] leading-relaxed text-amber-500/80">
+                        <p className="mb-2 text-[9px] leading-relaxed text-amber-600">
                             This repository is no longer accessible on GitHub. Its settings stay editable and already-imported tasks are unaffected.
                         </p>
                     )}

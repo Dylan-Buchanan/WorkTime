@@ -135,7 +135,7 @@ export const PetFixationTab: React.FC = () => {
                         </div>
                         <button
                             type="submit"
-                            className="self-start rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                            className="self-start rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                         >
                             Add fixation
                         </button>
@@ -174,7 +174,7 @@ export const PetFixationTab: React.FC = () => {
                                                 <button
                                                     type="button"
                                                     onClick={saveEdit}
-                                                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                                                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                                                 >
                                                     Save
                                                 </button>
@@ -223,7 +223,7 @@ export const PetFixationTab: React.FC = () => {
                                                 type="button"
                                                 aria-label={`Resolve ${fixation.label}`}
                                                 onClick={() => resolve(fixation.id)}
-                                                className="shrink-0 rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                                                className="shrink-0 rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                                             >
                                                 Resolve
                                             </button>

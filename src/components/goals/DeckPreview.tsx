@@ -126,7 +126,7 @@ const SlideCard: React.FC<SlideCardProps> = ({
             {dragHandle}
             <div className="ml-auto flex flex-wrap items-center gap-1">{controls}</div>
         </div>
-        <div className="aspect-video overflow-auto rounded-lg bg-stone-50 p-4 text-neutral-900 shadow-inner sm:p-6">
+        <div className="theme-static aspect-video overflow-auto rounded-lg bg-stone-50 p-4 text-neutral-900 shadow-inner sm:p-6">
             <label className="block">
                 <span className="sr-only">Slide title</span>
                 <input

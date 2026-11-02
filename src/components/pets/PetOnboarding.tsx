@@ -53,7 +53,7 @@ export const PetProfileSetup: React.FC<PetProfileSetupProps> = ({ onSaveProfile 
                 {error && <p role="alert" className="text-[11px] text-red-300">{error}</p>}
                 <button
                     type="submit"
-                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                 >
                     Save profile
                 </button>

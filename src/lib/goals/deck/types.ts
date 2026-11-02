@@ -1,4 +1,4 @@
-import type { GoalCheckIn } from "../../../state/types";
+import type { GoalCheckIn, GoalMetric } from "../../../state/types";
 import type { LocalDateKey } from "../../todos/types";
 import type { GoalPeriod } from "../periods";
 
@@ -16,7 +16,8 @@ export interface DeckMetricView {
     current: number;
     target: number;
     unit: string;
-    source: "manual" | "liftingtracker";
+    source: GoalMetric["source"];
+    habitId?: string;
     overridePinned: boolean;
 }
 export interface DeckSlideBase<K extends DeckSlideKind> {

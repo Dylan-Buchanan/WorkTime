@@ -170,7 +170,7 @@ export const PetScheduleItemForm: React.FC<PetScheduleItemFormProps> = ({ submit
             <div className="flex gap-2">
                 <button
                     type="submit"
-                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                 >
                     {submitLabel}
                 </button>

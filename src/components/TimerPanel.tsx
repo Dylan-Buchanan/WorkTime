@@ -99,7 +99,7 @@ const ProjectionCard: React.FC<ProjectionCardProps> = ({ projection, scope }) =>
                     </div>
                     <button
                         type="button"
-                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-white/5 hover:text-neutral-200"
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-500/10 hover:text-neutral-200"
                         onClick={() => setInfoOpen((open) => !open)}
                         aria-expanded={infoOpen}
                         aria-controls={rulesId}
@@ -108,7 +108,7 @@ const ProjectionCard: React.FC<ProjectionCardProps> = ({ projection, scope }) =>
                         <Info size={14} aria-hidden />
                     </button>
                 </div>
-                {infoOpen && <div id={rulesId} className="relative mt-3 border-t border-white/5 pt-3 text-[10px] leading-relaxed text-neutral-500">{rules}</div>}
+                {infoOpen && <div id={rulesId} className="relative mt-3 border-t border-neutral-500/15 pt-3 text-[10px] leading-relaxed text-neutral-500">{rules}</div>}
             </section>
         );
     }
@@ -131,7 +131,7 @@ const ProjectionCard: React.FC<ProjectionCardProps> = ({ projection, scope }) =>
                 <div className="flex items-center gap-1">
                     <button
                         type="button"
-                        className="grid h-7 w-7 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-white/5 hover:text-neutral-200"
+                        className="grid h-7 w-7 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-500/10 hover:text-neutral-200"
                         onClick={() => setInfoOpen((open) => !open)}
                         aria-expanded={infoOpen}
                         aria-controls={rulesId}
@@ -165,16 +165,16 @@ const ProjectionCard: React.FC<ProjectionCardProps> = ({ projection, scope }) =>
             </div>
 
             <div className="relative mt-3 flex flex-wrap gap-1.5 text-[10px] text-neutral-400">
-                {projection.dueTodayPomodoros > EPSILON && <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-1">Due now · {formatPomodoroCount(projection.dueTodayPomodoros)}</span>}
-                {projection.unscheduledPomodoros > EPSILON && <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-1">Flexible · {formatPomodoroCount(projection.unscheduledPomodoros)}</span>}
-                {projection.dueThisWeekPomodoros > EPSILON && <span className="rounded-full border border-white/5 bg-white/[0.03] px-2 py-1">Later this week · {formatPomodoroCount(projection.dueThisWeekPomodoros)}</span>}
+                {projection.dueTodayPomodoros > EPSILON && <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-1">Due now · {formatPomodoroCount(projection.dueTodayPomodoros)}</span>}
+                {projection.unscheduledPomodoros > EPSILON && <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-1">Flexible · {formatPomodoroCount(projection.unscheduledPomodoros)}</span>}
+                {projection.dueThisWeekPomodoros > EPSILON && <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-1">Later this week · {formatPomodoroCount(projection.dueThisWeekPomodoros)}</span>}
             </div>
             {projection.extendsPastWindow && (
                 <div className="relative mt-3 rounded-md bg-amber-400/5 px-2.5 py-1.5 text-[10px] text-amber-300/90 ring-1 ring-inset ring-amber-400/10">
                     {isWeekly ? "May spill into next week—consider reprioritizing." : "May spill into tomorrow—consider reprioritizing."}
                 </div>
             )}
-            {infoOpen && <div id={rulesId} className="relative mt-3 border-t border-white/5 pt-3 text-[10px] leading-relaxed text-neutral-500">{rules}</div>}
+            {infoOpen && <div id={rulesId} className="relative mt-3 border-t border-neutral-500/15 pt-3 text-[10px] leading-relaxed text-neutral-500">{rules}</div>}
         </section>
     );
 };
@@ -188,7 +188,7 @@ const ProjectionSwitcher: React.FC<{ projections: { daily: FinishProjection; wee
 
     return (
         <div className="w-full">
-            <div className="mb-2 grid grid-cols-2 rounded-lg bg-neutral-900/80 p-1 ring-1 ring-inset ring-white/5" aria-label="Projection range">
+            <div className="mb-2 grid grid-cols-2 rounded-lg bg-neutral-900/80 p-1 ring-1 ring-inset ring-neutral-500/10" aria-label="Projection range">
                 {options.map((option) => {
                     const selected = option.scope === scope;
                     const OptionIcon = option.icon;
@@ -201,7 +201,7 @@ const ProjectionSwitcher: React.FC<{ projections: { daily: FinishProjection; wee
                                     ? option.scope === "daily"
                                         ? "bg-sky-400/10 text-sky-200 shadow-sm ring-1 ring-inset ring-sky-400/15"
                                         : "bg-fuchsia-400/10 text-fuchsia-200 shadow-sm ring-1 ring-inset ring-fuchsia-400/15"
-                                    : "text-neutral-500 hover:bg-white/[0.03] hover:text-neutral-300"
+                                    : "text-neutral-500 hover:bg-neutral-500/[0.08] hover:text-neutral-300"
                             }`}
                             onClick={() => setScope(option.scope)}
                             aria-pressed={selected}
@@ -512,7 +512,7 @@ export const TimerPanel: React.FC = () => {
                             <div
                                 className="absolute inset-0 rounded-full"
                                 style={{
-                                    background: timer ? `conic-gradient(#6366F1 ${pct * 100}%, #262626 ${pct * 100}%)` : "#1f2937",
+                                    background: timer ? `conic-gradient(#6366F1 ${pct * 100}%, var(--color-neutral-800) ${pct * 100}%)` : "var(--color-neutral-800)",
                                     transition: "background 0.6s linear",
                                 }}
                                 aria-hidden

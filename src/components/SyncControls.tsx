@@ -46,7 +46,7 @@ export const SyncControls: React.FC = () => {
                 {pendingCount > 0 && (
                     <span
                         data-testid="pending-badge"
-                        className="ml-1 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-neutral-950"
+                        className="ml-1 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-black"
                     >
                         {pendingCount}
                     </span>
@@ -155,7 +155,7 @@ export const UnsyncedBanner: React.FC = () => {
                 onClick={() => {
                     void sync({ reason: "manual" }).catch(() => undefined);
                 }}
-                className="rounded bg-amber-600 px-2 py-0.5 text-neutral-950 hover:bg-amber-500"
+                className="rounded bg-amber-600 px-2 py-0.5 text-black hover:bg-amber-500"
             >
                 Sync now
             </button>

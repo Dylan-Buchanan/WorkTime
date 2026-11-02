@@ -332,7 +332,8 @@ export interface GoalMetric {
     target: number;
     current: number;
     unit: string;
-    source: "manual" | "liftingtracker";
+    source: "manual" | "liftingtracker" | "habit";
+    habitId?: string;
     overridePinned: boolean;
 }
 

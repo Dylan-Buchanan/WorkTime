@@ -76,7 +76,7 @@ export const PetTrainingTagDialog: React.FC<PetTrainingTagDialogProps> = ({
                     <button
                         type="button"
                         onClick={onSave}
-                        className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                        className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                     >
                         Save tags
                     </button>

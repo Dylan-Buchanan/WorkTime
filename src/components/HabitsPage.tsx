@@ -261,7 +261,7 @@ const HabitForm: React.FC<{
                 <span className="block text-[10px] text-neutral-400">Color</span>
                 <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Habit color">
                     {HABIT_COLORS.map((color) => (
-                        <button key={color} type="button" role="radio" aria-checked={draft.color === color} aria-label={`Choose ${color}`} onClick={() => onChange((current) => ({ ...current, color }))} className={`h-6 w-6 rounded-full border-2 ${draft.color === color ? "border-white" : "border-transparent"}`} style={{ backgroundColor: color }} />
+                        <button key={color} type="button" role="radio" aria-checked={draft.color === color} aria-label={`Choose ${color}`} onClick={() => onChange((current) => ({ ...current, color }))} className={`h-6 w-6 rounded-full border-2 ${draft.color === color ? "border-neutral-50" : "border-transparent"}`} style={{ backgroundColor: color }} />
                     ))}
                 </div>
                 <label className="block text-[10px] text-neutral-400" htmlFor="habit-frequency">Frequency</label>
@@ -353,7 +353,7 @@ const HabitCard: React.FC<HabitCardProps> = ({ habit, period, now, completions, 
                                     aria-label={`${formatBucket(bucket, habit.frequency)}${isToday ? " today" : ""}${checked ? ", completed" : ", not completed"}`}
                                     title={`${formatBucket(bucket, habit.frequency)}${!checkable ? " — future" : ""}`}
                                     onClick={(event) => { event.stopPropagation(); onCheck(bucket, checked); }}
-                                    className={`relative flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md border leading-none transition ${checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-600 hover:border-neutral-500"} ${isToday ? "ring-2 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
+                                    className={`relative flex h-12 w-12 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md border leading-none transition ${checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-600 hover:border-neutral-500"} ${isToday ? "ring-2 ring-neutral-50/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
                                     style={checked ? { backgroundColor: habit.color, borderColor: habit.color } : undefined}
                                 >
                                     <span className={`${checked ? "text-[12px] font-semibold" : "text-[12px] font-medium"} leading-none`}>{label.top}</span>
@@ -411,7 +411,7 @@ const Habit365Grid: React.FC<{
                                 aria-label={label}
                                 title={`${formatBucket(cell.bucket, habit.frequency)}${!cell.checkable ? " - future" : ""}`}
                                 onClick={(event) => { event.stopPropagation(); onCheck(cell.bucket, cell.checked); }}
-                                className={`relative flex aspect-square w-full items-center justify-center rounded border text-[10px] transition ${cell.checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-400 hover:border-neutral-500"} ${cell.bucket === todayBucket ? "ring-1 ring-white/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
+                                className={`relative flex aspect-square w-full items-center justify-center rounded border text-[10px] transition ${cell.checked ? "text-white" : "border-neutral-700 bg-neutral-950/70 text-neutral-400 hover:border-neutral-500"} ${cell.bucket === todayBucket ? "ring-1 ring-neutral-50/80 ring-offset-1 ring-offset-neutral-900" : ""} disabled:cursor-not-allowed disabled:opacity-35`}
                                 style={cell.checked ? { backgroundColor: habit.color, borderColor: habit.color } : undefined}
                             >
                                 <span className="font-medium leading-none">{date.getDate()}</span>

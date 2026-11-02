@@ -15,7 +15,10 @@ export function isGoalDateKey(v: unknown): v is GoalTracker["cadenceAnchorAt"] {
 const base = (v: Record<string, unknown>) => nonempty(v.id) && timestamp(v.createdAt) && timestamp(v.updatedAt);
 export function isGoalMetric(v: unknown): v is GoalMetric {
     return object(v) && nonempty(v.label) && finite(v.target) && finite(v.current) && text(v.unit) &&
-        (v.source === "manual" || v.source === "liftingtracker") && typeof v.overridePinned === "boolean";
+        typeof v.overridePinned === "boolean" &&
+        (v.source === "habit"
+            ? nonempty(v.habitId) && v.overridePinned === false
+            : (v.source === "manual" || v.source === "liftingtracker") && !("habitId" in v));
 }
 export function isGoalTracker(v: unknown): v is GoalTracker {
     return object(v) && base(v) && nonempty(v.name) && text(v.purpose) && !/[\r\n]/.test(v.purpose) &&

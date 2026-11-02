@@ -405,7 +405,7 @@ export const AnalyticsPage: React.FC = () => {
                             <BarChart data={trendData}>
                                 <CartesianGrid
                                     strokeDasharray="3 3"
-                                    stroke="#333"
+                                    stroke="var(--color-neutral-800)"
                                 />
                                 <XAxis
                                     dataKey="date"
@@ -414,11 +414,17 @@ export const AnalyticsPage: React.FC = () => {
                                 <YAxis />
                                 <Tooltip
                                     contentStyle={{
-                                        background: "#111",
+                                        background: "var(--color-neutral-950)",
+                                        color: "var(--color-neutral-200)",
+                                        border: "1px solid var(--color-neutral-700)",
                                         fontSize: 12,
                                     }}
                                 />
-                                <Legend />
+                                <Legend
+                                    formatter={(value) => (
+                                        <span style={{ color: "var(--color-neutral-300)" }}>{value}</span>
+                                    )}
+                                />
                                 <Bar
                                     dataKey="focusMins"
                                     stackId="a"

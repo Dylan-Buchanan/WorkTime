@@ -52,7 +52,7 @@ export const ToastViewport: React.FC<ToastViewportProps> = ({ toasts, onDismiss,
                         <button
                             type="button"
                             onClick={() => onAction(toast)}
-                            className="rounded px-2 py-1 font-medium text-white hover:underline"
+                            className="rounded px-2 py-1 font-medium text-neutral-50 hover:underline"
                         >
                             {toast.action.label}
                         </button>

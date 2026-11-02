@@ -40,6 +40,6 @@ export const CheckInEntry: React.FC<CheckInEntryProps> = ({ trackerId, availabil
     >
         <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-300" />
         <span>Check in · {availability.periodLabel}</span>
-        <span aria-hidden="true" className="rounded-full bg-indigo-500/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-50">Period open</span>
+        <span aria-hidden="true" className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">Period open</span>
     </button>;
 };

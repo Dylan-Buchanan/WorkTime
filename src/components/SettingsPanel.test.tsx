@@ -13,6 +13,7 @@ import {
     AGENT_PROVIDER_STORAGE_KEY,
     getAgentApiKey,
 } from "../lib/agent";
+import { THEME_PREFERENCE_STORAGE_KEY } from "../lib/theme";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -40,6 +41,20 @@ function expandSection(name: string) {
     const button = screen.getByRole("button", { name, expanded: false });
     fireEvent.click(button);
     return screen.getByRole("button", { name, expanded: true });
+}
+
+/** Replaces window.matchMedia with one list the test can flip. */
+function installMatchMedia(initialMatches: boolean) {
+    window.matchMedia = (() => ({
+        matches: initialMatches,
+        media: "(prefers-color-scheme: dark)",
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
 }
 
 describe("SettingsPanel reset scope", () => {
@@ -193,7 +208,7 @@ describe("SettingsPanel reset scope", () => {
     it("starts all sections collapsed, toggles them independently, and resets on remount", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const view = render(wrap(data, <SettingsPanel />));
-        const names = ["Base settings", "Day hour settings", "Agent API key"];
+        const names = ["Appearance", "Base settings", "Day hour settings", "Agent API key"];
         for (const name of names) {
             expect(screen.getByRole("button", { name, expanded: false })).toBeInTheDocument();
         }
@@ -213,5 +228,46 @@ describe("SettingsPanel reset scope", () => {
         for (const name of names) {
             expect(screen.getByRole("button", { name, expanded: false })).toBeInTheDocument();
         }
+    });
+
+    it("offers Light, Dark, and System with Dark selected by default and applies on selection", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <SettingsPanel />));
+
+        expandSection("Appearance");
+        const light = screen.getByRole("radio", { name: "Light" });
+        const dark = screen.getByRole("radio", { name: "Dark" });
+        const system = screen.getByRole("radio", { name: "System" });
+
+        expect(light).not.toBeChecked();
+        expect(dark).toBeChecked();
+        expect(system).not.toBeChecked();
+        expect(screen.getByRole("status")).toHaveTextContent("Current theme: Dark");
+
+        fireEvent.click(light);
+
+        expect(light).toBeChecked();
+        expect(dark).not.toBeChecked();
+        expect(localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe("light");
+        expect(document.documentElement).toHaveAttribute("data-theme", "light");
+        expect(screen.getByRole("status")).toHaveTextContent("Current theme: Light");
+
+        fireEvent.click(dark);
+
+        expect(localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe("dark");
+        expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    });
+
+    it("resolves System against the OS preference and announces the resolved theme", async () => {
+        installMatchMedia(false);
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <SettingsPanel />));
+
+        expandSection("Appearance");
+        fireEvent.click(screen.getByRole("radio", { name: "System" }));
+
+        expect(localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe("system");
+        expect(document.documentElement).toHaveAttribute("data-theme", "light");
+        expect(screen.getByRole("status")).toHaveTextContent("Current theme: Light (system)");
     });
 });

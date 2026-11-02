@@ -89,7 +89,7 @@ const ScheduleCard: React.FC<{
                 <button
                     type="button"
                     onClick={() => onCheck(entry)}
-                    className="shrink-0 rounded-lg bg-neutral-100 px-2 py-1 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                    className="shrink-0 rounded-lg bg-neutral-100 px-2 py-1 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                 >
                     ✓ Log {entry.label.toLowerCase()}
                 </button>

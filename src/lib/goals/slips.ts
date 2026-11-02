@@ -1,4 +1,4 @@
-import type { Goal, GoalCheckIn } from "../../state/types";
+import type { Goal, GoalCheckIn, GoalMetric } from "../../state/types";
 import type { LocalDateKey } from "../todos/types";
 import { compareLocalDates, localDateFromKey, localDateKey } from "../todos/calendar";
 import { isGoalDateKey } from "./factories";
@@ -27,7 +27,8 @@ export interface GoalMetricSnapshot {
     readonly current: number;
     readonly target: number;
     readonly unit: string;
-    readonly source: "manual" | "liftingtracker";
+    readonly source: GoalMetric["source"];
+    readonly habitId?: string;
     readonly overridePinned: boolean;
 }
 
@@ -211,5 +212,6 @@ export function buildSparkline(
 export function metricSnapshot(goal: Goal): GoalMetricSnapshot | null {
     if (!goal.metric) return null;
     const { label, current, target, unit, source, overridePinned } = goal.metric;
-    return { label, current, target, unit, source, overridePinned };
+    return { label, current, target, unit, source, overridePinned,
+        ...(source === "habit" ? { habitId: goal.metric.habitId } : {}) };
 }

@@ -364,7 +364,7 @@ export const PetTrainingTab: React.FC = () => {
                             value={sessionSkillIds}
                             onChange={setSessionSkillIds}
                         />
-                        <button type="submit" className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white">
+                        <button type="submit" className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50">
                             Log training session
                         </button>
                     </form>
@@ -402,7 +402,7 @@ export const PetTrainingTab: React.FC = () => {
                         </div>
                         <button
                             type="submit"
-                            className="self-start rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                            className="self-start rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                         >
                             Add skill
                         </button>
@@ -453,7 +453,7 @@ export const PetTrainingTab: React.FC = () => {
                                                 <button
                                                     type="button"
                                                     onClick={saveEdit}
-                                                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white"
+                                                    className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50"
                                                 >
                                                     Save
                                                 </button>
@@ -596,7 +596,7 @@ export const PetTrainingTab: React.FC = () => {
                                                 value={editingSessionSkillIds}
                                                 onChange={setEditingSessionSkillIds}
                                             />
-                                            <button type="button" onClick={saveSessionEdit} className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-white">
+                                            <button type="button" onClick={saveSessionEdit} className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[11px] font-medium text-neutral-900 hover:bg-neutral-50">
                                                 Save tags
                                             </button>
                                             <button type="button" onClick={() => setEditingSessionId(null)} className="rounded-lg bg-neutral-800 px-3 py-1.5 text-[11px] text-neutral-300 hover:bg-neutral-700">

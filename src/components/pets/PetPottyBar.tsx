@@ -16,7 +16,7 @@ export const PetPottyBar: React.FC<PetPottyBarProps> = ({ onPotty, onTraining })
             <button
                 type="button"
                 onClick={onPotty}
-                className="flex-1 rounded-xl bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-900 hover:bg-white"
+                className="flex-1 rounded-xl bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-900 hover:bg-neutral-50"
             >
                 🚽 Potty
             </button>

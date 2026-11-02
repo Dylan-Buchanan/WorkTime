@@ -130,7 +130,7 @@ export function GithubOAuthCallbackPage({
                 <div className="space-y-4">
                     <p role="alert" className="text-sm text-red-300">{status.message}</p>
                     <div className="flex flex-wrap gap-2">
-                        <Link to="/integrations" className="rounded bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-white">
+                        <Link to="/integrations" className="rounded bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-neutral-50">
                             Back to Integrations
                         </Link>
                         {status.offerLogin && (
