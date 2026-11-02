@@ -22,6 +22,8 @@ export interface HabitState {
 
 export interface HabitContextValue {
     state: HabitState;
+    /** Consumers must gate derived readings on this; an empty habit map is not "no completions". */
+    hydrated: boolean;
     createHabit: (input: NewHabitInput) => Habit;
     updateHabit: (id: string, patch: Partial<Habit>) => void;
     archiveHabit: (id: string, archive?: boolean) => void;
@@ -353,6 +355,7 @@ export const HabitProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const value: HabitContextValue = {
         state,
+        hydrated,
         createHabit,
         updateHabit,
         archiveHabit,

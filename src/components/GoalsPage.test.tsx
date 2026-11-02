@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { GoalsPage } from "./GoalsPage";
 import { GoalProvider } from "../state/GoalContext";
+import { HabitProvider } from "../state/HabitContext";
 import { AppStateProvider } from "../state/AppStateContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { DataProvider } from "../state/DataContext";
@@ -12,7 +13,7 @@ import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
-import type { Project } from "../state/types";
+import type { GoalMetric, Habit, Project } from "../state/types";
 import type { LocalDateKey } from "../lib/todos/types";
 import type { DeckPlan } from "../lib/goals/deck/types";
 import { serializeGoalSet } from "../lib/goals/goalSetFile";
@@ -48,7 +49,7 @@ vi.mock("@dnd-kit/core", async importOriginal => {
 });
 
 function tree(data: InMemoryDataAccess, today?: LocalDateKey) {
-    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><AppStateProvider><ProjectManagerProvider><GoalProvider><GoalsPage today={today} /></GoalProvider></ProjectManagerProvider></AppStateProvider></SyncProvider></DataProvider></TauriCloseProvider>;
+    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goals-page-owner"><HabitProvider><AppStateProvider><ProjectManagerProvider><GoalProvider><GoalsPage today={today} /></GoalProvider></ProjectManagerProvider></AppStateProvider></HabitProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
 async function mount(data = new InMemoryDataAccess(makeAppState()), today?: LocalDateKey) {
     const view = render(tree(data, today));
@@ -76,6 +77,30 @@ function project(overrides: Partial<Project> = {}): Project {
         ...overrides,
     };
 }
+function habit(id: string, overrides: Partial<Habit> = {}): Habit {
+    return {
+        id,
+        name: id,
+        description: "",
+        color: "#6366F1",
+        frequency: "daily",
+        position: 0,
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+const habitMetric = (overrides: Partial<GoalMetric> = {}): GoalMetric => ({
+    label: "Read",
+    current: 0,
+    target: 6,
+    unit: "days",
+    source: "habit",
+    habitId: "habit-read",
+    overridePinned: false,
+    ...overrides,
+});
 beforeEach(() => {
     localStorage.clear();
     deckExport.render.mockReset().mockResolvedValue({ blob: new Blob(["deck"]), fileName: "Work.pptx" });
@@ -222,7 +247,7 @@ describe("GoalsPage", () => {
         await user.clear(screen.getByLabelText("Target"));
         await user.type(screen.getByLabelText("Target"), "8");
         await user.type(screen.getByLabelText("Unit"), "sessions");
-        expect(within(screen.getByLabelText("Source")).getAllByRole("option")).toHaveLength(1);
+        expect(within(screen.getByLabelText("Source")).getAllByRole("option").map(option => option.textContent)).toEqual(["Manual", "Habit"]);
         await user.click(screen.getByRole("button", { name: "Save goal" }));
         expect(screen.getByText(/Sessions: 3.5 \/ 8 sessions/)).toBeInTheDocument();
         expect(screen.getByText("Manual")).toBeInTheDocument();
@@ -235,18 +260,183 @@ describe("GoalsPage", () => {
         await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toBeNull());
     });
 
-    it.each(["manual", "liftingtracker"] as const)("preserves existing %s override metadata and only offers manual as a new source", async source => {
+    it.each(["manual", "liftingtracker"] as const)("preserves existing %s override metadata and keeps the legacy auto source disabled", async source => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({ trackerId: tracker.id, metric: { label: "Lifts", current: 4, target: 8, unit: "sessions", source, overridePinned: true } });
         await data.saveGoals([tracker], [goal], []);
         const { user } = await mount(data);
         expect(screen.getByText(`${source === "manual" ? "Manual" : "Auto"} · Override`)).toBeInTheDocument();
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(within(screen.getByLabelText("Source")).getAllByRole("option").map(option => option.textContent))
+            .toEqual(source === "liftingtracker" ? ["Manual", "Habit", "Auto"] : ["Manual", "Habit"]);
         if (source === "liftingtracker") expect(within(screen.getByLabelText("Source")).getByRole("option", { name: "Auto" })).toBeDisabled();
         await user.type(screen.getByLabelText("Goal note"), "Keep the metric");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
         await waitFor(async () => expect((await data.loadGoals()).goals[0].notes).toBe("Keep the metric"));
         expect((await data.loadGoals()).goals[0].metric).toEqual(goal.metric);
+    });
+
+    it("offers habit as a metric source and defaults the label and unit from the selected habit", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        expect(screen.queryByLabelText("Habit")).not.toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const picker = screen.getByLabelText("Habit");
+        expect(within(picker).getByRole("option", { name: "Read 20 minutes" })).toBeInTheDocument();
+        await user.selectOptions(picker, "habit-read");
+        expect(screen.getByLabelText("Metric label")).toHaveValue("Read 20 minutes");
+        expect(screen.getByLabelText("Unit")).toHaveValue("days");
+        expect(screen.queryByLabelText("Current")).not.toBeInTheDocument();
+    });
+
+    it("saves a habit metric with a derived current of zero and no override", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        await user.selectOptions(screen.getByLabelText("Habit"), "habit-read");
+        await user.clear(screen.getByLabelText("Target"));
+        await user.type(screen.getByLabelText("Target"), "6");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({
+            label: "Read 20 minutes", current: 0, target: 6, unit: "days", source: "habit", habitId: "habit-read", overridePinned: false,
+        }));
+        const row = screen.getByLabelText(goal.title);
+        expect(await within(row).findByText("Read 20 minutes: 0 / 6 days · 12 days left")).toBeInTheDocument();
+        expect(within(row).getByText("Habit")).toBeInTheDocument();
+    });
+
+    it("switching manual to habit and back clears the habit link, override, and stored current", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({
+            trackerId: tracker.id,
+            metric: { label: "Sessions", current: 3, target: 8, unit: "sessions", source: "manual", overridePinned: true },
+        });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getByLabelText("Current")).toHaveValue(3);
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        await user.selectOptions(screen.getByLabelText("Habit"), "habit-read");
+        // An edited label is never overwritten by a later habit selection.
+        expect(screen.getByLabelText("Metric label")).toHaveValue("Sessions");
+        await user.selectOptions(screen.getByLabelText("Source"), "manual");
+        expect(screen.getByLabelText("Current")).toHaveValue(0);
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => {
+            const metric = (await data.loadGoals()).goals[0].metric;
+            expect(metric).toStrictEqual({ label: "Sessions", current: 0, target: 8, unit: "days", source: "manual", overridePinned: false });
+            expect(metric !== null && "habitId" in metric).toBe(false);
+        });
+    });
+
+    it("blocks a habit target above the cadence maximum with the specific reason", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([
+            habit("habit-daily", { name: "Daily walk" }),
+            habit("habit-weekly", { name: "Weekly review", frequency: "weekly", position: 1 }),
+        ], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        await user.selectOptions(screen.getByLabelText("Habit"), "habit-daily");
+        await user.clear(screen.getByLabelText("Target"));
+        await user.type(screen.getByLabelText("Target"), "20");
+        const picker = screen.getByLabelText("Habit");
+        // Impossible habits stay visible and explain why rather than disappearing.
+        expect(within(picker).getByRole("option", { name: /Daily walk \(max 14 days for this cadence\)/ })).toBeDisabled();
+        expect(within(picker).getByRole("option", { name: /Weekly review \(max 2 weeks for this cadence\)/ })).toBeDisabled();
+        expect(screen.getByText("This cadence can hold at most 14 days.")).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        expect(screen.getByRole("alert")).toHaveTextContent("This cadence can hold at most 14 days.");
+        expect((await data.loadGoals()).goals[0].metric).toBeNull();
+    });
+
+    it("hints at an unreachable saved target without rewriting stored data", async () => {
+        const { data, tracker } = await oneTracker();
+        const metric = habitMetric({ label: "Daily walk", target: 20 });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Daily walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(within(row).getByText("This cadence can hold at most 14 days.")).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getAllByText("This cadence can hold at most 14 days.")).toHaveLength(2);
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        expect(screen.getByRole("alert")).toHaveTextContent("This cadence can hold at most 14 days.");
+        expect((await data.loadGoals()).goals[0].metric).toEqual(metric);
+    });
+
+    it("shows a quiet missing-habit note instead of a zero reading on a broken link", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: "habit-gone" }) });
+        await data.saveGoals([tracker], [goal], []);
+        await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(await within(row).findByText("Linked habit is missing")).toBeInTheDocument();
+        expect(within(row).queryByText(/0 \/ 6/)).not.toBeInTheDocument();
+        expect(within(row).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("never shows a zero reading while the habits provider is still hydrating", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ target: 12 }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read" })], []);
+        vi.spyOn(data, "loadHabits").mockReturnValue(new Promise<never>(() => {}));
+        await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(within(row).getByText("Loading habit progress…")).toBeInTheDocument();
+        expect(within(row).queryByText(/0 \/ 12/)).not.toBeInTheDocument();
+    });
+
+    it("renders a project link and a habit reading as two separate links", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, projectId: "project-1", metric: habitMetric({ target: 3 }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read" })], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: {},
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(within(row).getByText("Deep Work")).toBeInTheDocument();
+        expect(within(row).queryByText("Linked project is missing")).not.toBeInTheDocument();
+        expect(await within(row).findByText("Read: 0 / 3 days · 12 days left")).toBeInTheDocument();
+        expect(within(row).queryByText("Linked habit is missing")).not.toBeInTheDocument();
+    });
+
+    it("keeps a linked archived habit as the selected picker value", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ label: "Read" }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([
+            habit("habit-read", { name: "Read", isArchived: true }),
+            habit("habit-walk", { name: "Walk", position: 1 }),
+        ], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const picker = screen.getByLabelText("Habit");
+        expect(picker).toHaveValue("habit-read");
+        expect(within(picker).getByRole("option", { name: "Read (archived)" })).toBeInTheDocument();
+        expect(within(picker).getByRole("option", { name: "Walk" })).toBeInTheDocument();
+        expect(within(picker).getAllByRole("option")).toHaveLength(3);
     });
 
     it("moves goals through achieved and dropped and reactivates them without losing history", async () => {
