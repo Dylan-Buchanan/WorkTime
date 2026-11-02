@@ -35,7 +35,8 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Upgrade deliberately: CLI major releases can change deployment defaults.
+          version: 3.0.0
 
       - name: Verify Supabase configuration
         run: |
@@ -58,9 +59,10 @@ jobs:
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID_PRODUCTION }}
         run: |
           # Use link to ensure the correct host is resolved for the project ref
-          supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
-          # Push migrations using the linked project
-          supabase db push --debug
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+          # CLI v3 defaults to local; explicitly select the linked project and allow CI confirmation.
+          # SUPABASE_DB_PASSWORD is read from the environment when connecting.
+          supabase db push --remote --yes --debug
 
       - name: Notify deployment status
         if: always()
