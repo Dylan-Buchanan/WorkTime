@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { GoalsPage } from "../GoalsPage";
 import { GoalProvider } from "../../state/GoalContext";
+import { HabitProvider } from "../../state/HabitContext";
 import { DataProvider } from "../../state/DataContext";
 import { SyncProvider } from "../../state/SyncContext";
 import { TauriCloseProvider } from "../../state/TauriCloseContext";
@@ -19,7 +20,7 @@ vi.mock("../../state/AppStateContext", async importOriginal => {
 });
 
 function tree(data: InMemoryDataAccess, today: LocalDateKey) {
-    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goal-nudge-owner"><GoalProvider><GoalsPage today={today} /></GoalProvider></SyncProvider></DataProvider></TauriCloseProvider>;
+    return <TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="goal-nudge-owner"><HabitProvider><GoalProvider><GoalsPage today={today} /></GoalProvider></HabitProvider></SyncProvider></DataProvider></TauriCloseProvider>;
 }
 async function mount(data: InMemoryDataAccess, today: LocalDateKey) {
     const view = render(tree(data, today));

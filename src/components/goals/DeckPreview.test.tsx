@@ -198,6 +198,64 @@ beforeEach(() => {
 });
 
 describe("DeckPreview", () => {
+    function habitPlan(): DeckPlan {
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({
+            id: "practice", trackerId: tracker.id, title: "Practice goal",
+            metric: { label: "Practice", current: 9999, target: 3, unit: "sessions", source: "habit", habitId: "habit", overridePinned: false },
+        });
+        return buildDeckPlan({
+            tracker, goals: [goal], period: { periodStart: "2026-10-18", periodEnd: "2026-11-01", monthKey: "2026-10" },
+            now: new Date(2026, 10, 2, 12),
+            checkIns: (["2026-10-04", "2026-10-18"] as const).map(periodStart => buildGoalCheckInFixture({
+                id: periodStart, goalId: goal.id, periodStart, isFocus: true,
+            })),
+            habits: [{ id: "habit", name: "Practice", description: "", color: "", frequency: "daily", position: 0,
+                isArchived: false, createdAt: tracker.createdAt, updatedAt: tracker.createdAt }],
+            completions: [4, 5, 6, 18, 19, 20, 21].map(day => ({
+                id: `day-${day}`, habitId: "habit", bucket: `2026-10-${String(day).padStart(2, "0")}`,
+                createdAt: tracker.createdAt, updatedAt: tracker.createdAt,
+            })),
+        });
+    }
+
+    it("shows the derived metric, hit pill, and both series for the same goal with distinct React keys", () => {
+        const errors = vi.spyOn(console, "error");
+        try {
+            renderPreview(habitPlan());
+            const recap = within(screen.getByRole("article", { name: "Slide: Practice goal" }));
+            expect(recap.getByText("Practice: 4 / 3 sessions · 1 over")).toBeInTheDocument();
+            expect(recap.getByText("hit target 2 periods running")).toBeInTheDocument();
+            expect(recap.queryByText(/9999/)).not.toBeInTheDocument();
+            const progress = within(screen.getByRole("article", { name: "Slide: Progress" }));
+            expect(progress.getAllByRole("listitem")).toHaveLength(2);
+            expect(progress.getByText("Status")).toBeInTheDocument();
+            expect(progress.getByText("Practice (sessions)")).toBeInTheDocument();
+            expect(progress.getByText("2026-10-04: 3 · 2026-10-18: 4")).toBeInTheDocument();
+            expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key|unique.*key/i);
+        } finally { errors.mockRestore(); }
+    });
+
+    it.each([1, 2, 3])("shows the hit pill for streak %i only at two or more", streak => {
+        const plan = habitPlan();
+        plan.slides = plan.slides.map(slide => slide.kind === "recap" ? { ...slide, habitStreak: streak } : slide);
+        renderPreview(plan);
+        const recap = within(screen.getByRole("article", { name: "Slide: Practice goal" }));
+        if (streak >= 2) expect(recap.getByText(`hit target ${streak} periods running`)).toBeInTheDocument();
+        else expect(recap.queryByText(/periods running/)).not.toBeInTheDocument();
+    });
+
+    it("shows unavailable copy without a numeric reading for a broken habit link", () => {
+        const plan = habitPlan();
+        plan.slides = plan.slides.map(slide => slide.kind === "recap" ? {
+            ...slide, habitStreak: null, metric: { ...slide.metric!, current: null, met: undefined, delta: undefined, unavailable: true },
+        } : slide);
+        renderPreview(plan);
+        const recap = within(screen.getByRole("article", { name: "Slide: Practice goal" }));
+        expect(recap.getByText("Practice: unavailable")).toBeInTheDocument();
+        expect(recap.queryByText(/0 \/ 3|9999/)).not.toBeInTheDocument();
+    });
+
     it("runs the presentation preset in one click and shows the exact brief used", async () => {
         const { complete } = mockPolish(buildPlan());
         const { user } = renderPreview(buildPlan());
