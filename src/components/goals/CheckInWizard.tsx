@@ -17,6 +17,7 @@ import { useGoals } from "../../state/GoalContext";
 import { CheckInStatusBadge } from "./GoalStatusBadge";
 import { GoalEvidencePanel } from "./GoalEvidencePanel";
 import { GoalSlipBadge } from "./GoalSlipBadge";
+import { HabitMetricStrip } from "./HabitMetricStrip";
 
 export interface CheckInWizardProps {
     trackerId: string;
@@ -114,7 +115,8 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
     }
 
     const grid = goalGrid(tracker);
-    const current = periodAt(grid, currentDateKey());
+    const today = currentDateKey();
+    const current = periodAt(grid, today);
     const periods = listPeriods(grid, firstPeriod(grid).periodStart, (current ?? activePeriod).periodEnd);
     const lastBuilt = tracker.lastBuiltPeriodStart;
     // TEST-VERIFIABLE ONLY until #140 stamps lastBuiltPeriodStart: this guard has
@@ -130,6 +132,19 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
             const row = previous[goalId];
             if (!row) return previous;
             return { ...previous, [goalId]: { ...row, ...patch, updatedAt } };
+        });
+    };
+    // The habit strip hands over only the sentence to append; the append (and the
+    // duplicate guard) stays here so repeat presses cannot stack prose.
+    const insertCurrent = (goalId: string, text: string) => {
+        const updatedAt = new Date().toISOString();
+        setDrafts(previous => {
+            const row = previous[goalId];
+            if (!row || row.current.includes(text)) return previous;
+            return {
+                ...previous,
+                [goalId]: { ...row, current: row.current === "" ? text : `${row.current}\n${text}`, updatedAt },
+            };
         });
     };
     const updatePlanned = (goalId: string, index: number, patch: Partial<GoalCheckIn["planned"][number]>) => {
@@ -254,6 +269,13 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                             period={activePeriod}
                             onChange={patch => patchDraft(goal.id, patch)}
                         />}
+                        <HabitMetricStrip
+                            goal={goal}
+                            period={activePeriod}
+                            current={draft.current}
+                            today={today}
+                            onInsert={text => insertCurrent(goal.id, text)}
+                        />
                         <section className="rounded-md border border-neutral-800/70 bg-neutral-950/20 p-3">
                             <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Did not do</h4>
                             {!previous
