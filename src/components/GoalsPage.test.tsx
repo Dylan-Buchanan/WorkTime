@@ -159,6 +159,7 @@ describe("GoalsPage", () => {
     it("rejects invalid tracker forms and supports tracker edit, confirmed archive, and restore", async () => {
         const { data, tracker } = await oneTracker();
         const { user } = await mount(data);
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         await user.click(screen.getByRole("button", { name: "Edit tracker" }));
         await user.clear(screen.getByLabelText("Tracker name"));
         await user.click(screen.getByRole("button", { name: "Save tracker" }));
@@ -175,9 +176,11 @@ describe("GoalsPage", () => {
         await user.click(screen.getByRole("button", { name: "Save tracker" }));
         expect(await screen.findByRole("heading", { name: "Renamed" })).toBeInTheDocument();
         const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         await user.click(screen.getByRole("button", { name: "Archive tracker" }));
         expect(screen.getByRole("heading", { name: "Renamed" })).toBeInTheDocument();
         confirm.mockReturnValue(true);
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         await user.click(screen.getByRole("button", { name: "Archive tracker" }));
         expect(confirm).toHaveBeenCalledWith(expect.stringContaining("history will be kept"));
         await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
@@ -360,8 +363,16 @@ describe("GoalsPage", () => {
         expect(within(picker).getByRole("option", { name: /Daily walk \(max 14 days for this cadence\)/ })).toBeDisabled();
         expect(within(picker).getByRole("option", { name: /Weekly review \(max 2 weeks for this cadence\)/ })).toBeDisabled();
         expect(screen.getByText("This cadence can hold at most 14 days.")).toBeInTheDocument();
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        const hint = within(editor).getByText("This cadence can hold at most 14 days.");
+        expect(hint).toHaveClass("text-amber-300");
+        expect(hint).not.toHaveAttribute("role");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
-        expect(screen.getByRole("alert")).toHaveTextContent("This cadence can hold at most 14 days.");
+        // The visible hint becomes the error: bold, red, announced, and still the only copy.
+        expect(hint).toHaveClass("text-red-300");
+        expect(hint).toHaveClass("font-semibold");
+        expect(hint).not.toHaveClass("text-amber-300");
+        expect(within(editor).getAllByRole("alert")).toEqual([hint]);
         expect((await data.loadGoals()).goals[0].metric).toBeNull();
     });
 
@@ -377,7 +388,10 @@ describe("GoalsPage", () => {
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
         expect(screen.getAllByText("This cadence can hold at most 14 days.")).toHaveLength(2);
         await user.click(screen.getByRole("button", { name: "Save goal" }));
-        expect(screen.getByRole("alert")).toHaveTextContent("This cadence can hold at most 14 days.");
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        const editorHint = within(editor).getByText("This cadence can hold at most 14 days.");
+        expect(editorHint).toHaveClass("text-red-300");
+        expect(within(editor).getAllByRole("alert")).toEqual([editorHint]);
         expect((await data.loadGoals()).goals[0].metric).toEqual(metric);
     });
 
@@ -568,6 +582,63 @@ describe("GoalsPage", () => {
         expect(container.querySelector('[data-goals-slot="goal-slip"]')).toBeEmptyDOMElement();
     });
 
+    it("summarizes active, achieved, and slipped goals while dropping dropped goals from progress", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const active = buildGoalFixture({ id: "g-active", trackerId: tracker.id, title: "Active goal", sortOrder: 0 });
+        const achieved = buildGoalFixture({
+            id: "g-achieved", trackerId: tracker.id, title: "Achieved goal", sortOrder: 1,
+            lifecycle: "achieved", achievedAt: "2026-10-12T12:00:00.000Z",
+        });
+        const dropped = buildGoalFixture({
+            id: "g-dropped", trackerId: tracker.id, title: "Dropped goal", sortOrder: 2,
+            lifecycle: "dropped", droppedAt: "2026-10-13T12:00:00.000Z",
+        });
+        await data.saveGoals([tracker], [active, achieved, dropped], []);
+        const { container } = await mount(data, "2026-10-20");
+        const health = container.querySelector('[data-goals-slot="tracker-health"]') as HTMLElement;
+        expect(health).toHaveTextContent("1 active");
+        expect(health).toHaveTextContent("1 achieved");
+        expect(health).toHaveTextContent("0 slipped");
+        expect(health).toHaveTextContent("1 of 2 achieved");
+        expect(within(health).getByRole("progressbar", { name: "Goals achieved" })).toHaveAttribute("aria-valuenow", "50");
+    });
+
+    it("counts recorded goals for the open period and calms the entry once every goal is recorded", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const first = buildGoalFixture({ id: "g-first", trackerId: tracker.id, title: "First goal", sortOrder: 0 });
+        const second = buildGoalFixture({ id: "g-second", trackerId: tracker.id, title: "Second goal", sortOrder: 1 });
+        await data.saveGoals([tracker], [first, second], [
+            buildGoalCheckInFixture({ id: "c-first", goalId: first.id, periodStart: "2026-10-18" }),
+            buildGoalCheckInFixture({ id: "c-second", goalId: second.id, periodStart: "2026-10-18" }),
+        ]);
+        const { container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement;
+        expect(entry).toHaveTextContent("2 of 2 goals recorded");
+        const control = within(entry).getByRole("button", { name: "Check in · October 2026" });
+        expect(control).toHaveAttribute("data-check-in-state", "complete");
+        expect(control).toHaveClass("border-emerald-700/70");
+        expect(control).not.toHaveClass("bg-indigo-600");
+        expect(control).toHaveTextContent("Recorded");
+    });
+
+    it("shows partial check-in progress for the open period", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const first = buildGoalFixture({ id: "g-first", trackerId: tracker.id, title: "First goal", sortOrder: 0 });
+        const second = buildGoalFixture({ id: "g-second", trackerId: tracker.id, title: "Second goal", sortOrder: 1 });
+        await data.saveGoals([tracker], [first, second], [
+            buildGoalCheckInFixture({ id: "c-first", goalId: first.id, periodStart: "2026-10-18" }),
+        ]);
+        const { container } = await mount(data, "2026-10-20");
+        const entry = container.querySelector('[data-goals-slot="check-in-entry"]') as HTMLElement;
+        expect(entry).toHaveTextContent("1 of 2 goals recorded");
+        const control = within(entry).getByRole("button", { name: "Check in · October 2026" });
+        expect(control).toHaveAttribute("data-check-in-state", "open");
+        expect(control).toHaveClass("bg-indigo-600");
+    });
+
     it("keeps the legacy no-open-period copy and disables the check-in control before the first boundary", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const future = buildGoalTrackerFixture({ id: "future", name: "Future", cadenceAnchorAt: "2099-01-04" });
@@ -616,6 +687,10 @@ describe("GoalsPage", () => {
         await user.click(openEntry);
 
         const slot = container.querySelector('[data-goals-slot="check-in-wizard"]') as HTMLElement;
+        // The wizard stays inline inside the page's only scroller, so a long
+        // check-in scrolls with the page instead of being clipped below it.
+        expect(container.querySelector("main")?.contains(slot)).toBe(true);
+        expect(within(slot).getByRole("form", { name: "Check-in wizard" })).not.toHaveClass("fixed");
         expect(within(slot).getByRole("heading", { name: "Check in · October 2026" })).toBeInTheDocument();
         expect(within(slot).getByLabelText("Check-in period")).toHaveValue("2026-10-18");
         expect(within(slot).getByLabelText(`Did for ${goal.title}`)).toBeInTheDocument();
@@ -740,9 +815,10 @@ describe("GoalsPage", () => {
 
         await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
         await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), archived.id);
-        expect(entry()).toHaveAttribute("data-tracker-id", archived.id);
-        expect(entry()).toHaveTextContent("This tracker is archived. Reactivate it to build a deck.");
-        expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
+        // Archived trackers collapse the period spine entirely.
+        expect(entry()).toBeNull();
+        expect(container.querySelector('[data-goals-slot="check-in-entry"]')).toBeNull();
+        expect(screen.getByText("This tracker is archived. Its goals and history are kept.")).toBeInTheDocument();
         expect(preview()).toBeEmptyDOMElement();
     });
 
@@ -880,7 +956,8 @@ describe("GoalsPage", () => {
 
     it("mounts goal-set export and import actions in the selected tracker's slot", async () => {
         const { data, tracker } = await oneTracker();
-        const { container } = await mount(data);
+        const { user, container } = await mount(data);
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         const slot = container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         expect(slot).toHaveAttribute("data-tracker-id", tracker.id);
         expect(within(slot).getByRole("button", { name: "Export goals" })).toBeDisabled();
@@ -895,9 +972,11 @@ describe("GoalsPage", () => {
         const second = buildGoalTrackerFixture({ id: "tracker-beta", name: "Beta", sortOrder: 1 });
         await data.saveGoals([first, second], [], []);
         const { user, container } = await mount(data);
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         expect(slot()).toHaveAttribute("data-tracker-id", first.id);
         await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), second.id);
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         expect(slot()).toHaveAttribute("data-tracker-id", second.id);
         expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeDisabled();
         expect(within(slot()).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
@@ -925,6 +1004,7 @@ describe("GoalsPage", () => {
         expect(screen.getByRole("form", { name: "Edit goal" })).toBeInTheDocument();
 
         // Drive the real Lane B component through a validated file and confirm.
+        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         await user.upload(
             within(slot()).getByLabelText("Import goals"),
             new File([serializeGoalSet(tracker, [goal])], "goals-work-2026-10-20.json", { type: "application/json" }),

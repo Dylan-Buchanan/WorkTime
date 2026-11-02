@@ -42,6 +42,15 @@ const cloneCheckIn = (row: GoalCheckIn): GoalCheckIn => ({
 });
 const failureMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save check-ins. Please try again.";
 
+/** One-line recital shown while a goal card is minimized. */
+const minimizedSummary = (row: GoalCheckIn): string => {
+    const did = row.did.replace(/\s+/g, " ").trim();
+    const planned = row.planned.filter(item => item.text.trim() !== "").length;
+    const parts = [did === "" ? "Nothing entered yet." : did];
+    if (planned > 0) parts.push(`${planned} ${planned === 1 ? "plan" : "plans"} for next period`);
+    return parts.join(" · ");
+};
+
 function currentDateKey(): LocalDateKey {
     const key = localDateKey(new Date());
     if (!isGoalDateKey(key)) throw new RangeError("Invalid goal date");
@@ -98,6 +107,9 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
     const [reloadMessage, setReloadMessage] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    // Minimized cards keep their body mounted (so drafts and the evidence
+    // prefill refs survive) but hidden, letting a long period stay scannable.
+    const [minimizedGoalIds, setMinimizedGoalIds] = useState<ReadonlySet<string>>(() => new Set());
     const loadedPeriodRef = useRef(period.periodStart);
 
     // Period selection (the past-period editor) reloads the stored rows for the
@@ -106,6 +118,7 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
         if (loadedPeriodRef.current === activePeriod.periodStart) return;
         loadedPeriodRef.current = activePeriod.periodStart;
         setDrafts(buildDrafts(activePeriod.periodStart, activeGoals, Object.values(state.checkIns)));
+        setMinimizedGoalIds(new Set());
     }, [activePeriod.periodStart, activeGoals, state.checkIns]);
 
     if (!tracker) {
@@ -178,6 +191,14 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
             return { ...previous, [goalId]: { ...row, planned: row.planned.filter((_, currentIndex) => currentIndex !== index), updatedAt } };
         });
     };
+    const toggleMinimized = (goalId: string) => {
+        setMinimizedGoalIds(previous => {
+            const next = new Set(previous);
+            if (next.has(goalId)) next.delete(goalId);
+            else next.add(goalId);
+            return next;
+        });
+    };
 
     const reloadCurrent = () => {
         const next = periodAt(goalGrid(tracker), currentDateKey());
@@ -245,71 +266,87 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                     const priorRows = storedHistory.filter(row => row.goalId === goal.id && row.periodStart < activePeriod.periodStart);
                     const previous = priorRows.length > 0 ? priorRows[priorRows.length - 1] : null;
                     const unmet = previous ? unmetPlannedItems(previous, draft) : [];
+                    const minimized = minimizedGoalIds.has(goal.id);
+                    const bodyId = `check-in-goal-${goal.id}`;
                     return <article key={goal.id} aria-label={goal.title} className="space-y-2 rounded border border-neutral-800 bg-neutral-900/30 p-3">
                         <div className="flex flex-wrap items-center gap-2">
                             <h3 className="flex-1 font-medium">{goal.title}</h3>
+                            {minimized && <CheckInStatusBadge statusPill={draft.statusPill} />}
                             <GoalSlipBadge consecutiveSlips={slips.consecutiveSlips} />
+                            <button
+                                type="button"
+                                className={button}
+                                aria-label={`${minimized ? "Expand" : "Minimize"} ${goal.title}`}
+                                aria-expanded={!minimized}
+                                aria-controls={bodyId}
+                                onClick={() => toggleMinimized(goal.id)}
+                            >
+                                {minimized ? "Expand" : "Minimize"}
+                            </button>
                         </div>
-                        <div className="flex flex-wrap items-end gap-3">
-                            <label className="grid gap-1">Status
-                                <select className={control} aria-label={`Status for ${goal.title}`} value={draft.statusPill} onChange={event => patchDraft(goal.id, { statusPill: event.target.value as GoalCheckIn["statusPill"] })}>
-                                    {STATUS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                                </select>
+                        {minimized && <p className="truncate text-xs text-neutral-500">{minimizedSummary(draft)}</p>}
+                        <div id={bodyId} hidden={minimized} className="space-y-2">
+                            <div className="flex flex-wrap items-end gap-3">
+                                <label className="grid gap-1">Status
+                                    <select className={control} aria-label={`Status for ${goal.title}`} value={draft.statusPill} onChange={event => patchDraft(goal.id, { statusPill: event.target.value as GoalCheckIn["statusPill"] })}>
+                                        {STATUS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                                    </select>
+                                </label>
+                                <span className="mb-2"><CheckInStatusBadge statusPill={draft.statusPill} /></span>
+                                <label className="flex items-center gap-2"><input type="checkbox" aria-label={`Focus for ${goal.title}`} checked={draft.isFocus} onChange={event => patchDraft(goal.id, { isFocus: event.target.checked })} />Focus</label>
+                            </div>
+                            <label className="grid gap-1">Did
+                                <textarea className={control} aria-label={`Did for ${goal.title}`} value={draft.did} onChange={event => patchDraft(goal.id, { did: event.target.value })} />
                             </label>
-                            <span className="mb-2"><CheckInStatusBadge statusPill={draft.statusPill} /></span>
-                            <label className="flex items-center gap-2"><input type="checkbox" aria-label={`Focus for ${goal.title}`} checked={draft.isFocus} onChange={event => patchDraft(goal.id, { isFocus: event.target.checked })} />Focus</label>
+                            {goal.projectId !== null && <GoalEvidencePanel
+                                key={`${goal.id}:${activePeriod.periodStart}`}
+                                goal={goal}
+                                checkIn={draft}
+                                period={activePeriod}
+                                onChange={patch => patchDraft(goal.id, patch)}
+                            />}
+                            <HabitMetricStrip
+                                goal={goal}
+                                period={activePeriod}
+                                current={draft.current}
+                                today={today}
+                                onInsert={text => insertCurrent(goal.id, text)}
+                            />
+                            <section className="rounded-md border border-neutral-800/70 bg-neutral-950/20 p-3">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Did not do</h4>
+                                {!previous
+                                    ? <p className="mt-1 text-xs text-neutral-500">No previous plans to compare.</p>
+                                    : unmet.length === 0
+                                        ? <p className="mt-1 text-xs text-neutral-500">Everything from the previous check-in is marked done.</p>
+                                        : <ul className="mt-1 space-y-1 text-sm text-neutral-300">
+                                            {unmet.map((item, index) => <li key={`${item.text}-${index}`} className="flex flex-wrap items-baseline gap-2">
+                                                <span>{item.text}</span>
+                                                {item.dueDate && <span className="text-xs text-neutral-500">Due <time dateTime={item.dueDate}>{item.dueDate}</time></span>}
+                                            </li>)}
+                                        </ul>}
+                                <label className="mt-2 grid gap-1">
+                                    <span className="text-xs font-medium text-neutral-400">Why not</span>
+                                    <textarea className={control} rows={2} aria-label={`Miss reason for ${goal.title}`} placeholder="Add a note about why this was not done." value={draft.missReason} onChange={event => patchDraft(goal.id, { missReason: event.target.value })} />
+                                    <span className="text-xs text-neutral-500">Optional notes explaining the items above.</span>
+                                </label>
+                            </section>
+                            <label className="grid gap-1">Currently working on
+                                <textarea className={control} aria-label={`Current for ${goal.title}`} value={draft.current} onChange={event => patchDraft(goal.id, { current: event.target.value })} />
+                            </label>
+                            <fieldset className="space-y-2">
+                                <legend>Planned next</legend>
+                                {draft.planned.map((item, index) => <div key={index} className="flex flex-wrap items-end gap-2">
+                                    <label className="grid flex-1 gap-1">Plan
+                                        <input className={control} aria-label={`Planned item ${index + 1} for ${goal.title}`} value={item.text} onChange={event => updatePlanned(goal.id, index, { text: event.target.value })} />
+                                    </label>
+                                    <label className="grid gap-1">Due date
+                                        <input className={control} type="date" aria-label={`Planned due date ${index + 1} for ${goal.title}`} value={item.dueDate ?? ""} onChange={event => updatePlanned(goal.id, index, { dueDate: isGoalDateKey(event.target.value) ? event.target.value : null })} />
+                                    </label>
+                                    <button type="button" className={button} aria-label={`Remove planned item ${index + 1} for ${goal.title}`} onClick={() => removePlanned(goal.id, index)}>Remove</button>
+                                </div>)}
+                                <button type="button" className={button} aria-label={`Add planned item for ${goal.title}`} onClick={() => addPlanned(goal.id)}>Add planned item</button>
+                            </fieldset>
                         </div>
-                        <label className="grid gap-1">Did
-                            <textarea className={control} aria-label={`Did for ${goal.title}`} value={draft.did} onChange={event => patchDraft(goal.id, { did: event.target.value })} />
-                        </label>
-                        {goal.projectId !== null && <GoalEvidencePanel
-                            key={`${goal.id}:${activePeriod.periodStart}`}
-                            goal={goal}
-                            checkIn={draft}
-                            period={activePeriod}
-                            onChange={patch => patchDraft(goal.id, patch)}
-                        />}
-                        <HabitMetricStrip
-                            goal={goal}
-                            period={activePeriod}
-                            current={draft.current}
-                            today={today}
-                            onInsert={text => insertCurrent(goal.id, text)}
-                        />
-                        <section className="rounded-md border border-neutral-800/70 bg-neutral-950/20 p-3">
-                            <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Did not do</h4>
-                            {!previous
-                                ? <p className="mt-1 text-xs text-neutral-500">No previous plans to compare.</p>
-                                : unmet.length === 0
-                                    ? <p className="mt-1 text-xs text-neutral-500">Everything from the previous check-in is marked done.</p>
-                                    : <ul className="mt-1 space-y-1 text-sm text-neutral-300">
-                                        {unmet.map((item, index) => <li key={`${item.text}-${index}`} className="flex flex-wrap items-baseline gap-2">
-                                            <span>{item.text}</span>
-                                            {item.dueDate && <span className="text-xs text-neutral-500">Due <time dateTime={item.dueDate}>{item.dueDate}</time></span>}
-                                        </li>)}
-                                    </ul>}
-                            <label className="mt-2 grid gap-1">
-                                <span className="text-xs font-medium text-neutral-400">Why not</span>
-                                <textarea className={control} rows={2} aria-label={`Miss reason for ${goal.title}`} placeholder="Add a note about why this was not done." value={draft.missReason} onChange={event => patchDraft(goal.id, { missReason: event.target.value })} />
-                                <span className="text-xs text-neutral-500">Optional notes explaining the items above.</span>
-                            </label>
-                        </section>
-                        <label className="grid gap-1">Currently working on
-                            <textarea className={control} aria-label={`Current for ${goal.title}`} value={draft.current} onChange={event => patchDraft(goal.id, { current: event.target.value })} />
-                        </label>
-                        <fieldset className="space-y-2">
-                            <legend>Planned next</legend>
-                            {draft.planned.map((item, index) => <div key={index} className="flex flex-wrap items-end gap-2">
-                                <label className="grid flex-1 gap-1">Plan
-                                    <input className={control} aria-label={`Planned item ${index + 1} for ${goal.title}`} value={item.text} onChange={event => updatePlanned(goal.id, index, { text: event.target.value })} />
-                                </label>
-                                <label className="grid gap-1">Due date
-                                    <input className={control} type="date" aria-label={`Planned due date ${index + 1} for ${goal.title}`} value={item.dueDate ?? ""} onChange={event => updatePlanned(goal.id, index, { dueDate: isGoalDateKey(event.target.value) ? event.target.value : null })} />
-                                </label>
-                                <button type="button" className={button} aria-label={`Remove planned item ${index + 1} for ${goal.title}`} onClick={() => removePlanned(goal.id, index)}>Remove</button>
-                            </div>)}
-                            <button type="button" className={button} aria-label={`Add planned item for ${goal.title}`} onClick={() => addPlanned(goal.id)}>Add planned item</button>
-                        </fieldset>
                     </article>;
                 })}
             </div>}

@@ -13,7 +13,8 @@ export interface DeckEntryProps {
 }
 
 const disabledControl = "rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs text-neutral-400 opacity-70 cursor-not-allowed";
-const buildControl = "rounded bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300";
+/** Amber outline: the deck is the secondary, settled phase and never competes with a live check-in. */
+const buildControl = "rounded border border-amber-700/80 bg-amber-950/30 px-3 py-2 text-xs font-medium text-amber-100 hover:bg-amber-900/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300";
 const builtCue = "rounded-full border border-emerald-700 bg-emerald-950/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-200";
 
 /**
@@ -25,7 +26,7 @@ export const DeckEntry: React.FC<DeckEntryProps> = ({ trackerId, trackerName, av
     if (availability.kind === "not-ready") {
         return <div
             data-deck-entry-tracker-id={trackerId}
-            className="flex flex-wrap items-center gap-3 rounded-md border border-neutral-800/70 bg-neutral-950/30 p-3"
+            className="flex flex-wrap items-center gap-3"
         >
             <button
                 type="button"
@@ -41,7 +42,7 @@ export const DeckEntry: React.FC<DeckEntryProps> = ({ trackerId, trackerName, av
     }
     return <div
         data-deck-entry-tracker-id={trackerId}
-        className="flex flex-wrap items-center gap-3 rounded-md border border-neutral-800/70 bg-neutral-950/30 p-3"
+        className="flex flex-wrap items-center gap-3"
     >
         <button type="button" className={buildControl} onClick={() => onBuild(availability.period)}>
             {availability.built ? "Rebuild deck" : "Build deck"}

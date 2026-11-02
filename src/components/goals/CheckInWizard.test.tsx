@@ -225,6 +225,51 @@ describe("CheckInWizard", () => {
         expect(saved[0].id).toBeTruthy();
     });
 
+    it("minimizes a goal card to a one-line summary and keeps its draft when expanded", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const first = buildGoalFixture({ id: "goal-a", trackerId: tracker.id, title: "Ship the release", sortOrder: 0 });
+        const second = buildGoalFixture({ id: "goal-b", trackerId: tracker.id, title: "Grow the team", sortOrder: 1 });
+        await data.saveGoals([tracker], [first, second], []);
+        const period = periodFor(tracker, "2026-10-20");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker.id, period, onClose);
+
+        await screen.findByRole("heading", { name: first.title });
+        await user.type(screen.getByLabelText(`Did for ${first.title}`), "Reviewed the spec");
+        await user.click(screen.getByRole("button", { name: `Add planned item for ${first.title}` }));
+        await user.type(screen.getByLabelText(`Planned item 1 for ${first.title}`), "Ship the migration");
+
+        const card = screen.getByRole("article", { name: first.title });
+        const body = card.querySelector(`#check-in-goal-${first.id}`) as HTMLElement;
+        expect(body).not.toHaveAttribute("hidden");
+
+        await user.click(within(card).getByRole("button", { name: `Minimize ${first.title}` }));
+        // The body stays mounted (so evidence prefill refs and drafts survive) and
+        // only the summary remains visible.
+        expect(body.isConnected).toBe(true);
+        expect(body).toHaveAttribute("hidden");
+        expect(within(card).getByRole("button", { name: `Expand ${first.title}` })).toHaveAttribute("aria-expanded", "false");
+        expect(within(card).getByText("Reviewed the spec · 1 plan for next period")).toBeInTheDocument();
+        // Minimizing is per goal: the other card keeps its fields.
+        const other = screen.getByRole("article", { name: second.title });
+        expect(other.querySelector(`#check-in-goal-${second.id}`)).not.toHaveAttribute("hidden");
+        expect(within(other).getByLabelText(`Did for ${second.title}`)).toBeInTheDocument();
+
+        await user.click(within(card).getByRole("button", { name: `Expand ${first.title}` }));
+        expect(body).not.toHaveAttribute("hidden");
+        expect(screen.getByLabelText(`Did for ${first.title}`)).toHaveValue("Reviewed the spec");
+        expect(screen.getByLabelText(`Planned item 1 for ${first.title}`)).toHaveValue("Ship the migration");
+
+        await user.click(screen.getByRole("button", { name: "Save check-ins" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+        const saved = (await data.loadGoals()).checkIns.find(row => row.goalId === first.id)!;
+        expect(saved).toMatchObject({
+            did: "Reviewed the spec",
+            planned: [{ text: "Ship the migration", dueDate: null }],
+        });
+    });
+
     it("derives a live Did not do list from the latest previous check-in", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();

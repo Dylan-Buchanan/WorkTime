@@ -190,7 +190,7 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
 
     return <section
         aria-label="Goal-set export and import"
-        className="flex flex-col gap-2 rounded-md border border-neutral-800/70 bg-neutral-950/30 p-3"
+        className="flex flex-col gap-2"
     >
         <div className="flex flex-wrap items-center gap-2">
             <button

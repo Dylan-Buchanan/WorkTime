@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -9,7 +9,7 @@ import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency,
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
 import { maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
-import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, type GoalPeriod } from "../lib/goals/periods";
+import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
 import type { DeckPlan } from "../lib/goals/deck/types";
@@ -34,6 +34,7 @@ const primary = "rounded bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-ind
 const primaryLarge = "rounded bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50";
 const achieveButton = "rounded border border-emerald-700 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50";
 const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-900/40";
+const menuButton = "rounded-md border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-sm leading-none text-neutral-300 hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300";
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
 const habitsLoadingMessage = "Habits are still loading. Try again when they finish.";
@@ -68,10 +69,28 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [error, setError] = useState<string | null>(null);
     const [pinnedCheckIn, setPinnedCheckIn] = useState<{ trackerId: string; period: GoalPeriod } | null>(null);
     const [deckPreview, setDeckPreview] = useState<{ trackerId: string; plan: DeckPlan } | null>(null);
+    const [trackerActionsOpen, setTrackerActionsOpen] = useState(false);
+    const trackerActionsRef = useRef<HTMLDivElement>(null);
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
     );
+    // The overflow panel is low-frequency; dismiss it on outside press or Escape.
+    useEffect(() => {
+        if (!trackerActionsOpen) return;
+        const onPointerDown = (event: PointerEvent) => {
+            if (!trackerActionsRef.current?.contains(event.target as Node)) setTrackerActionsOpen(false);
+        };
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setTrackerActionsOpen(false);
+        };
+        document.addEventListener("pointerdown", onPointerDown);
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+            document.removeEventListener("pointerdown", onPointerDown);
+            document.removeEventListener("keydown", onKeyDown);
+        };
+    }, [trackerActionsOpen]);
     const trackers = ordered(Object.values(state.trackers)).filter(row => showArchived || !row.isArchived);
     const hasTrackers = Object.keys(state.trackers).length > 0;
     const tracker = trackers.find(row => row.id === state.ui.selectedTrackerId) ?? trackers[0];
@@ -122,6 +141,19 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
         return slipSummary(goalId, Object.values(state.checkIns), currentPeriodStart).consecutiveSlips;
     };
+    const activeCount = allGoals.filter(row => row.lifecycle === "active").length;
+    const achievedCount = allGoals.filter(row => row.lifecycle === "achieved").length;
+    const slippedCount = allGoals.filter(row => slipCount(row.id) > 0).length;
+    // Dropped goals leave the denominator so abandoning a goal never pulls the bar backwards.
+    const progressTotal = activeCount + achievedCount;
+    const progressPercent = progressTotal === 0 ? 0 : Math.round((achievedCount / progressTotal) * 100);
+    const recordedGoalIds = checkInCurrent
+        ? new Set(Object.values(state.checkIns)
+            .filter(row => row.periodStart === checkInCurrent.periodStart)
+            .map(row => row.goalId))
+        : new Set<string>();
+    const recordedCount = allGoals.filter(row => recordedGoalIds.has(row.id)).length;
+    const checkInComplete = checkInCurrent !== null && allGoals.length > 0 && recordedCount === allGoals.length;
 
     function attempt(action: () => void) {
         try { action(); setError(null); } catch (error) { setError(errorMessage(error)); }
@@ -214,64 +246,174 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                     </div>
                 </section>}
                 {tracker && <>
-                    <label className="flex items-center gap-2">Tracker
-                        <select className={control} value={tracker.id} onChange={event => { goals.selectTracker(event.target.value); setEditingGoal(null); setPinnedCheckIn(null); setDeckPreview(null); }}>
-                            {trackers.map(row => <option key={row.id} value={row.id}>{row.name}{row.isArchived ? " (archived)" : ""}</option>)}
-                        </select>
-                    </label>
-                    <section className="space-y-4 rounded-lg border border-neutral-800 bg-neutral-900/20 p-4" aria-label={tracker.name}>
-                        <header className="flex flex-wrap items-start gap-3">
-                            <span aria-hidden="true" className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: tracker.color }} />
-                            <div className="min-w-0 flex-1">
-                                <h2 className="text-sm font-semibold">{tracker.name}</h2>
-                                <p className="text-sm text-neutral-400">{tracker.purpose}</p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button className={button} onClick={() => setTrackerForm(tracker)}>Edit tracker</button>
-                                {tracker.isArchived
-                                    ? <button className={button} onClick={() => attempt(() => goals.archiveTracker(tracker.id, false))}>Reactivate tracker</button>
-                                    : <button className={button} onClick={() => {
-                                        if (window.confirm(`Archive “${tracker.name}”? Its goals and history will be kept.`)) attempt(() => goals.archiveTracker(tracker.id));
-                                    }}>Archive tracker</button>}
-                            </div>
-                        </header>
-                        <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-xs text-neutral-300">{tracker.cadence.kind === "monthly-weekday"
-                                ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
-                                : `Every ${tracker.cadence.intervalWeeks} ${tracker.cadence.intervalWeeks === 1 ? "week" : "weeks"} on ${weekdays[tracker.cadence.weekday]}`}</span>
-                            <div data-goals-slot="tracker-due" data-tracker-id={tracker.id}>
-                                <TrackerDueBadge due={dueTracker !== null} periodLabel={dueTracker ? periodLabel(dueTracker.mostRecentCompleted) : null} />
-                            </div>
-                        </div>
-                        <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="flex flex-wrap items-center gap-3 rounded-md border border-neutral-800/70 bg-neutral-950/30 p-3">
-                            {!tracker.isArchived && (checkInCurrent === null
-                                ? <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-sm text-neutral-400">No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
-                                    {daysUntilFirstPeriod !== null && <GoalCountdownBadge daysUntilOpen={daysUntilFirstPeriod} />}
+                    <section
+                        aria-label={tracker.name}
+                        className={`overflow-hidden rounded-xl border ${tracker.isArchived ? "border-neutral-800/70 bg-neutral-900/10" : "border-neutral-800 bg-neutral-900/20"}`}
+                    >
+                        <div className={`grid grid-cols-1 ${tracker.isArchived ? "" : "lg:grid-cols-[minmax(0,1fr)_19rem]"}`}>
+                            {/* Identity */}
+                            <div className={`order-1 min-w-0 space-y-4 p-4 sm:p-5 lg:col-start-1 lg:row-start-1 ${tracker.isArchived ? "opacity-80" : ""}`}>
+                                <div ref={trackerActionsRef}>
+                                    <header className="flex items-start gap-3">
+                                        <span aria-hidden="true" className="mt-1.5 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: tracker.color }} />
+                                        <div className="min-w-0 flex-1" title={tracker.purpose || undefined}>
+                                            <div className="flex min-w-0 items-center gap-2">
+                                                <h2 className="sr-only">{tracker.name}</h2>
+                                                <div className="relative min-w-0">
+                                                    <select
+                                                        aria-label="Tracker"
+                                                        className="max-w-full cursor-pointer appearance-none truncate rounded-md bg-transparent py-0.5 pr-7 text-lg font-semibold tracking-tight text-neutral-100 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60"
+                                                        value={tracker.id}
+                                                        onChange={event => {
+                                                            goals.selectTracker(event.target.value);
+                                                            setEditingGoal(null);
+                                                            setPinnedCheckIn(null);
+                                                            setDeckPreview(null);
+                                                            setTrackerActionsOpen(false);
+                                                        }}
+                                                    >
+                                                        {trackers.map(row => <option key={row.id} value={row.id}>{row.name}{row.isArchived ? " (archived)" : ""}</option>)}
+                                                    </select>
+                                                    <span aria-hidden="true" className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-xs text-neutral-500">▾</span>
+                                                </div>
+                                                {tracker.isArchived && <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Archived</span>}
+                                            </div>
+                                            {/* The purpose is available on hover and in Edit tracker rather than costing a line on screen. */}
+                                            {tracker.purpose && <p className="sr-only">{tracker.purpose}</p>}
+                                        </div>
+                                        {tracker.isArchived
+                                            ? <button className={primary} onClick={() => attempt(() => goals.archiveTracker(tracker.id, false))}>Reactivate tracker</button>
+                                            : <button
+                                                type="button"
+                                                className={menuButton}
+                                                aria-label="Tracker actions"
+                                                aria-haspopup="true"
+                                                aria-expanded={trackerActionsOpen}
+                                                aria-controls="tracker-actions-panel"
+                                                onClick={() => setTrackerActionsOpen(open => !open)}
+                                            >···</button>}
+                                    </header>
+                                    {!tracker.isArchived && <div
+                                        id="tracker-actions-panel"
+                                        hidden={!trackerActionsOpen}
+                                        className="mt-3 rounded-lg border border-neutral-800 bg-neutral-950/40 p-3"
+                                    >
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <button className={button} onClick={() => { setTrackerActionsOpen(false); setTrackerForm(tracker); }}>Edit tracker</button>
+                                            <button className={button} onClick={() => {
+                                                setTrackerActionsOpen(false);
+                                                if (window.confirm(`Archive “${tracker.name}”? Its goals and history will be kept.`)) attempt(() => goals.archiveTracker(tracker.id));
+                                            }}>Archive tracker</button>
+                                        </div>
+                                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id} className="mt-3 border-t border-neutral-800 pt-3">
+                                            <GoalSetActions key={tracker.id} trackerId={tracker.id} onImported={newTrackerId => {
+                                                // The component already created the tracker and its goals through the provider.
+                                                goals.selectTracker(newTrackerId);
+                                                setDeckPreview(null);
+                                                setPinnedCheckIn(null);
+                                                setEditingGoal(null);
+                                                setTrackerActionsOpen(false);
+                                            }} />
+                                        </div>
+                                    </div>}
                                 </div>
-                                : <p className="text-sm text-neutral-400">First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>)}
-                            <CheckInEntry trackerId={tracker.id} availability={checkInAvailability} onOpen={periodStart => {
-                                if (!checkInGrid) return;
-                                const pinned = periodAt(checkInGrid, periodStart);
-                                if (pinned) setPinnedCheckIn({ trackerId: tracker.id, period: pinned });
-                            }} />
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-xs text-neutral-300">{tracker.cadence.kind === "monthly-weekday"
+                                        ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
+                                        : `Every ${tracker.cadence.intervalWeeks} ${tracker.cadence.intervalWeeks === 1 ? "week" : "weeks"} on ${weekdays[tracker.cadence.weekday]}`}</span>
+                                    <div data-goals-slot="tracker-due" data-tracker-id={tracker.id}>
+                                        <TrackerDueBadge due={dueTracker !== null} periodLabel={dueTracker ? periodLabel(dueTracker.mostRecentCompleted) : null} />
+                                    </div>
+                                </div>
+                            </div>
+                            {/* Health */}
+                            <div className="order-3 min-w-0 px-4 pb-4 pt-4 sm:px-5 sm:pb-5 lg:col-start-1 lg:row-start-2 lg:pt-0">
+                                {tracker.isArchived
+                                    ? <p className="text-sm text-neutral-400">This tracker is archived. Its goals and history are kept.</p>
+                                    : <div className="space-y-2" data-goals-slot="tracker-health">
+                                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-neutral-300">
+                                            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-sky-400" />{activeCount} active</span>
+                                            <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{achievedCount} achieved</span>
+                                            <span className={`inline-flex items-center gap-1.5 ${slippedCount > 0 ? "text-amber-200" : ""}`}><span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${slippedCount > 0 ? "bg-amber-400" : "bg-neutral-600"}`} />{slippedCount} slipped</span>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <div className="flex items-center justify-between text-xs text-neutral-400">
+                                                <span>{progressTotal === 0 ? "No goals yet" : `${achievedCount} of ${progressTotal} achieved`}</span>
+                                                {progressTotal > 0 && <span>{progressPercent}%</span>}
+                                            </div>
+                                            <div
+                                                role="progressbar"
+                                                aria-label="Goals achieved"
+                                                aria-valuemin={0}
+                                                aria-valuemax={100}
+                                                aria-valuenow={progressPercent}
+                                                className="h-1.5 overflow-hidden rounded-full bg-neutral-800"
+                                            >
+                                                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progressPercent}%` }} />
+                                            </div>
+                                        </div>
+                                    </div>}
+                            </div>
+                            {/* Period spine: last period settled above, this period live below. */}
+                            {!tracker.isArchived && <div className={`order-2 flex flex-col border-b border-neutral-800 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:border-b-0 lg:border-l ${dueTracker ? "bg-amber-950/10" : "bg-neutral-950/40"}`}>
+                                <div data-goals-slot="deck-entry" data-tracker-id={tracker.id} className="order-3 space-y-3 p-4 sm:p-5 lg:order-1">
+                                    <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-200/70">Last period</h3>
+                                    <DeckEntry
+                                        trackerId={tracker.id}
+                                        trackerName={tracker.name}
+                                        availability={deckAvailability}
+                                        onBuild={buildDeck}
+                                    />
+                                </div>
+                                <div aria-hidden="true" className="order-2 flex items-center gap-2 px-4">
+                                    <span className="h-px flex-1 bg-neutral-800" />
+                                    <span className="h-1 w-1 rounded-full bg-neutral-700" />
+                                    <span className="h-px flex-1 bg-neutral-800" />
+                                </div>
+                                <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="order-1 space-y-3 p-4 sm:p-5 lg:order-3">
+                                    <div className="flex items-baseline justify-between gap-2">
+                                        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-200/80">This period</h3>
+                                        {checkInCurrent && <time dateTime={checkInCurrent.periodStart} className="text-xs text-neutral-400">{periodRangeLabel(checkInCurrent)}</time>}
+                                    </div>
+                                    {checkInCurrent === null
+                                        ? <div className="flex flex-wrap items-center gap-2">
+                                            <p className="text-sm text-neutral-400">No open period. First period starts on <time dateTime={checkInFirst!.periodStart}>{checkInFirst!.periodStart}</time>.</p>
+                                            {daysUntilFirstPeriod !== null && <GoalCountdownBadge daysUntilOpen={daysUntilFirstPeriod} />}
+                                        </div>
+                                        : <>
+                                            <p className="text-sm text-neutral-400">First period started on <time dateTime={tracker.cadenceAnchorAt}>{tracker.cadenceAnchorAt}</time>.</p>
+                                            <div className="space-y-1">
+                                                <p className={`text-xs ${checkInComplete ? "text-emerald-300" : "text-neutral-400"}`}>
+                                                    {allGoals.length === 0
+                                                        ? "No goals to record yet"
+                                                        : `${recordedCount} of ${allGoals.length} ${allGoals.length === 1 ? "goal" : "goals"} recorded`}
+                                                </p>
+                                                {allGoals.length > 0 && <div aria-hidden="true" className="h-1 overflow-hidden rounded-full bg-neutral-800">
+                                                    <div
+                                                        className={`h-full rounded-full ${checkInComplete ? "bg-emerald-500" : "bg-indigo-500"}`}
+                                                        style={{ width: `${Math.round((recordedCount / allGoals.length) * 100)}%` }}
+                                                    />
+                                                </div>}
+                                            </div>
+                                        </>}
+                                    <CheckInEntry trackerId={tracker.id} availability={checkInAvailability} complete={checkInComplete} onOpen={periodStart => {
+                                        if (!checkInGrid) return;
+                                        const pinned = periodAt(checkInGrid, periodStart);
+                                        if (pinned) setPinnedCheckIn({ trackerId: tracker.id, period: pinned });
+                                    }} />
+                                </div>
+                            </div>}
                         </div>
-                        <div data-goals-slot="deck-entry" data-tracker-id={tracker.id}>
-                            <DeckEntry
-                                trackerId={tracker.id}
-                                trackerName={tracker.name}
-                                availability={deckAvailability}
-                                onBuild={buildDeck}
-                            />
-                        </div>
-                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id}>
-                            <GoalSetActions trackerId={tracker.id} onImported={newTrackerId => {
-                                // The component already created the tracker and its goals through the provider.
-                                goals.selectTracker(newTrackerId);
-                                setDeckPreview(null);
-                                setPinnedCheckIn(null);
-                                setEditingGoal(null);
-                            }} />
+                        {/* Inline in the page flow, not an overlay: the only scroller on
+                            this page is <main>, so a wizard mounted outside it is clipped
+                            and its later goals are unreachable. */}
+                        <div data-goals-slot="check-in-wizard" className="min-w-0 px-4 sm:px-5">
+                            {pinnedCheckIn && pinnedCheckIn.trackerId === tracker.id && <CheckInWizard
+                                key={`${pinnedCheckIn.trackerId}:${pinnedCheckIn.period.periodStart}`}
+                                trackerId={pinnedCheckIn.trackerId}
+                                period={pinnedCheckIn.period}
+                                onClose={() => setPinnedCheckIn(null)}
+                            />}
                         </div>
                     </section>
                     {!tracker.isArchived && <QuickAdd key={tracker.id} first={allGoals.length === 0} onAdd={(title, status, notes) => {
@@ -302,14 +444,6 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 </>}
             </div>
         </main>
-        <div data-goals-slot="check-in-wizard">
-            {pinnedCheckIn && <CheckInWizard
-                key={`${pinnedCheckIn.trackerId}:${pinnedCheckIn.period.periodStart}`}
-                trackerId={pinnedCheckIn.trackerId}
-                period={pinnedCheckIn.period}
-                onClose={() => setPinnedCheckIn(null)}
-            />}
-        </div>
         <div data-goals-slot="deck-preview">
             {deckPreview && deckPreview.trackerId === tracker?.id && <DeckPreview
                 key={`${deckPreview.trackerId}:${deckPreview.plan.period.periodStart}:${deckPreview.plan.generatedAt}`}
@@ -490,6 +624,8 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
     const [sourceTouched, setSourceTouched] = useState(false);
     const [habitId, setHabitId] = useState(goal.metric?.source === "habit" ? goal.metric.habitId ?? "" : "");
     const [error, setError] = useState<string | null>(null);
+    // A save attempt escalates the live cadence hint instead of stacking a second message.
+    const [attemptedUnreachable, setAttemptedUnreachable] = useState(false);
     // Linked habits stay visible even after archiving; only fresh options are active.
     const habitOptions = orderedHabits(habits.state.habits).filter(habit => !habit.isArchived || habit.id === habitId);
     const selectedHabit = habitId ? habits.state.habits[habitId] : undefined;
@@ -509,6 +645,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
     function chooseHabit(nextId: string) {
         const next = habits.state.habits[nextId];
         setHabitId(nextId);
+        setAttemptedUnreachable(false);
         if (!next) return;
         const previous = habits.state.habits[habitId];
         // Only default the label while it is empty or untouched from the prior habit.
@@ -525,7 +662,12 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
                 const habit = habits.state.habits[habitId];
                 if (!habit) throw new RangeError("Choose a habit for this metric.");
                 const max = maxHabitMetricBuckets(cadence, habit.frequency);
-                if (Number(target) > max) throw new RangeError(cadenceHoldMessage(max, habit.frequency));
+                if (Number(target) > max) {
+                    // Reuse the visible hint as the error state; never duplicate the message.
+                    setError(null);
+                    setAttemptedUnreachable(true);
+                    return;
+                }
                 nextMetric = { label: label.trim(), current: 0, target: Number(target), unit, source: "habit", habitId: habit.id, overridePinned: false };
             } else if (metric) {
                 if (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and finite current and target values.");
@@ -546,7 +688,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
         {metric && <fieldset className="flex flex-wrap gap-3"><legend className="mb-2">Metric {goal.metric && <MetricBadge metric={goal.metric} />}</legend>
             <label className="grid gap-1">Metric label<input className={control} value={label} onChange={event => setLabel(event.target.value)} /></label>
             {source !== "habit" && <label className="grid gap-1">Current<input className={`${control} w-28`} type="number" step="any" value={current} onChange={event => setCurrent(event.target.value)} /></label>}
-            <label className="grid gap-1">Target<input className={`${control} w-28`} type="number" step="any" value={target} onChange={event => setTarget(event.target.value)} /></label>
+            <label className="grid gap-1">Target<input className={`${control} w-28`} type="number" step="any" value={target} onChange={event => { setTarget(event.target.value); setAttemptedUnreachable(false); }} /></label>
             <label className="grid gap-1">Unit<input className={control} value={unit} onChange={event => setUnit(event.target.value)} /></label>
             <label className="grid gap-1">Source<select className={control} value={source} onChange={event => changeSource(event.target.value as typeof source)}>
                 <option value="manual">Manual</option>
@@ -564,7 +706,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
                         </option>;
                     })}
                 </select></label>
-                {unreachable && <p className="w-full text-xs text-amber-300" data-goals-slot="goal-metric-hint">{unreachable}</p>}
+                {unreachable && <p role={attemptedUnreachable ? "alert" : undefined} className={`w-full text-xs ${attemptedUnreachable ? "font-semibold text-red-300" : "text-amber-300"}`} data-goals-slot="goal-metric-hint">{unreachable}</p>}
                 <p className="w-full text-xs text-neutral-500">Current progress is counted from this habit's completions in each goal period.</p>
             </>}
         </fieldset>}

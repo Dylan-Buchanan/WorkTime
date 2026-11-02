@@ -31,7 +31,12 @@ export default defineConfig({
         command: "pnpm run dev --host 127.0.0.1 --port 3001 --strictPort",
         url: "http://127.0.0.1:3001",
         reuseExistingServer: false,
-        timeout: 120_000,
+        // Vite answers the readiness URL only after its dependency optimizer
+        // finishes (re)building node_modules/.vite/deps, so a cold rebuild counts
+        // against this budget. That rebuild is normally a few seconds, but one
+        // cold run on Windows stalled past 120s while the machine was still busy
+        // with Docker/Supabase and antivirus scanning the new node_modules.
+        timeout: 180_000,
         env: {
             VITE_SUPABASE_URL: local.url,
             VITE_SUPABASE_ANON_KEY: local.anonKey,
