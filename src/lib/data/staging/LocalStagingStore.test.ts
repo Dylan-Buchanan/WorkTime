@@ -127,6 +127,19 @@ function throwingStorage(): StorageLike {
 }
 
 describe("LocalStagingStore", () => {
+    it.each([undefined, "", "Line one\nLine two"])("reloads legacy and described to-dos: %j", async (description) => {
+        const storage = corruptStorage({});
+        const store = new LocalStagingStore(storage);
+        const todo = { id: "td", title: "Notes", rule: null, dueDate: null, estimate: 1, currentTaskId: null,
+            position: 0, isArchived: false, createdAt: BASE_TASK.created_at, updatedAt: BASE_TASK.created_at,
+            ...(description === undefined ? {} : { description }) };
+        await store.update(OWNER_A, (record) => ({ ...record, todos: { td: todo },
+            lastSynced: makeBaseline({ todos: { td: { value: todo, updatedAt: todo.updatedAt } } }) }));
+        const loaded = new LocalStagingStore(storage).read(OWNER_A);
+        expect(loaded.todos.td).toEqual(todo);
+        expect(loaded.lastSynced?.todos.td.value).toEqual(todo);
+    });
+
     it("keeps owner records isolated and observes localStorage.clear", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "a" } }));

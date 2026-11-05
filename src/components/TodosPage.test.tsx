@@ -40,6 +40,38 @@ function wrap(data: InMemoryDataAccess) {
 beforeEach(() => localStorage.clear());
 
 describe("TodosPage", () => {
+    it("creates, reopens, edits, archives, reloads and clears multiline descriptions", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const user = userEvent.setup();
+        const view = render(wrap(data));
+        await screen.findByText("Nothing on your list yet");
+        await user.click(screen.getByRole("button", { name: "Add to-do" }));
+        await user.type(screen.getByLabelText("Title"), "With notes");
+        await user.type(screen.getByLabelText("Description (optional)"), "  Context\nDone means shipped  ");
+        await user.click(screen.getByRole("button", { name: "Create to-do" }));
+        const notes = await screen.findByText("Context Done means shipped");
+        expect(notes.textContent).toBe("Context\nDone means shipped");
+        await user.click(screen.getByRole("button", { name: "Edit" }));
+        expect(screen.getByLabelText("Description (optional)")).toHaveValue("Context\nDone means shipped");
+        await user.clear(screen.getByLabelText("Description (optional)"));
+        await user.type(screen.getByLabelText("Description (optional)"), "Updated notes");
+        await user.click(screen.getByRole("button", { name: "Save changes" }));
+        await user.click(screen.getByRole("button", { name: "Archive" }));
+        await user.click(screen.getByRole("button", { name: /Show archived/ }));
+        expect(await screen.findByText("Updated notes")).toBeInTheDocument();
+        await waitFor(async () => expect((await data.loadTodos()).todos[0]).toMatchObject({ description: "Updated notes", isArchived: true }));
+        view.unmount();
+        render(wrap(data));
+        await user.click(screen.getByRole("button", { name: /Show archived/ }));
+        await screen.findByText("Updated notes");
+        await user.click(screen.getByRole("button", { name: "Edit" }));
+        await user.clear(screen.getByLabelText("Description (optional)"));
+        await user.type(screen.getByLabelText("Description (optional)"), "  ");
+        await user.click(screen.getByRole("button", { name: "Save changes" }));
+        expect(screen.queryByText("Updated notes")).not.toBeInTheDocument();
+        await waitFor(async () => expect((await data.loadTodos()).todos[0].description).toBe(""));
+    });
+
     it("groups active to-dos by local due-date bucket", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.saveTodos([

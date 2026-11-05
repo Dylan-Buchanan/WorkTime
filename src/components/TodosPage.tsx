@@ -30,6 +30,7 @@ type BucketKey = "overdue" | "today" | "upcoming" | "no-date";
 
 type TodoDraft = {
     title: string;
+    description: string;
     estimate: number;
     schedule: ScheduleType;
     date: string;
@@ -49,21 +50,21 @@ const BUCKETS: Array<{ key: BucketKey; label: string }> = [
 function todayKey(): LocalDateKey { return localDateKey(new Date()) as LocalDateKey; }
 
 function blankDraft(): TodoDraft {
-    return { title: "", estimate: 1, schedule: "none", date: "", weekdays: [], monthlyDays: [], monthlyLastDayOffset: null, yearlyDates: [{ month: 1, day: 1 }] };
+    return { title: "", description: "", estimate: 1, schedule: "none", date: "", weekdays: [], monthlyDays: [], monthlyLastDayOffset: null, yearlyDates: [{ month: 1, day: 1 }] };
 }
 
 function draftFromTodo(todo: Todo): TodoDraft {
     const rule = todo.rule;
-    if (!rule) return { ...blankDraft(), title: todo.title, estimate: todo.estimate };
-    if (rule.type === "one-off") return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: rule.date };
-    if (rule.type === "weekly") return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", weekdays: [...rule.weekdays] };
+    if (!rule) return { ...blankDraft(), title: todo.title, description: todo.description ?? "", estimate: todo.estimate };
+    if (rule.type === "one-off") return { ...blankDraft(), title: todo.title, description: todo.description ?? "", estimate: todo.estimate, schedule: rule.type, date: rule.date };
+    if (rule.type === "weekly") return { ...blankDraft(), title: todo.title, description: todo.description ?? "", estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", weekdays: [...rule.weekdays] };
     if (rule.type === "monthly") {
         const numeric = rule.days.filter((day): day is number => typeof day === "number");
         const last = rule.days.find((day) => typeof day !== "number");
         const offset = last && typeof last === "object" ? last.lastDayOffset : last === "last-day" ? 0 : null;
-        return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", monthlyDays: numeric, monthlyLastDayOffset: offset };
+        return { ...blankDraft(), title: todo.title, description: todo.description ?? "", estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", monthlyDays: numeric, monthlyLastDayOffset: offset };
     }
-    return { ...blankDraft(), title: todo.title, estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", yearlyDates: rule.dates.map((date) => ({ ...date })) };
+    return { ...blankDraft(), title: todo.title, description: todo.description ?? "", estimate: todo.estimate, schedule: rule.type, date: todo.dueDate ?? "", yearlyDates: rule.dates.map((date) => ({ ...date })) };
 }
 
 function parseDate(value: string): LocalDateKey | null {
@@ -196,9 +197,9 @@ export const TodosPage: React.FC = () => {
                 const recomputedDueDate = ruleChanged && rule && rule.type !== "one-off" && next
                     ? localDateKey(next) as LocalDateKey
                     : ruleChanged && rule && rule.type !== "one-off" ? null : dueDate;
-                updateTodo(editingId, { title, estimate: draft.estimate, rule, dueDate: recomputedDueDate });
+                updateTodo(editingId, { title, description: draft.description.trim(), estimate: draft.estimate, rule, dueDate: recomputedDueDate });
             }
-            else createTodo({ title, estimate: draft.estimate, rule, dueDate });
+            else createTodo({ title, description: draft.description.trim(), estimate: draft.estimate, rule, dueDate });
             closeForm();
         } catch (error) {
             setFormError(error instanceof Error ? error.message : "Check the recurrence details.");
@@ -296,6 +297,8 @@ const TodoForm: React.FC<{
             <div className="space-y-2">
                 <label className="block text-[10px] text-neutral-400" htmlFor="todo-title">Title</label>
                 <input id="todo-title" autoFocus value={draft.title} onChange={(event) => onChange((current) => ({ ...current, title: event.target.value }))} placeholder="Send the project update" className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs" />
+                <label className="block text-[10px] text-neutral-400" htmlFor="todo-description">Description (optional)</label>
+                <textarea id="todo-description" rows={3} value={draft.description} onChange={(event) => onChange((current) => ({ ...current, description: event.target.value }))} className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs" />
                 <label className="block text-[10px] text-neutral-400" htmlFor="todo-estimate">Estimate (pomodoros)</label>
                 <input id="todo-estimate" type="number" min="1" step="1" value={draft.estimate} onChange={(event) => onChange((current) => ({ ...current, estimate: Math.max(1, Math.trunc(Number(event.target.value) || 1)) }))} className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs" />
                 <label className="block text-[10px] text-neutral-400" htmlFor="todo-schedule">Schedule</label>
@@ -367,7 +370,11 @@ const TodoCard: React.FC<TodoCardProps> = ({ todo, bucket, selected, archived = 
             {!archived && <button type="button" {...dragAttributes} {...dragListeners} onClick={(event) => event.stopPropagation()} aria-label={`Drag ${todo.title} to reorder`} title="Drag to reorder" className="grid w-4 shrink-0 cursor-grab grid-cols-2 gap-0.5 pt-1 active:cursor-grabbing">{Array.from({ length: 6 }, (_, index) => <span key={index} className="h-1 w-1 rounded-full bg-neutral-500" />)}</button>}
             <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0"><h3 className={`text-sm font-semibold ${bucket === "overdue" ? "text-red-200" : "text-neutral-100"}`}>{todo.title || "Untitled to-do"}</h3><p className="mt-0.5 text-[10px] text-neutral-500">{formatDueDate(todo, bucket)} · {scheduleLabel(todo.rule)} · {todo.estimate} {todo.estimate === 1 ? "pomodoro" : "pomodoros"}{archived ? " · Archived" : ""}</p></div>
+                    <div className="min-w-0">
+                        <h3 className={`text-sm font-semibold ${bucket === "overdue" ? "text-red-200" : "text-neutral-100"}`}>{todo.title || "Untitled to-do"}</h3>
+                        {todo.description?.trim() && <p className="mt-1 whitespace-pre-wrap wrap-anywhere text-xs text-neutral-400">{todo.description}</p>}
+                        <p className="mt-0.5 text-[10px] text-neutral-500">{formatDueDate(todo, bucket)} · {scheduleLabel(todo.rule)} · {todo.estimate} {todo.estimate === 1 ? "pomodoro" : "pomodoros"}{archived ? " · Archived" : ""}</p>
+                    </div>
                     {!archived && <button type="button" disabled={future} aria-label={`Complete ${todo.title}`} title={future ? "This to-do is not due yet" : "Mark complete"} onClick={(event) => { event.stopPropagation(); onComplete(); }} className="rounded border border-emerald-700/70 px-2.5 py-1.5 text-[10px] text-emerald-300 hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:opacity-40">Complete</button>}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-end gap-1">

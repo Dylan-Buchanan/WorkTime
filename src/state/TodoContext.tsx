@@ -52,6 +52,7 @@ function normalizeTodo(value: unknown): Todo | null {
     return {
         id: value.id,
         title: typeof value.title === "string" ? value.title : "Untitled to-do",
+        description: typeof value.description === "string" ? value.description.trim() : "",
         rule,
         dueDate: typeof value.dueDate === "string" ? value.dueDate as Todo["dueDate"] : null,
         estimate: normalizeTodoEstimate(value.estimate),
@@ -177,7 +178,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const position = input.position ?? Object.values(state.todos).reduce((max, todo) => Math.max(max, todo.position), -1) + 1;
         const rule = input.rule ? normalizeRule(input.rule) : null;
         const todo: Todo = {
-            id: uuid(), title: input.title.trim() || "Untitled to-do", rule,
+            id: uuid(), title: input.title.trim() || "Untitled to-do", description: input.description?.trim() ?? "", rule,
             dueDate: input.dueDate ?? (rule?.type === "one-off" ? rule.date as Todo["dueDate"] : null),
             estimate: normalizeTodoEstimate(input.estimate), currentTaskId: null,
             position, isArchived: false, createdAt: timestamp, updatedAt: timestamp,
@@ -188,7 +189,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const updateTodo = (id: string, patch: Partial<Todo>) => setState((previous) => {
         const current = previous.todos[id];
         if (!current) return previous;
-        return { ...previous, todos: { ...previous.todos, [id]: { ...current, ...patch, id, updatedAt: isoNow() } } };
+        return { ...previous, todos: { ...previous.todos, [id]: { ...current, ...patch, description: (patch.description ?? current.description)?.trim() ?? "", id, updatedAt: isoNow() } } };
     });
     const archiveTodo = (id: string, archive = true) => updateTodo(id, { isArchived: archive });
     const archiveLinkedTaskIfExists = useCallback(async (taskId: string) => {

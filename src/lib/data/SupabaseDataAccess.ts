@@ -85,6 +85,7 @@ function todoRow(todo: Todo, updatedAt?: string) {
     return {
         id: todo.id,
         title: todo.title,
+        description: todo.description?.trim() ?? "",
         rule: todo.rule,
         due_date: todo.dueDate,
         estimate: todo.estimate,
@@ -286,6 +287,7 @@ export class SupabaseDataAccess implements SyncRemote {
     private validateTodo(row: any): Todo {
         if (
             !row || typeof row.id !== "string" || typeof row.title !== "string" ||
+            (row.description !== undefined && typeof row.description !== "string") ||
             (row.rule !== null && !isValidRule(row.rule as TodoRule)) ||
             (row.due_date !== null && typeof row.due_date !== "string") ||
             (row.estimate !== undefined && typeof row.estimate !== "number") ||
@@ -296,7 +298,7 @@ export class SupabaseDataAccess implements SyncRemote {
             this.fail("todos", new Error(`invalid to-do row for ${row?.id ?? "unknown"}`));
         }
         return {
-            id: row.id, title: row.title, rule: clone(row.rule), dueDate: row.due_date,
+            id: row.id, title: row.title, description: row.description?.trim() ?? "", rule: clone(row.rule), dueDate: row.due_date,
             estimate: Number.isFinite(row.estimate) ? Math.max(1, Math.trunc(row.estimate)) : 1,
             currentTaskId: typeof row.current_task_id === "string" ? row.current_task_id : null,
             position: row.position, isArchived: row.is_archived,

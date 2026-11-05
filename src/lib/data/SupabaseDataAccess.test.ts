@@ -246,7 +246,7 @@ describe("SupabaseDataAccess habit transport mapping", () => {
     it("maps to-do rows and tombstones to the extended RPC", async () => {
         const { client, rpc } = mockClient();
         const data = new SupabaseDataAccess(client);
-        const todo = TD("todo-1");
+        const todo = { ...TD("todo-1"), description: "Context\nDetails" };
         await data.push(OWNER, {
             ...emptyPlan(),
             todoUpserts: [{ value: todo, updatedAt: "2026-01-03T00:00:00.000Z" }],
@@ -256,7 +256,7 @@ describe("SupabaseDataAccess habit transport mapping", () => {
         });
         const args = rpc.mock.calls[0][1];
         expect(args.p_todo_upserts).toEqual([{
-            id: "todo-1", title: "Submit report", rule: { type: "weekly", weekdays: [1, 3] },
+            id: "todo-1", title: "Submit report", description: "Context\nDetails", rule: { type: "weekly", weekdays: [1, 3] },
             due_date: "2026-01-07", estimate: 1, current_task_id: null, position: 2, is_archived: false,
             created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-03T00:00:00.000Z",
         }]);
@@ -433,5 +433,18 @@ describe("goal row transport", () => {
     ])("rejects malformed remote rows from %s", async (table, row) => {
         const client = pullClient(undefined, { ...rows, [table as string]: [row] });
         await expect(new SupabaseDataAccess(client).pull(OWNER)).rejects.toThrow("invalid row");
+    });
+});
+
+
+describe("to-do description pulls", () => {
+    it.each([undefined, "", "  Notes\nDetails  "])("accepts descriptions and legacy rows: %j", async (description) => {
+        const todo = TD("legacy");
+        const row = { id: todo.id, title: todo.title, rule: todo.rule, due_date: todo.dueDate,
+            estimate: 1, current_task_id: null, position: 2, is_archived: false,
+            created_at: todo.createdAt, updated_at: todo.updatedAt,
+            ...(description === undefined ? {} : { description }) };
+        const data = new SupabaseDataAccess(pullClient({ work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 }, { todos: [row] }));
+        expect((await data.pull(OWNER)).todos.legacy.value.description).toBe(description?.trim() ?? "");
     });
 });

@@ -1551,6 +1551,21 @@ describe("to-do staged merge", () => {
         expect(buildPushPlan(committed).todoUpserts).toEqual([]);
     });
 
+    it.each(["Remote notes\nSecond line", ""])("merges a remote description independently of a local title: %j", (description) => {
+        const baseTodo = TD("td1", { description: "Original" });
+        const base = snapshot({ todos: { td1: { value: baseTodo, updatedAt: T1 } } });
+        const record = recordFromBaseline(base, {
+            todos: { td1: { ...baseTodo, title: "Local title", updatedAt: T2 } }, todoUpdatedAt: { td1: T2 },
+        });
+        const remoteTodo = { ...baseTodo, description, updatedAt: T3 };
+        const merged = mergePulledSnapshot(record, snapshot({ todos: { td1: { value: remoteTodo, updatedAt: T3 } } }), NOW);
+        expect(merged.record.todos.td1).toMatchObject({ title: "Local title", description });
+        const plan = buildPushPlan(merged.record);
+        expect(plan.todoUpserts[0].value.description).toBe(description);
+        const committed = commitAcknowledgedPush(merged.record, plan, pushedSnapshotFromPlan(merged.record, plan));
+        expect(buildPushPlan(committed).todoUpserts).toEqual([]);
+    });
+
     it("keeps a newer remote to-do over an older local edit", () => {
         const baseTodo = TD("td1", { title: "Base", updatedAt: T1 });
         const base = snapshot({ todos: { td1: { value: baseTodo, updatedAt: T1 } } });

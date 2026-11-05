@@ -116,6 +116,19 @@ function todoCompletion(id: string, todoId: string) {
 }
 
 describe("local-first staged sync transport", () => {
+    it("round-trips inserted, edited and cleared to-do descriptions", async () => {
+        const owner = track(await createLocalUser());
+        const data = remote(owner);
+        let stamp = Date.now() + 60_000;
+        for (const description of ["Context\nDone means shipped", "Updated context", ""]) {
+            const updatedAt = new Date(stamp++).toISOString();
+            await data.push(owner.userId, { ...emptyPlan(), todoUpserts: [
+                { value: { ...todo(TODO_A, "Described", updatedAt), description }, updatedAt },
+            ] });
+            expect((await data.pull(owner.userId)).todos[TODO_A].value.description).toBe(description);
+        }
+    });
+
     it("applies an idempotent staged batch under RLS without touching another owner", async () => {
         const owner = track(await createLocalUser());
         const other = track(await createLocalUser());

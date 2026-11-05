@@ -84,6 +84,7 @@ const HABIT_FIELDS: ReadonlyArray<keyof Habit> = [
 
 const TODO_FIELDS: ReadonlyArray<keyof Todo> = [
     "title",
+    "description",
     "rule",
     "dueDate",
     "estimate",

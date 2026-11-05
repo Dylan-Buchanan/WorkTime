@@ -21,6 +21,11 @@ function Probe() {
     return <div>
         <span data-testid="count">{Object.keys(state.todos).length}</span>
         <span data-testid="title">{id ? state.todos[id].title : ""}</span>
+        <span data-testid="description">{id ? state.todos[id].description : ""}</span>
+        <button onClick={() => createTodo({ title: "Notes", description: "  Context\nDetails  " })}>create-notes</button>
+        <button onClick={() => updateTodo(id, { description: " Updated " })}>edit-notes</button>
+        <button onClick={() => updateTodo(id, { description: "  \n " })}>clear-notes</button>
+
         <span data-testid="selected">{state.ui.selected ?? ""}</span>
         <button onClick={() => createTodo({ title: "Created" })}>create</button>
         <button onClick={() => id && updateTodo(id, { title: "Updated" })}>update</button>
@@ -59,6 +64,22 @@ function wrapIntegration(data: InMemoryDataAccess) {
 beforeEach(() => localStorage.clear());
 
 describe("TodoContext", () => {
+    it("normalizes, persists and clears descriptions", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const load = vi.spyOn(data, "loadTodos");
+        const view = render(wrap(data));
+        await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+        await act(async () => screen.getByText("create-notes").click());
+        await waitFor(async () => expect((await data.loadTodos()).todos[0]?.description).toBe("Context\nDetails"));
+        await act(async () => screen.getByText("edit-notes").click());
+        await waitFor(async () => expect((await data.loadTodos()).todos[0].description).toBe("Updated"));
+        view.unmount();
+        render(wrap(data));
+        await waitFor(() => expect(screen.getByTestId("description")).toHaveTextContent("Updated"));
+        await act(async () => screen.getByText("clear-notes").click());
+        await waitFor(async () => expect((await data.loadTodos()).todos[0].description).toBe(""));
+    });
+
     it("hydrates staged to-dos and restores only local selection", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.saveTodos([todo("td1", "Hydrated")], []);
@@ -66,6 +87,7 @@ describe("TodoContext", () => {
         render(wrap(data));
         await waitFor(() => expect(screen.getByTestId("title")).toHaveTextContent("Hydrated"));
         expect(screen.getByTestId("selected")).toHaveTextContent("td1");
+        expect(screen.getByTestId("description").textContent).toBe("");
     });
 
     it("persists mutations without triggering a sync and reloads revisions without restaging", async () => {

@@ -48,6 +48,8 @@ export type TodoRule = OneOffTodoRule | WeeklyTodoRule | MonthlyTodoRule | Yearl
 export interface Todo {
     id: string;
     title: string;
+    /** Optional free-form notes; absent legacy values read as empty. */
+    description?: string;
     rule: TodoRule | null;
     dueDate: LocalDateKey | null;
     /** Planned work for each occurrence, in pomodoros. */
@@ -72,6 +74,8 @@ export interface TodoCompletion {
 
 export interface NewTodoInput {
     title: string;
+    /** Optional free-form notes; absent legacy values read as empty. */
+    description?: string;
     rule?: TodoRule | null;
     dueDate?: LocalDateKey | null;
     position?: number;
