@@ -1,4 +1,5 @@
 import { ActiveTimer, PMTask, Project, Task } from "../state/types";
+import { isProjectWorkableOnDate, type ProjectSchedule } from "./projectSchedule";
 
 export const EPSILON = 1e-3;
 
@@ -73,9 +74,7 @@ export interface EligibleProjectionTask {
 }
 
 /**
- * The single definition of which project-manager tasks carry actionable work.
- * The projected-finish card and the today surface both build from this list so
- * their notion of "in scope" cannot drift apart.
+ * Computes eligible remaining work before applying the daily and weekly scopes.
  */
 export function collectEligibleProjectionTasks(input: ProjectionEligibilityInput): EligibleProjectionTask[] {
     const activeFractionRaw = input.activeWorkFraction;
@@ -137,6 +136,17 @@ export function classifyDueScope(dueDate: string | null | undefined, reference: 
     );
 }
 
+/** Today and the daily projection use the same due-date and project schedule rules. */
+export function getDailyProjectionScope(
+    scope: DueScope,
+    project: Partial<ProjectSchedule> | undefined,
+    reference: Date,
+): "due" | "unscheduled" | null {
+    if (scope !== "due" && scope !== "unscheduled") return null;
+    if (project && !isProjectWorkableOnDate(project, reference)) return null;
+    return scope;
+}
+
 export interface ProjectionBacklog {
     totalPomodoros: number;
     dueTodayOrOverduePomodoros: number;
@@ -174,7 +184,11 @@ function addToBacklog(backlog: ProjectionBacklog, task: ProjectionBacklogTask, c
  * Builds daily and ISO-week projection backlogs from already-eligible task work.
  * The caller supplies the reference date so the computation has no wall-clock dependency.
  */
-export function buildProjectionBacklogs(tasks: ProjectionBacklogTask[], reference: Date): ProjectionBacklogs {
+export function buildProjectionBacklogs(
+    tasks: readonly ProjectionBacklogTask[],
+    reference: Date,
+    projects: Readonly<Record<string, Partial<ProjectSchedule>>>,
+): ProjectionBacklogs {
     const daily = emptyProjectionBacklog();
     const weekly = emptyProjectionBacklog();
     const todayKey = toLocalDateKey(reference);
@@ -183,18 +197,18 @@ export function buildProjectionBacklogs(tasks: ProjectionBacklogTask[], referenc
     for (const task of tasks) {
         if (!Number.isFinite(task.remainingPomodoros) || task.remainingPomodoros <= EPSILON) continue;
         const scope = dueScopeFor(parseDueDateKey(task.dueDate), todayKey, weekEndKey);
-        if (scope === "unscheduled") {
-            addToBacklog(daily, task, "unscheduled");
-            addToBacklog(weekly, task, "unscheduled");
-        } else if (scope === "due") {
-            addToBacklog(daily, task, "due");
-            addToBacklog(weekly, task, "due");
-        } else if (scope === "thisWeek") {
+        const project = task.projectId ? projects[task.projectId] : undefined;
+        const dailyScope = getDailyProjectionScope(scope, project, reference);
+        if (dailyScope) {
+            addToBacklog(daily, task, dailyScope);
+        }
+        if (scope === "thisWeek" || scope === "future") {
             daily.excludedFuturePomodoros += task.remainingPomodoros;
-            addToBacklog(weekly, task, "thisWeek");
-        } else {
-            daily.excludedFuturePomodoros += task.remainingPomodoros;
+        }
+        if (scope === "future") {
             weekly.excludedFuturePomodoros += task.remainingPomodoros;
+        } else {
+            addToBacklog(weekly, task, scope);
         }
     }
 

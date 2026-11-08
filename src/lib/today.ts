@@ -3,6 +3,7 @@ import { getBucketKey, isHabitCompleted } from "./habits";
 import {
     classifyDueScope,
     collectEligibleProjectionTasks,
+    getDailyProjectionScope,
     toLocalDateKey,
     type ProjectionEligibilityInput,
 } from "./timer";
@@ -70,15 +71,15 @@ function toTodayTask(
 }
 
 /**
- * The tasks the projected-finish card counts for today: due today, overdue, and
- * undated/flexible work. Built from the same eligibility rules as the projection.
+ * The tasks the daily projected-finish card counts as workable today.
  */
 export function buildTodayTasks(input: BuildTodayTasksInput): TodayTaskList {
     const todayKey = toLocalDateKey(input.reference);
     const tasks = collectEligibleProjectionTasks(input)
         .filter((entry) => {
             const scope = classifyDueScope(entry.dueDate, input.reference);
-            return scope === "due" || scope === "unscheduled";
+            const project = entry.projectId ? input.projects[entry.projectId] : undefined;
+            return getDailyProjectionScope(scope, project, input.reference) !== null;
         })
         .map((entry) => toTodayTask(entry, input.projects, todayKey))
         .sort((left, right) => {

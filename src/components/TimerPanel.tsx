@@ -16,11 +16,12 @@ import {
     type ProjectionBacklog,
 } from "../lib/timer";
 import { useOptionalTodos } from "../state/TodoContext";
+import { isProjectWorkableOnDate } from "../lib/projectSchedule";
 import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
 import { CalendarDays, CalendarRange, Check, Clock3, Coffee, Info, Target } from "lucide-react";
 import { TodaySurface } from "./TodaySurface";
 
-const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
+const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
 
 type FinishProjection =
@@ -372,18 +373,20 @@ export const TimerPanel: React.FC = () => {
         const shortBreakMs = (settings.short_break_minutes || 0) * 60000;
         const longBreakMs = (settings.long_break_minutes || 0) * 60000;
         const segmentLength = Math.max(1, settings.segment_length || 1);
-        const activeTimer = timer;
         const eligibleTasks = collectEligibleProjectionTasks({
             pmTasks,
             backendTasks,
             projects: pmState.projects,
-            activeWorkTaskId: activeTimer?.kind === "Work" ? activeTimer.task_id : null,
+            activeWorkTaskId: timer?.kind === "Work" ? timer.task_id : null,
             activeWorkFraction: activeFractionComplete,
-        }).map(({ dueDate, remainingPomodoros, projectId }) => ({ dueDate, remainingPomodoros, projectId }));
+        });
 
-        const backlogs = buildProjectionBacklogs(eligibleTasks, projectionStart);
+        const backlogs = buildProjectionBacklogs(eligibleTasks, projectionStart, pmState.projects);
+        const activeProjectId = timer?.kind === "Work" && linkedTask?.appTaskId === timer.task_id ? linkedTask.projectId : null;
+        const activeProject = activeProjectId ? pmState.projects[activeProjectId] : undefined;
+        const dailyTimer = activeProject && !isProjectWorkableOnDate(activeProject, projectionStart) ? null : timer;
 
-        const createProjection = (backlog: ProjectionBacklog, windowEndKey: string): FinishProjection => {
+        const createProjection = (backlog: ProjectionBacklog, windowEndKey: string, activeTimer: typeof timer): FinishProjection => {
             const totalRemaining = backlog.totalPomodoros;
             if (totalRemaining <= EPSILON) return {
                 hasWork: false,
@@ -466,10 +469,10 @@ export const TimerPanel: React.FC = () => {
         };
 
         return {
-            daily: createProjection(backlogs.daily, todayKey),
-            weekly: createProjection(backlogs.weekly, weekEndKey),
+            daily: createProjection(backlogs.daily, todayKey, dailyTimer),
+            weekly: createProjection(backlogs.weekly, weekEndKey, timer),
         };
-    }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, pmState.projects, timer, ms, tick, activeWorkPlannedSecs, activeRemainingSecs, activeFractionComplete, activeAppTaskId]);
+    }, [state?.settings, state?.tasks, state?.current_cycle_pomodoros, pmState.tasks, pmState.projects, timer, ms, tick, activeWorkPlannedSecs, activeRemainingSecs, activeFractionComplete, linkedTask]);
 
     const activePomodoroSummary = useMemo(() => {
         if (!activeAppTaskId) return null;

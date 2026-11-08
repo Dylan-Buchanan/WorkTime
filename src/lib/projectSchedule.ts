@@ -31,3 +31,7 @@ export function normalizeProjectSchedule(value: Partial<ProjectSchedule> | null 
         workableDays: workableDays.length > 0 ? workableDays : [...DEFAULT_WORKABLE_DAYS],
     };
 }
+
+export function isProjectWorkableOnDate(project: Partial<ProjectSchedule>, reference: Date): boolean {
+    return normalizeProjectSchedule(project).workableDays.includes(reference.getDay() as WorkableWeekday);
+}

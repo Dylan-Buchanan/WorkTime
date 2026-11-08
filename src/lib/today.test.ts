@@ -198,23 +198,48 @@ describe("buildTodayTasks", () => {
         expect(missingProject?.projectName).toBeNull();
     });
 
-    it("agrees with the daily projected-finish backlog", () => {
-        const pmTasks = [
-            pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2 }),
-            pmTask({ id: "today", dueDate: "2026-08-12", estimatePomos: 1.5 }),
-            pmTask({ id: "flexible", estimatePomos: 3 }),
-            pmTask({ id: "this-week", dueDate: "2026-08-14", estimatePomos: 4 }),
-            pmTask({ id: "future", dueDate: "2026-08-17", estimatePomos: 5 }),
-        ];
-        const eligible = collectEligibleProjectionTasks({ pmTasks, backendTasks: {}, projects: {} });
-        const daily = buildProjectionBacklogs(
-            eligible.map(({ dueDate, remainingPomodoros, projectId }) => ({ dueDate, remainingPomodoros, projectId })),
-            REFERENCE,
-        );
-        const today = buildTodayTasks({ reference: REFERENCE, pmTasks, backendTasks: {}, projects: {} });
+    it("includes only workable and unassigned tasks on Saturday", () => {
+        const result = buildTodayTasks({
+            reference: new Date(2026, 7, 15, 0, 1),
+            pmTasks: [
+                pmTask({ id: "weekday-due", projectId: "weekday", dueDate: "2026-08-15", estimatePomos: 2 }),
+                pmTask({ id: "weekday-overdue", projectId: "weekday", dueDate: "2026-08-14", estimatePomos: 3 }),
+                pmTask({ id: "weekday-flexible", projectId: "weekday", estimatePomos: 4 }),
+                pmTask({ id: "saturday", projectId: "saturday", estimatePomos: 1.5 }),
+                pmTask({ id: "unassigned", dueDate: "2026-08-15", estimatePomos: 2 }),
+                pmTask({ id: "missing-project", projectId: "gone", dueDate: "2026-08-14", estimatePomos: 1 }),
+            ],
+            backendTasks: {},
+            projects: {
+                weekday: project({ id: "weekday" }),
+                saturday: project({ id: "saturday", workableDays: [6] }),
+            },
+        });
 
-        expect(today.remainingPomodoros).toBeCloseTo(daily.daily.totalPomodoros, 10);
-        expect(today.tasks).toHaveLength(3);
+        expect(result.tasks.map((task) => task.id)).toEqual(["missing-project", "unassigned", "saturday"]);
+        expect(result.remainingPomodoros).toBe(4.5);
+    });
+
+    it("agrees with the daily projected-finish backlog", () => {
+        const input = {
+            reference: REFERENCE,
+            backendTasks: {},
+            projects: { weekend: project({ id: "weekend", workableDays: [0, 6] }) },
+            pmTasks: [
+                pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2 }),
+                pmTask({ id: "today", dueDate: "2026-08-12", estimatePomos: 1.5 }),
+                pmTask({ id: "flexible", estimatePomos: 3 }),
+                pmTask({ id: "this-week", dueDate: "2026-08-14", estimatePomos: 4 }),
+                pmTask({ id: "future", dueDate: "2026-08-17", estimatePomos: 5 }),
+                pmTask({ id: "off-today", projectId: "weekend", dueDate: "2026-08-12", estimatePomos: 6 }),
+            ],
+        };
+        const eligible = collectEligibleProjectionTasks(input);
+        const { daily } = buildProjectionBacklogs(eligible, input.reference, input.projects);
+        const today = buildTodayTasks(input);
+
+        expect(today.remainingPomodoros).toBeCloseTo(daily.totalPomodoros, 10);
+        expect(today.tasks.map((task) => task.id)).toEqual(["overdue", "today", "flexible"]);
         expect(getLocalWeekWindow(REFERENCE).endKey).toBe("2026-08-16");
     });
 });

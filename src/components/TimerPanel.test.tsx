@@ -9,15 +9,17 @@ import { HabitProvider } from "../state/HabitContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
+import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { toLocalDateKey } from "../lib/timer";
 import { makeActiveTimer, makeAppState } from "../test/mockTauri";
-import type { PMTask, Task } from "../state/types";
+import type { AppStateData, PMTask, Project, Task } from "../state/types";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
 }));
 
 const OWNER = "timer-panel-owner";
+const DAILY_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 
 function makePMTask(overrides: Partial<PMTask>): PMTask {
     return {
@@ -59,6 +61,19 @@ function makeAppTask(id: string, name: string): Task {
     };
 }
 
+function makeProject(id: string, workableDays?: Project["workableDays"]): Project {
+    return {
+        id,
+        name: id,
+        color: "#10B981",
+        isArchived: false,
+        sortOrder: 0,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...normalizeProjectSchedule({ workableDays }),
+    };
+}
+
 const SelectionProbe = () => {
     const { state } = usePM();
     return <span hidden data-testid="pm-selected-task">{state.ui.selectedTaskId ?? ""}</span>;
@@ -91,10 +106,10 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
     );
 }
 
-async function renderWithTasks(tasks: Record<string, PMTask>) {
-    const data = new InMemoryDataAccess(makeAppState());
+async function renderWithTasks(tasks: Record<string, PMTask>, projects: Record<string, Project> = {}, appState?: Partial<AppStateData>) {
+    const data = new InMemoryDataAccess(makeAppState(appState));
     await data.savePMState({
-        projects: {},
+        projects,
         tasks,
         meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
     });
@@ -165,6 +180,69 @@ describe("TimerPanel task details", () => {
 });
 
 describe("TimerPanel projected finish", () => {
+    it("projects Saturday work without counting the weekday project's running timer", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const start = new Date(2026, 7, 15, 10);
+        vi.setSystemTime(start);
+        try {
+            const weekdayTask = makeAppTask("app-weekday", "Weekday work");
+            await renderWithTasks({
+                weekday: makePMTask({ id: "weekday", appTaskId: weekdayTask.id, projectId: "weekday", estimatePomos: 3, dueDate: "2026-08-15" }),
+                saturday: makePMTask({ id: "saturday", projectId: "saturday", estimatePomos: 2 }),
+            }, {
+                weekday: makeProject("weekday"),
+                saturday: makeProject("saturday", [6]),
+            }, {
+                tasks: { [weekdayTask.id]: weekdayTask },
+                active_task: weekdayTask.id,
+                timer: makeActiveTimer({
+                    task_id: weekdayTask.id,
+                    started_at: new Date(start.getTime() - 12.5 * 60_000).toISOString(),
+                    ends_at: new Date(start.getTime() + 12.5 * 60_000).toISOString(),
+                }),
+            });
+
+            expect(await screen.findByText("2p in scope")).toBeInTheDocument();
+            expect(screen.getByText("Flexible · 2p")).toBeInTheDocument();
+            expect(screen.queryByText(/Due now ·/)).not.toBeInTheDocument();
+            expect(screen.getByText("55m total")).toBeInTheDocument();
+            const finish = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
+                .format(new Date(2026, 7, 15, 10, 55));
+            expect(screen.getByText(finish)).toBeInTheDocument();
+
+            fireEvent.click(screen.getByRole("button", { name: /This week/ }));
+            expect(screen.getByText("4.5p in scope")).toBeInTheDocument();
+            expect(screen.getByText("Due now · 2.5p")).toBeInTheDocument();
+            expect(screen.getByText("Flexible · 2p")).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        { futureTask: false, message: "You're all caught up for today. Great work!" },
+        { futureTask: true, message: "No work due today. 2p future-due work remains outside this projection." },
+    ])("shows the daily empty state with future task = $futureTask", async ({ futureTask, message }) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 15, 10));
+        try {
+            const tasks = {
+                weekday: makePMTask({ id: "weekday", projectId: "weekday", estimatePomos: 3, dueDate: "2026-08-15" }),
+                ...(futureTask && { future: makePMTask({ id: "future", projectId: "weekday", estimatePomos: 2, dueDate: "2026-08-16" }) }),
+            };
+            await renderWithTasks(tasks, { weekday: makeProject("weekday") });
+            fireEvent.click(await screen.findByRole("button", { name: /This week/ }));
+            expect(await screen.findByText("Due now · 3p")).toBeInTheDocument();
+
+            fireEvent.click(screen.getByRole("button", { name: /^Today/, pressed: false }));
+            expect(screen.getByText(message)).toBeInTheDocument();
+            expect(screen.getByText("No tasks")).toBeInTheDocument();
+            expect(screen.queryByText("Finish by")).not.toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("discloses future-due work instead of claiming the day is complete", async () => {
         await renderWithTasks({
             future: makePMTask({ id: "future", estimatePomos: 2, dueDate: futureDateKey() }),
@@ -172,9 +250,9 @@ describe("TimerPanel projected finish", () => {
 
         await waitFor(() => expect(screen.getByText("No work due today. 2p future-due work remains outside this projection.")).toBeInTheDocument());
         expect(screen.queryByText("You're all caught up for today. Great work!")).not.toBeInTheDocument();
-        expect(screen.queryByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).not.toBeInTheDocument();
+        expect(screen.queryByText(DAILY_RULES)).not.toBeInTheDocument();
         fireEvent.click(screen.getAllByRole("button", { name: "Info" })[0]);
-        expect(screen.getByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).toBeInTheDocument();
+        expect(screen.getByText(DAILY_RULES)).toBeInTheDocument();
     });
 
     it("labels the included and excluded task rules when work is projected", async () => {
@@ -186,9 +264,9 @@ describe("TimerPanel projected finish", () => {
 
         await waitFor(() => expect(screen.getByText("Daily projected finish")).toBeInTheDocument());
         expect(screen.getByText("Due now · 1p")).toBeInTheDocument();
-        expect(screen.queryByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).not.toBeInTheDocument();
+        expect(screen.queryByText(DAILY_RULES)).not.toBeInTheDocument();
         fireEvent.click(screen.getAllByRole("button", { name: "Info" })[0]);
-        expect(screen.getByText("Includes no due date and due today/overdue. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.")).toBeInTheDocument();
+        expect(screen.getByText(DAILY_RULES)).toBeInTheDocument();
     });
 
     it("includes later-this-week tasks in a distinct weekly projection", async () => {

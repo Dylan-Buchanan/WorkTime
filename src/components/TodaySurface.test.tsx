@@ -11,7 +11,7 @@ import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { toLocalDateKey } from "../lib/timer";
 import { makeActiveTimer, makeAppState } from "../test/mockTauri";
-import type { AppStateData, Habit, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
+import type { AppStateData, Habit, PMTask, PomodoroLogEntry, Project, Task, WorkableWeekday } from "../state/types";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -158,7 +158,7 @@ describe("TodaySurface", () => {
                 "task-a": pmTask({ id: "task-a", title: "Ship the report", projectId: "project-1", estimatePomos: 3, dueDate: todayKey() }),
                 "task-b": pmTask({ id: "task-b", title: "Clear inbox", estimatePomos: 1 }),
             },
-            projects: { "project-1": project() },
+            projects: { "project-1": project({ workableDays: [new Date().getDay() as WorkableWeekday] }) },
             habits: [habit()],
             completions: [{ id: "c1", habitId: "habit-1", bucket: todayKey(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }],
             appState: {
@@ -193,6 +193,30 @@ describe("TodaySurface", () => {
         expect(screen.getByRole("button", { name: "Morning walk (daily)" })).toHaveAttribute("aria-pressed", "true");
         expect(screen.getByText("Unassigned task")).toBeInTheDocument();
         expect(screen.getAllByText("1p · 25m")).toHaveLength(2);
+    });
+
+    it("lists Saturday work and excludes weekday-project pomodoros from the summary", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 15, 10));
+        try {
+            await renderSurface({
+                tasks: {
+                    weekday: pmTask({ id: "weekday", title: "Weekday work", projectId: "weekday", estimatePomos: 3, dueDate: todayKey() }),
+                    saturday: pmTask({ id: "saturday", title: "Saturday work", projectId: "saturday", estimatePomos: 2 }),
+                },
+                projects: {
+                    weekday: project({ id: "weekday" }),
+                    saturday: project({ id: "saturday", workableDays: [6] }),
+                },
+            });
+
+            expect(await screen.findByText("1 task · 2p left")).toBeInTheDocument();
+            expandSurface();
+            expect(screen.getByText("Saturday work")).toBeInTheDocument();
+            expect(screen.queryByText("Weekday work")).not.toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("marks the active task and reports remaining pomodoros against its estimate", async () => {

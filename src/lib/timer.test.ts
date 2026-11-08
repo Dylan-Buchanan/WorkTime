@@ -164,7 +164,7 @@ describe("buildProjectionBacklogs", () => {
             { dueDate: null, remainingPomodoros: 3, projectId: null },
             { dueDate: "2026-08-14", remainingPomodoros: 4, projectId: "beta" },
             { dueDate: "2026-08-17", remainingPomodoros: 5, projectId: "beta" },
-        ], new Date(2026, 7, 12, 12));
+        ], new Date(2026, 7, 12, 12), {});
 
         expect(result.daily.totalPomodoros).toBe(6);
         expect(result.daily.dueTodayOrOverduePomodoros).toBe(3);
@@ -178,11 +178,37 @@ describe("buildProjectionBacklogs", () => {
         expect(result.weekly.remainingByProject.get(null)).toBe(3);
     });
 
+    it("excludes off-day projects from the daily backlog and retains them in the weekly backlog", () => {
+        const reference = new Date(2026, 7, 15, 12);
+        const tasks = [
+            { dueDate: "2026-08-14", remainingPomodoros: 2, projectId: "weekday" },
+            { dueDate: null, remainingPomodoros: 3, projectId: "weekday" },
+            { dueDate: "2026-08-16", remainingPomodoros: 4, projectId: "weekday" },
+            { dueDate: null, remainingPomodoros: 1.5, projectId: "saturday" },
+            { dueDate: "2026-08-15", remainingPomodoros: 1, projectId: null },
+        ];
+        const { daily, weekly } = buildProjectionBacklogs(tasks, reference, {
+            weekday: {},
+            saturday: { workableDays: [6] },
+        });
+
+        expect(daily).toEqual({
+            totalPomodoros: 2.5,
+            dueTodayOrOverduePomodoros: 1,
+            unscheduledPomodoros: 1.5,
+            dueThisWeekPomodoros: 0,
+            excludedFuturePomodoros: 4,
+            remainingByProject: new Map<string | null, number>([["saturday", 1.5], [null, 1]]),
+        });
+        expect(weekly).toEqual(buildProjectionBacklogs(tasks, reference, {}).weekly);
+        expect(weekly.totalPomodoros).toBe(11.5);
+    });
+
     it("ignores non-positive and non-finite remaining work", () => {
         const result = buildProjectionBacklogs([
             { remainingPomodoros: 0, projectId: null },
             { remainingPomodoros: Number.NaN, projectId: null },
-        ], new Date(2026, 7, 12));
+        ], new Date(2026, 7, 12), {});
         expect(result.daily.totalPomodoros).toBe(0);
         expect(result.weekly.totalPomodoros).toBe(0);
     });
