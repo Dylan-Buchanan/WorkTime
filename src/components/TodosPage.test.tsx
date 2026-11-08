@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { TodosPage } from "./TodosPage";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
-import { addLocalDays, localDateKey, nextOccurrence } from "../lib/todos";
+import { addLocalDays, localDateAtNoon, localDateFromKey, localDateKey, nextOccurrence } from "../lib/todos";
 import type { Todo } from "../lib/todos";
 import { DataProvider } from "../state/DataContext";
 import { SyncProvider } from "../state/SyncContext";
@@ -16,6 +16,10 @@ const OWNER = "todo-page-owner";
 function dateOffset(offset: number): Todo["dueDate"] {
     return localDateKey(addLocalDays(new Date(), offset)) as Todo["dueDate"];
 }
+
+const displayKey = (key: string) => localDateFromKey(key).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+const fullDayLabel = (date: Date) => date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+const monthHeading = (date: Date) => date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
 function todo(id: string, dueDate: Todo["dueDate"], overrides: Partial<Todo> = {}): Todo {
     return {
@@ -134,5 +138,91 @@ describe("TodosPage", () => {
             const saved = await data.loadTodos();
             expect(saved.todos[0].dueDate).toBe(expected ? localDateKey(expected) : null);
         });
+    });
+
+    it("creates a one-off to-do from the calendar picker", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const user = userEvent.setup();
+        render(wrap(data));
+        await screen.findByText("Nothing on your list yet");
+        await user.click(screen.getByRole("button", { name: "Add to-do" }));
+        await user.type(screen.getByLabelText("Title"), "Calendar item");
+        await user.selectOptions(screen.getByLabelText("Schedule"), "one-off");
+
+        const today = new Date();
+        const target = localDateAtNoon(today.getFullYear(), today.getMonth(), today.getDate() <= 15 ? 15 : 1);
+        const expected = localDateKey(target);
+
+        const trigger = screen.getByLabelText("Due date");
+        expect(trigger).toHaveTextContent("Pick a date");
+        await user.click(trigger);
+        await user.click(screen.getByRole("button", { name: fullDayLabel(target) }));
+
+        expect(trigger).toHaveTextContent(displayKey(expected));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Create to-do" }));
+        await screen.findByText("Calendar item");
+        await waitFor(async () => {
+            const saved = await data.loadTodos();
+            expect(saved.todos[0]).toMatchObject({ title: "Calendar item", dueDate: expected });
+        });
+    });
+
+    it("edits an existing one-off to-do through the calendar", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.saveTodos([todo("Stored date", "2026-03-04")], []);
+        const user = userEvent.setup();
+        render(wrap(data));
+        await screen.findByText("Stored date");
+        await user.click(screen.getByRole("button", { name: "Edit" }));
+
+        const trigger = screen.getByLabelText("Due date");
+        expect(trigger).toHaveTextContent(displayKey("2026-03-04"));
+        await user.click(trigger);
+        expect(screen.getByText(monthHeading(localDateAtNoon(2026, 2, 1)))).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: fullDayLabel(localDateAtNoon(2026, 2, 10)) }));
+        expect(trigger).toHaveTextContent(displayKey("2026-03-10"));
+
+        await user.click(screen.getByRole("button", { name: "Save changes" }));
+        await waitFor(async () => {
+            expect((await data.loadTodos()).todos[0].dueDate).toBe("2026-03-10");
+        });
+    });
+
+    it("keeps the one-off date validation when no date is chosen", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const user = userEvent.setup();
+        render(wrap(data));
+        await screen.findByText("Nothing on your list yet");
+        await user.click(screen.getByRole("button", { name: "Add to-do" }));
+        await user.type(screen.getByLabelText("Title"), "Needs a date");
+        await user.selectOptions(screen.getByLabelText("Schedule"), "one-off");
+        await user.click(screen.getByRole("button", { name: "Create to-do" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Choose a valid date.");
+        expect((await data.loadTodos()).todos).toHaveLength(0);
+    });
+
+    it("keeps the recurrence date-match validation", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const user = userEvent.setup();
+        render(wrap(data));
+        await screen.findByText("Nothing on your list yet");
+        await user.click(screen.getByRole("button", { name: "Add to-do" }));
+        await user.type(screen.getByLabelText("Title"), "Mismatched recurrence");
+        await user.selectOptions(screen.getByLabelText("Schedule"), "weekly");
+        await user.click(screen.getByRole("checkbox", { name: "Monday" }));
+
+        const today = new Date();
+        let target = localDateAtNoon(today.getFullYear(), today.getMonth(), 1);
+        if (target.getDay() === 1) target = localDateAtNoon(today.getFullYear(), today.getMonth(), 2);
+
+        await user.click(screen.getByLabelText("First due date"));
+        await user.click(screen.getByRole("button", { name: fullDayLabel(target) }));
+        await user.click(screen.getByRole("button", { name: "Create to-do" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("The first due date must match the recurrence schedule.");
+        expect((await data.loadTodos()).todos).toHaveLength(0);
     });
 });

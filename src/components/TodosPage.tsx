@@ -21,6 +21,7 @@ import {
     formatTodoRule,
 } from "../lib/todos";
 import type { LocalDateKey, MonthlyDay, Todo, TodoRule, YearlyDate } from "../lib/todos";
+import { DatePickerButton } from "./DatePickerButton";
 import { TodoSchedulePicker, type RecurrenceType, type SchedulePickerValue } from "./TodoSchedulePicker";
 import { useSounds } from "../hooks/useSounds";
 import { useTodos } from "../state/TodoContext";
@@ -318,7 +319,7 @@ const TodoForm: React.FC<{
 
 const ScheduleFields: React.FC<{ draft: TodoDraft; editing: boolean; onChange: React.Dispatch<React.SetStateAction<TodoDraft>> }> = ({ draft, editing, onChange }) => {
     if (draft.schedule === "none") return <p className="self-end text-[11px] text-neutral-500">This to-do will stay in the no-date list.</p>;
-    if (draft.schedule === "one-off") return <DateField id="todo-date" label="Due date" value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />;
+    if (draft.schedule === "one-off") return <DatePickerButton id="todo-date" label="Due date" value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />;
     const pickerValue: SchedulePickerValue = {
         type: draft.schedule as RecurrenceType,
         weekdays: draft.weekdays,
@@ -329,7 +330,7 @@ const ScheduleFields: React.FC<{ draft: TodoDraft; editing: boolean; onChange: R
     let preview: string | null = null;
     try { preview = formatTodoRule(buildRecurrenceRule(draft)); } catch { /* incomplete drafts have no preview */ }
     return <div className="space-y-2">
-        <DateField id="todo-due-date" label={editing ? "Current due date" : "First due date"} value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />
+        <DatePickerButton id="todo-due-date" label={editing ? "Current due date" : "First due date"} value={draft.date} onChange={(date) => onChange((current) => ({ ...current, date }))} />
         <TodoSchedulePicker
             value={pickerValue}
             preview={preview}
@@ -338,8 +339,6 @@ const ScheduleFields: React.FC<{ draft: TodoDraft; editing: boolean; onChange: R
         {editing && <p className="text-[9px] text-neutral-500">Changing the recurrence recalculates the next pending date from now.</p>}
     </div>;
 };
-
-const DateField: React.FC<{ id: string; label: string; value: string; onChange: (value: string) => void }> = ({ id, label, value, onChange }) => <label className="block text-[10px] text-neutral-400" htmlFor={id}>{label}<input id={id} type="date" value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-xs text-neutral-200" /></label>;
 
 const SortableTodoCard: React.FC<React.ComponentProps<typeof TodoCard>> = (props) => {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: props.todo.id });
