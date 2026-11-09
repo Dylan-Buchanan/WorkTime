@@ -328,7 +328,7 @@ describe("pool shapes", () => {
 });
 
 describe("estimates", () => {
-    it("keeps the floor of one for over-estimated and over-worked tasks", () => {
+    it("floors only a non-positive remainder to one for over-worked tasks", () => {
         const byPmWorked = rank({
             pmTasks: [pmTask({ id: "pm-over", estimatePomos: 2, workedPomos: 3 })],
         });
@@ -340,6 +340,41 @@ describe("estimates", () => {
             backendTasks: { [backend.id]: backend },
         });
         expect(byBackendWorked.top[0].remainingPomodoros).toBe(1);
+    });
+
+    it("keeps a fractional remainder instead of raising it to one", () => {
+        const result = rank({
+            pmTasks: [pmTask({ id: "fractional", estimatePomos: 3, workedPomos: 2.5 })],
+        });
+
+        expect(result.top[0].remainingPomodoros).toBe(0.5);
+    });
+
+    it("floors an over-worked task to one", () => {
+        const result = rank({
+            pmTasks: [pmTask({ id: "over", estimatePomos: 2, workedPomos: 5 })],
+        });
+
+        expect(result.top[0].remainingPomodoros).toBe(1);
+    });
+
+    it("lets a fractional remainder win quick-win over a full pomodoro", () => {
+        const result = rank({
+            pmTasks: [
+                pmTask({ id: "top", title: "Top", priority: "High", estimatePomos: 8 }),
+                pmTask({ id: "fractional", title: "Fractional", priority: "Medium", estimatePomos: 3, workedPomos: 2.5 }),
+                pmTask({ id: "whole", title: "Whole", priority: "Low", estimatePomos: 1 }),
+            ],
+        });
+
+        expect(result.top.map((entry) => [entry.task.id, entry.tier])).toEqual([
+            ["top", "top-pick"],
+            ["fractional", "quick-win"],
+        ]);
+        expect(result.top[1].remainingPomodoros).toBe(0.5);
+        expect(result.continuation.map((entry) => [entry.task.id, entry.remainingPomodoros])).toEqual([
+            ["whole", 1],
+        ]);
     });
 
     it("falls back to the backend target when the PM estimate is absent", () => {

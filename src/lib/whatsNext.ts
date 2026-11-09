@@ -1,6 +1,6 @@
 import type { PMTask, Project, Task, TaskPriority } from "../state/types";
 import { isProjectWorkableOnDate } from "./projectSchedule";
-import { classifyDueScope, parseDueDateKey } from "./timer";
+import { EPSILON, classifyDueScope, parseDueDateKey } from "./timer";
 
 export type PromotionTier = "top-pick" | "quick-win" | "next-up";
 
@@ -50,6 +50,15 @@ function workedPomodoros(pmTask: PMTask, backendTask: Task | undefined): number 
 }
 
 /**
+ * The collector's floor from `collectEligibleProjectionTasks` in
+ * `src/lib/timer.ts`: only a non-positive remainder becomes 1, so a fractional
+ * remainder such as 0.5 is kept.
+ */
+function floorRemaining(estimatedRemaining: number): number {
+    return estimatedRemaining > EPSILON ? estimatedRemaining : 1;
+}
+
+/**
  * Own candidate collector: the shared projection collector stays the scope
  * definition for Today and the projected-finish card, and this one adds
  * ranking-only exclusions and an un-estimated tail.
@@ -78,8 +87,8 @@ function collectCandidates(input: {
         if (project && !isProjectWorkableOnDate(project, input.reference)) continue;
 
         const estimate = effectiveEstimate(pmTask, backendTask);
-        const remainingPomodoros = estimate > 0
-            ? Math.max(1, estimate - workedPomodoros(pmTask, backendTask))
+        const remainingPomodoros = Number.isFinite(estimate) && estimate > EPSILON
+            ? floorRemaining(estimate - workedPomodoros(pmTask, backendTask))
             : 0;
 
         candidates.push({
