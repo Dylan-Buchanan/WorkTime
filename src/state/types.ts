@@ -32,6 +32,13 @@ export interface Project {
     updatedAt: string;
 }
 
+/** Orthogonal to `status`: a task can be In Progress or Blocked and also waiting. */
+export interface PMTaskWaiting {
+    type: "agent" | "person";
+    /** ISO timestamp when the wait started. Drives the waiting-duration display. */
+    since: string;
+}
+
 export interface PMTask {
     id: string;
     title: string;
@@ -53,6 +60,12 @@ export interface PMTask {
     updatedAt: string;
     appTaskId?: string; // linked timer task id
     relatedTo: string[]; // array of task IDs that must be done before this task
+    /**
+     * Waiting on an agent or person; orthogonal to `status`. Optional in the type so
+     * pre-existing blobs and fixtures stay valid; after ProjectManagerContext
+     * normalization it is always `PMTaskWaiting | null`.
+     */
+    waiting?: PMTaskWaiting | null;
 }
 
 /**
@@ -108,6 +121,8 @@ export interface PomodoroLogEntry {
     finished_at: string;
     was_break: boolean;
     break_skipped: boolean;
+    /** Identity of the Work window (its ISO `window_started_at`); null/absent for historical, break and break-skip rows. */
+    work_window_id?: string | null;
 }
 
 export interface Settings {
@@ -132,6 +147,8 @@ export interface ActiveTimer {
     paused_remaining_secs?: number;
     planned_secs?: number; // total planned duration in seconds
     accumulated_secs?: number; // elapsed active seconds before current segment
+    /** Work-window identity: ISO time the window started. Set on Work timers only; preserved across switch/pause/resume. Absent on break timers. */
+    window_started_at?: string;
 }
 
 export type HabitFrequency = "daily" | "weekly" | "monthly";
