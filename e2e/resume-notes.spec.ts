@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { baseState, openApp, taskFixture } from "./helpers";
 
-const taskId = "00000000-0000-4000-8000-00000000000a";
+const taskId = "00000000-0000-4000-8000-000000160a01";
 const taskName = "Resume note task";
 const nextAction = "Cover the parser error cases";
 const seed = () => baseState({
