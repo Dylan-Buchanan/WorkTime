@@ -182,6 +182,7 @@ describe("SupabaseDataAccess transport", () => {
         expect(epoch(pulledLog.finished_at)).toBe(epoch(log.finished_at));
         expect(pulledLog.was_break).toBe(log.was_break);
         expect(pulledLog.break_skipped).toBe(log.break_skipped);
+        expect(pulledLog.work_window_id).toBeNull();
         const pulledHabit = first.habits[HABIT_ID].value;
         expect(pulledHabit.id).toBe(pushedHabit.id);
         expect(pulledHabit.name).toBe(pushedHabit.name);
@@ -659,5 +660,43 @@ describe("goals RPC and RLS", () => {
             const spoof = await other.client.from("goal_trackers").insert({ id: "00000000-0000-4000-8000-100000000036", owner_id: user.userId, name: "Spoof", purpose: "", cadence: tracker.cadence, cadence_anchor_at: tracker.cadenceAnchorAt, color: "", sort_order: 0, is_archived: false });
             expect(spoof.error?.code).toBe("42501");
         } finally { await other.cleanup(); }
+    });
+});
+
+
+describe.each(["apply_staged_sync", "complete_timer", "persist_transition"] as const)("%s log window persistence", (rpc) => {
+    it.each([undefined, "2026-01-01T00:00:00.123Z", ""])("round-trips work_window_id %j", async (identity) => {
+        user = await createLocalUser();
+        const remote = new SupabaseDataAccess(user.client);
+        const task = { id: TASK_ID, name: "Window work", target_pomodoros: 2, completed_pomodoros: 0,
+            created_at: T0, completed_at: null, break_skips: 0, archived: false };
+        const timer = { task_id: TASK_ID, started_at: T0, ends_at: "2026-01-01T00:25:00.000Z",
+            kind: "Work" as const, planned_secs: 1500, accumulated_secs: 0, window_started_at: T0,
+            paused: false, paused_remaining_secs: 0 };
+        const initialSlice = { active_task: TASK_ID, current_cycle_pomodoros: 0, timer };
+        const resultSlice = { ...initialSlice, current_cycle_pomodoros: 1, timer: null };
+        const log = { id: LOG_ID, task_id: TASK_ID, duration_minutes: 25, finished_at: timer.ends_at,
+            was_break: false, break_skipped: false, ...(identity === undefined ? {} : { work_window_id: identity }) };
+        await remote.push(user.userId, { ...emptyPlan(), taskUpserts: [{ value: task, updatedAt: T0 }],
+            timerState: { value: initialSlice, updatedAt: T0, newGeneration: true } });
+
+        if (rpc === "apply_staged_sync") {
+            await remote.push(user.userId, { ...emptyPlan(), logUpserts: [log] });
+        } else if (rpc === "complete_timer") {
+            const result = await user.client.rpc(rpc, { p_expected_timer: timer, p_timer_data: resultSlice,
+                p_log: log, p_task: null });
+            expect(result.error).toBeNull();
+            expect(result.data).toEqual([{ applied: true }]);
+        } else {
+            const result = await user.client.rpc(rpc, { p_tasks: null, p_logs: [log], p_settings: null,
+                p_timer_data: null, p_timer_new_generation: false, p_timer_updated_at: null });
+            expect(result.error).toBeNull();
+        }
+
+        const pulled = await remote.pull(user.userId);
+        expect(pulled.logs[LOG_ID].work_window_id).toBe(identity || null);
+        expect(pulled.logs[LOG_ID]).toMatchObject({ id: LOG_ID, task_id: TASK_ID, duration_minutes: 25 });
+        // The JSON containment/CAS path must retain the Work-window field verbatim.
+        if (rpc !== "complete_timer") expect(pulled.timerState.value?.timer?.window_started_at).toBe(T0);
     });
 });

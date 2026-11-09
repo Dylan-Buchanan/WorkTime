@@ -9,13 +9,9 @@ import {
     elapsedTimerSecs,
     fullCycleDurationSecs,
     plannedTimerSecs,
+    windowRemainingSecs,
+    windowStartedAt,
 } from "./core";
-import {
-    cloneInProgressPomodoros,
-    resumablePomodoroElapsedSecs,
-    type InProgressPomodoroMap,
-    withoutInProgressPomodoro,
-} from "./pomodoroProgress";
 
 function requireActiveTask(state: AppStateData): string {
     if (state.active_task === null) throw new EngineError("No active task");
@@ -39,11 +35,10 @@ function makeTimer(taskId: string, kind: ActiveTimer["kind"], plannedSecs: numbe
 export function startWorkTimer(
     state: AppStateData,
     now: Date,
-    inProgressPomodoros: InProgressPomodoroMap = {},
 ): EngineResult<ActiveTimer> {
+    if (state.timer) throw new EngineError("A timer is already running");
     const next = cloneAppState(state);
     const taskId = requireActiveTask(next);
-    const progress = cloneInProgressPomodoros(inProgressPomodoros);
 
     if (next.current_cycle_pomodoros > 0) {
         const lastWork = [...next.logs].reverse().find((log) => !log.was_break);
@@ -56,12 +51,9 @@ export function startWorkTimer(
     }
 
     const workSecs = Math.max(0, Math.trunc(next.settings.work_minutes * 60));
-    const savedBase = resumablePomodoroElapsedSecs(progress, taskId, workSecs);
-    if (savedBase > 0) progress[taskId] = savedBase;
-    else delete progress[taskId];
-    const timer = makeTimer(taskId, "Work", workSecs - savedBase, now);
+    const timer = { ...makeTimer(taskId, "Work", workSecs, now), window_started_at: now.toISOString() };
     next.timer = timer;
-    return { state: next, value: { ...timer }, inProgressPomodoros: progress };
+    return { state: next, value: { ...timer } };
 }
 
 /** Rust: start_break_timer */
@@ -82,16 +74,18 @@ export function completeTimer(
     state: AppStateData,
     now: Date,
     logId: string,
-    inProgressPomodoros: InProgressPomodoroMap = {},
 ): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
     if (!timer) throw new EngineError("No active timer");
-    if (now.getTime() < new Date(timer.ends_at).getTime()) throw new EngineError("Timer not finished yet");
+    const depletedWork = timer.kind === "Work" && windowRemainingSecs(timer, now) <= 0;
+    if (!depletedWork && (now.getTime() < Date.parse(timer.ends_at) || (timer.kind === "Work" && timer.paused))) {
+        throw new EngineError("Timer not finished yet");
+    }
 
     const planned = plannedTimerSecs(timer);
     const wasBreak = timer.kind !== "Work";
-    appendLog(next, timer.task_id, planned / 60, now, wasBreak, logId);
+    appendLog(next, timer.task_id, planned / 60, now, wasBreak, logId, false, wasBreak ? null : windowStartedAt(timer));
 
     if (!wasBreak) {
         const task = next.tasks[timer.task_id];
@@ -106,9 +100,6 @@ export function completeTimer(
     return {
         state: next,
         value: cloneAppState(next),
-        inProgressPomodoros: wasBreak
-            ? cloneInProgressPomodoros(inProgressPomodoros)
-            : withoutInProgressPomodoro(inProgressPomodoros, timer.task_id),
     };
 }
 
@@ -117,7 +108,6 @@ export function stopWorkTimer(
     state: AppStateData,
     now: Date,
     logId: string,
-    inProgressPomodoros: InProgressPomodoroMap = {},
 ): EngineResult<AppStateData> {
     const next = cloneAppState(state);
     const timer = next.timer;
@@ -131,11 +121,10 @@ export function stopWorkTimer(
     if (task) {
         task.completed_pomodoros += fraction;
     }
-    appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
+    appendLog(next, timer.task_id, elapsed / 60, now, false, logId, false, windowStartedAt(timer));
     next.timer = null;
     return {
         state: next,
         value: cloneAppState(next),
-        inProgressPomodoros: withoutInProgressPomodoro(inProgressPomodoros, timer.task_id),
     };
 }

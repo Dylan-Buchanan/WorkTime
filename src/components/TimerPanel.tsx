@@ -8,6 +8,7 @@ import {
     buildProjectionBacklogs,
     collectEligibleProjectionTasks,
     computeElapsedSecs,
+    computeActiveFractionComplete,
     formatDurationMinutes,
     formatMs,
     formatPomodoroCount,
@@ -20,6 +21,13 @@ import { isProjectWorkableOnDate } from "../lib/projectSchedule";
 import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
 import { CalendarDays, CalendarRange, Check, Clock3, Coffee, Info, Target } from "lucide-react";
 import { TodaySurface } from "./TodaySurface";
+import { WaitingBadge } from "./WaitingIndicator";
+import { waitingOf } from "../lib/pm/waiting";
+import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
+import { isWorkWindowLive } from "../lib/engine";
+import { rankWhatsNext } from "../lib/whatsNext";
+import { SwitchSheet } from "./SwitchSheet";
+import { useWindowHandoff } from "../hooks/useWindowHandoff";
 
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
@@ -224,27 +232,46 @@ export const TimerPanel: React.FC = () => {
     const { state, startWork, skipBreak, remainingMs, error, pauseTimer, resumeTimer, isPaused, tick } = app;
     const stopWork = app.stopWork; // preserve existing functionality
     const { play } = useSounds();
-    const { state: pmState, setSelectedTask } = usePM();
+    const { state: pmState, setSelectedTask, updateTask } = usePM();
     const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
     const [todayDetailsTaskId, setTodayDetailsTaskId] = useState<string | null>(null);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
+    const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
+    const waiting = waitingTask ? waitingOf(waitingTask) : null;
+    const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; reference: Date; occupantId: string | null } | null>(null);
+    const handoff = useWindowHandoff(() => setSheet(null), sheet ?? undefined);
+    const openSheet = (mode: "switch" | "waiting", invoker: HTMLButtonElement) => {
+        const reference = new Date();
+        invoker.focus();
+        handoff.cancel();
+        if (mode === "waiting" && waitingTask) {
+            updateTask(waitingTask.id, { waiting: { type: "agent", since: reference.toISOString() } });
+        }
+        setSheet({ mode, occupantId: waitingTask?.id ?? null, reference });
+    };
+    const closeSheet = () => { handoff.cancel(); setSheet(null); };
+    const sheetOccupant = sheet?.occupantId ? pmState.tasks[sheet.occupantId] : undefined;
+    const sheetWaiting = sheetOccupant ? waitingOf(sheetOccupant) : null;
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
     const workMinutesSetting = state?.settings?.work_minutes ?? 0;
-    const activeWorkPlannedSecs = timer?.kind === "Work" ? timer.planned_secs || workMinutesSetting * 60 : 0;
+    const activeWorkPlannedSecs = timer?.kind === "Work" ? Math.max(workMinutesSetting * 60, timer.planned_secs || 0) : 0;
     const activeRemainingSecs = timer?.kind === "Work" ? ms / 1000 : 0;
-    const activeFractionComplete = timer?.kind === "Work" && activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, 1 - activeRemainingSecs / activeWorkPlannedSecs)) : 0;
+    const activeFractionComplete = computeActiveFractionComplete(timer, Date.now(), workMinutesSetting);
 
     // Planned total (stable) from backend; fallback to computed if missing
     const plannedSecs = timer?.planned_secs || (timer ? (new Date(timer.ends_at).getTime() - new Date(timer.started_at).getTime()) / 1000 : 0);
 
     // Elapsed seconds including accumulated (if paused/resumed) + current run segment
-    const elapsedSecs = useMemo(() => computeElapsedSecs(timer, Date.now(), plannedSecs), [timer, plannedSecs, tick]);
+    const elapsedSecs = useMemo(() => timer?.kind === "Work"
+        ? Math.max(0, activeWorkPlannedSecs - ms / 1000)
+        : computeElapsedSecs(timer, Date.now(), plannedSecs), [timer, plannedSecs, activeWorkPlannedSecs, ms, tick]);
 
-    const pct = plannedSecs > 0 ? Math.min(1, Math.max(0, elapsedSecs / plannedSecs)) : 0;
+    const ringPlannedSecs = timer?.kind === "Work" ? activeWorkPlannedSecs : plannedSecs;
+    const pct = ringPlannedSecs > 0 ? Math.min(1, Math.max(0, elapsedSecs / ringPlannedSecs)) : 0;
 
     const activeAppTaskId = timer?.task_id ?? state?.active_task ?? null;
     const activeAppTask = activeAppTaskId ? state?.tasks[activeAppTaskId] : null;
@@ -325,6 +352,17 @@ export const TimerPanel: React.FC = () => {
             closeDetails();
         }
     }, [canShowDetails, detailsOpen, closeDetails]);
+
+    useEffect(() => {
+        if (!todayDetailsTaskId) return;
+        const task = pmState.tasks[todayDetailsTaskId];
+        if (task && task.status !== "Done" && !task.isArchived) return;
+        setTodayDetailsTaskId(null);
+        if (pmSelectedId === todayDetailsTaskId) setSelectedTask(null);
+        if (!linkedTaskId && !activeAppTaskId && (!pmSelectedId || pmSelectedId === todayDetailsTaskId)) {
+            setDetailsOpen(false);
+        }
+    }, [todayDetailsTaskId, pmState.tasks, pmSelectedId, linkedTaskId, activeAppTaskId, setSelectedTask]);
 
     useEffect(() => {
         if (!detailsOpen) return;
@@ -526,6 +564,7 @@ export const TimerPanel: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2 flex-wrap justify-center">
                             {kindBadge}
+                            {waiting && waitingTask && <WaitingBadge waiting={waiting} nowMs={Date.now()} onClear={() => updateTask(waitingTask.id, { waiting: null })} />}
                             {taskName && (
                                 <span className="px-2 py-1 rounded bg-neutral-800 text-[10px] max-w-55 truncate" title={taskName}>
                                     {taskName}
@@ -560,11 +599,15 @@ export const TimerPanel: React.FC = () => {
                         {timer && (
                             <div className="text-[10px] text-neutral-500">
                                 {/* Show elapsed/planned minutes */}
-                                {Math.round(elapsedSecs / 60)}m / {Math.round(plannedSecs / 60)}m
+                                {Math.round(elapsedSecs / 60)}m / {Math.round(ringPlannedSecs / 60)}m
                             </div>
                         )}
                     </div>
                     <div className="flex flex-wrap gap-2 justify-center text-xs">
+                        {isWorkWindowLive(timer ?? null, new Date()) && <>
+                            <button type="button" className="rounded bg-neutral-800 px-4 py-2 hover:bg-neutral-700 disabled:opacity-50" disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) => openSheet("waiting", event.currentTarget)}>Waiting…</button>
+                            <button type="button" className="rounded bg-neutral-800 px-4 py-2 hover:bg-neutral-700" onClick={(event) => openSheet("switch", event.currentTarget)}>Switch</button>
+                        </>}
                         {!timer && (
                             <button
                                 className="px-5 py-2.5 sm:px-4 sm:py-2 rounded bg-indigo-600 hover:bg-indigo-500 transition-colors font-medium text-white shadow-sm"
@@ -582,7 +625,7 @@ export const TimerPanel: React.FC = () => {
                                 className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
-                                    pauseTimer();
+                                    void pauseTimer().catch(() => {});
                                     play("pressSide");
                                 }}
                             >
@@ -594,7 +637,7 @@ export const TimerPanel: React.FC = () => {
                                 className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
-                                    resumeTimer();
+                                    void resumeTimer().catch(() => {});
                                     play("pressSide");
                                 }}
                             >
@@ -618,7 +661,7 @@ export const TimerPanel: React.FC = () => {
                                     play("pressSide");
                                 }}
                             >
-                                Stop Early
+                                End focus
                             </button>
                         )}
                         {isBreak && timer && ms > 0 && !isPaused && (
@@ -698,6 +741,19 @@ export const TimerPanel: React.FC = () => {
                     </div>
                 )}
             </aside>
+            {sheet && <SwitchSheet
+                mode={sheet.mode} result={rankWhatsNext({
+                    pmTasks: Object.values(pmState.tasks), backendTasks: state?.tasks ?? {}, projects: pmState.projects,
+                    currentOccupantId: waitingTask?.id ?? null, reference: sheet.reference,
+                })} projects={pmState.projects}
+                linkStateOf={handoff.linkStateOf} linkErrorOf={handoff.linkErrorOf}
+                waitingType={sheetWaiting?.type}
+                onSetWaitingType={(type) => {
+                    if (sheet.occupantId && sheetWaiting) updateTask(sheet.occupantId, { waiting: { ...sheetWaiting, type } });
+                }}
+                onSelect={handoff.select} onRetryLink={handoff.retry} onClose={closeSheet}
+                busyTaskId={handoff.busyTaskId} notice={handoff.notice} error={handoff.error}
+            />}
         </div>
     );
 };

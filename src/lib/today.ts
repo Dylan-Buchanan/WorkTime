@@ -1,4 +1,5 @@
-import type { Habit, HabitCompletion, HabitFrequency, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
+import type { Habit, HabitCompletion, HabitFrequency, PMTask, PMTaskWaiting, PomodoroLogEntry, Project, Task } from "../state/types";
+import { waitingOf } from "./pm/waiting";
 import { getBucketKey, isHabitCompleted } from "./habits";
 import {
     classifyDueScope,
@@ -24,6 +25,7 @@ export interface TodayTaskEntry {
     workedPomos: number;
     remainingPomodoros: number;
     isActive: boolean;
+    waiting: PMTaskWaiting | null;
 }
 
 export interface TodayTaskList {
@@ -67,6 +69,7 @@ function toTodayTask(
         workedPomos: entry.workedPomos,
         remainingPomodoros: entry.remainingPomodoros,
         isActive: entry.isActive,
+        waiting: waitingOf(entry.task),
     };
 }
 
@@ -83,12 +86,14 @@ export function buildTodayTasks(input: BuildTodayTasksInput): TodayTaskList {
         })
         .map((entry) => toTodayTask(entry, input.projects, todayKey))
         .sort((left, right) => {
+            const waitingDelta = Number(right.waiting !== null) - Number(left.waiting !== null);
+            if (waitingDelta !== 0) return waitingDelta;
             const bucketDelta = BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket];
             if (bucketDelta !== 0) return bucketDelta;
             const leftKey = left.dueKey ?? "9999-12-31";
             const rightKey = right.dueKey ?? "9999-12-31";
             if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
-            return left.title.localeCompare(right.title);
+            return left.title.localeCompare(right.title) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
         });
 
     const remainingPomodoros = tasks.reduce((total, task) => total + task.remainingPomodoros, 0);
@@ -168,12 +173,16 @@ export function buildTodayPomodoros(input: BuildTodayPomodorosInput): TodayPomod
     }
 
     const sessions: TodayPomodoroSession[] = [];
+    const windowKeys = new Set<string>();
+    let unwindowed = 0;
     for (const log of input.logs) {
         if (log.was_break) continue;
         const finished = new Date(log.finished_at);
         if (Number.isNaN(finished.getTime())) continue;
         if (toLocalDateKey(finished) !== todayKey) continue;
         const duration = Number.isFinite(log.duration_minutes) ? Math.max(0, log.duration_minutes) : 0;
+        if (log.work_window_id) windowKeys.add(log.work_window_id);
+        else unwindowed += 1;
         sessions.push({
             id: log.id,
             taskId: log.task_id,
@@ -186,7 +195,8 @@ export function buildTodayPomodoros(input: BuildTodayPomodorosInput): TodayPomod
     sessions.sort((left, right) => new Date(right.finishedAt).getTime() - new Date(left.finishedAt).getTime());
 
     const minutes = sessions.reduce((total, session) => total + session.durationMinutes, 0);
-    return { count: sessions.length, minutes, sessions };
+    // Count windows, not rows: logs sharing a work_window_id are one pomodoro; logs without one stand alone.
+    return { count: windowKeys.size + unwindowed, minutes, sessions };
 }
 
 export interface TodayOverview {

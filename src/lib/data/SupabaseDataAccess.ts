@@ -233,6 +233,7 @@ export class SupabaseDataAccess implements SyncRemote {
         return {
             id: row.id, task_id: row.task_id, duration_minutes: Number(row.duration_minutes), finished_at: row.finished_at,
             was_break: Boolean(row.was_break), break_skipped: Boolean(row.break_skipped),
+            work_window_id: typeof row.work_window_id === "string" ? row.work_window_id : null,
         };
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { makeAppState } from "../../../test/mockTauri";
+import { makeAppState, makeActiveTimer } from "../../../test/mockTauri";
 import type { Habit, HabitCompletion } from "../../../state/types";
 import {
     LocalStagingStore,
@@ -8,7 +8,7 @@ import {
     stagingOwnerId,
     type StorageLike,
 } from "./LocalStagingStore";
-import { isSyncSnapshot, MAX_PENDING_COMPLETIONS, STAGING_SCHEMA_VERSION, StagingStorageError, type StagedOwnerRecord, type SyncSnapshot } from "./types";
+import { parseStagedOwnerRecord, isSyncSnapshot, MAX_PENDING_COMPLETIONS, STAGING_SCHEMA_VERSION, StagingStorageError, type StagedOwnerRecord, type SyncSnapshot } from "./types";
 
 const OWNER_A = "owner-a";
 const OWNER_B = "owner-b";
@@ -171,7 +171,6 @@ describe("LocalStagingStore", () => {
         await store.update(OWNER_A, (record) => ({
             ...record,
             state: makeAppState({ tasks: {}, logs: [], active_task: null }),
-            inProgressPomodoros: { t1: 600 },
             pmState: { projects: {}, tasks: {}, meta: { initializedAt: "2026-01-02T00:00:00.000Z" } },
             taskUpdatedAt: { local: "2026-01-02T00:00:00.000Z" },
             settingsUpdatedAt: "2026-01-02T00:00:00.000Z",
@@ -203,7 +202,6 @@ describe("LocalStagingStore", () => {
         expect(restored.habitCompletionTombstones).toEqual({});
         expect(restored.fullWipe).toBeNull();
         expect(restored.pendingCompletions).toEqual([]);
-        expect(restored.inProgressPomodoros).toEqual({ t1: 600 });
         expect(store.pendingCount(OWNER_A)).toBe(0);
     });
 
@@ -212,7 +210,6 @@ describe("LocalStagingStore", () => {
         await store.update(OWNER_A, (record) => ({
             ...record,
             state: makeAppState({ tasks: { t1: BASE_TASK } }),
-            inProgressPomodoros: { t1: 600 },
             petProfile: { id: "local-profile", name: "Local pet", birthDate: "2026-01-01", createdAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
             petProfileUpdatedAt: "2026-01-02T00:00:00.000Z",
             petActivityRecords: { localActivity: { id: "localActivity", activityType: "potty", timestamp: "2026-01-02T00:00:00.000Z", createdAt: "2026-01-02T00:00:00.000Z" } },
@@ -227,7 +224,6 @@ describe("LocalStagingStore", () => {
         expect(restored.unbootstrapped).toBe(false);
         expect(restored.lastSynced).toBeNull();
         expect(restored.state).toEqual(makeAppState());
-        expect(restored.inProgressPomodoros).toEqual({ t1: 600 });
         expect(restored.petProfile).toBeNull();
         expect(restored.petActivityRecords).toEqual({});
         expect(restored.petReminderMarks).toEqual({});
@@ -243,7 +239,6 @@ describe("LocalStagingStore", () => {
         expect(record.schemaVersion).toBe(STAGING_SCHEMA_VERSION);
         expect(record.state.tasks).toEqual({});
         expect(record.state.logs).toEqual([]);
-        expect(record.inProgressPomodoros).toEqual({});
         expect(record.pmState).toBeNull();
         expect(record.pendingCompletions).toEqual([]);
         expect(record.lastSynced).toBeNull();
@@ -278,7 +273,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.petActivityRecords).toEqual({});
         expect(migrated.petActivityUpdatedAt).toEqual({});
         expect(migrated.petActivityTombstones).toEqual({});
@@ -320,7 +315,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petProfileTombstone).toBeNull();
@@ -388,7 +383,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petScheduleItems).toEqual({});
@@ -461,7 +456,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.petTrainingSkills).toEqual({});
         expect(migrated.petFixations).toEqual({});
 
@@ -517,7 +512,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.petNotableEvents).toEqual({});
         expect(migrated.petNotableEventUpdatedAt).toEqual({});
         expect(migrated.petNotableEventTombstones).toEqual({});
@@ -693,8 +688,8 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, "{not json");
         expect(() => store.read(OWNER_A)).toThrow(/not valid JSON/);
 
-        // Only numeric literal versions 1 through 8 are accepted.
-        for (const version of [0, 10, 999]) {
+        // Only numeric literal versions 1 through 10 are accepted.
+        for (const version of [0, 11, 999]) {
             window.localStorage.setItem(key, JSON.stringify({ schemaVersion: version, ownerId: OWNER_A }));
             expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
         }
@@ -919,7 +914,6 @@ describe("LocalStagingStore", () => {
             ...current,
             initialized: true,
             state: makeAppState(),
-            inProgressPomodoros: { t1: 600 },
             lastSynced: baseline,
             habits: { h1: H("h1", { name: "Saved" }) },
             habitUpdatedAt: { h1: "2026-01-02T00:00:00.000Z" },
@@ -927,8 +921,7 @@ describe("LocalStagingStore", () => {
         }));
 
         const record = store.read(OWNER_A);
-        expect(record.schemaVersion).toBe(9);
-        expect(record.inProgressPomodoros).toEqual({ t1: 600 });
+        expect(record.schemaVersion).toBe(10);
         expect(record.habits.h1.name).toBe("Saved");
         expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
         expect(record.habitCompletions.c1.bucket).toBe("2026-01-02");
@@ -975,33 +968,40 @@ describe("LocalStagingStore", () => {
         expect(isSyncSnapshot(withActivity({ ...activity, skillIds: ["sit", 1] }))).toBe(false);
     });
 
-    it("migrates v5 records to v9 with an empty local progress map", async () => {
+    it("migrates v5 records to v10 without retired progress", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await seedInitialized(store, OWNER_A);
         const key = stagingKey(OWNER_A);
         const legacy = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
         legacy.schemaVersion = 5;
-        delete legacy.inProgressPomodoros;
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
-        expect(migrated.inProgressPomodoros).toEqual({});
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.state.tasks.t1).toEqual(BASE_TASK);
         expect(stagingKey(OWNER_A)).toBe(key);
     });
 
-    it("rejects malformed local progress maps", async () => {
+    it.each(["Work", "ShortBreak"] as const)("migrates v9 %s without rewriting pending completions or baselines", async (kind) => {
         const store = new LocalStagingStore(window.localStorage);
-        await store.update(OWNER_A, (record) => ({ ...record, inProgressPomodoros: { t1: 0, t2: 600 } }));
-        const key = stagingKey(OWNER_A);
-        const valid = JSON.parse(window.localStorage.getItem(key) as string) as Record<string, unknown>;
-        expect(store.read(OWNER_A).inProgressPomodoros).toEqual({ t1: 0, t2: 600 });
-
-        for (const malformed of [[], "bad", { t1: -1 }, { t1: 0.5 }, { t1: null }]) {
-            window.localStorage.setItem(key, JSON.stringify({ ...valid, inProgressPomodoros: malformed }));
-            expect(() => store.read(OWNER_A)).toThrow(/inProgressPomodoros/);
-        }
+        await seedInitialized(store, OWNER_A);
+        const before = store.read(OWNER_A);
+        const oldTimer = makeActiveTimer({ task_id: "t1", kind, started_at: "2026-01-01T00:10:00.000Z", accumulated_secs: 600 });
+        const slice = { active_task: "t1", current_cycle_pomodoros: 0, timer: oldTimer };
+        const pending = { generationKey: "legacy-generation", sequence: 1, expectedTimer: oldTimer,
+            expectedTimerState: slice, resultTimerState: { ...slice, timer: null }, taskBefore: BASE_TASK,
+            taskAfter: BASE_TASK, log: BASE_LOG, localOnlyGeneration: false, completedAt: BASE_LOG.finished_at };
+        const legacy = { ...before, schemaVersion: 9, ["inProgress" + "Pomodoros"]: { t1: 600 },
+            state: { ...before.state, timer: oldTimer }, pendingCompletions: [pending],
+            lastSynced: makeBaseline({ timerState: { value: slice, updatedAt: BASE_LOG.finished_at, completed: false } }) };
+        const migrated = parseStagedOwnerRecord(JSON.stringify(legacy), OWNER_A);
+        const expected = { ...legacy };
+        delete (expected as Record<string, unknown>)["inProgress" + "Pomodoros"];
+        expect(migrated).toEqual({ ...expected, schemaVersion: 10, state: { ...legacy.state,
+            timer: kind === "Work" ? { ...oldTimer, window_started_at: "2026-01-01T00:00:00.000Z" } : oldTimer } });
+        expect(migrated.pendingCompletions).toEqual(legacy.pendingCompletions);
+        expect(migrated.lastSynced).toEqual(legacy.lastSynced);
+        expect(migrated).not.toHaveProperty("inProgress" + "Pomodoros");
     });
 
     it("migrates v4 settings in local state and the sync baseline", async () => {
@@ -1015,8 +1015,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
-        expect(migrated.inProgressPomodoros).toEqual({});
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.state.settings.end_of_day).toBe("22:00");
         expect(migrated.lastSynced?.settings.value?.end_of_day).toBe("22:00");
         expect(store.pendingCount(OWNER_A)).toBe(0);
@@ -1033,7 +1032,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.state.settings.start_of_day).toBe("00:00");
         expect(migrated.lastSynced?.settings.value?.start_of_day).toBe("00:00");
         expect(store.pendingCount(OWNER_A)).toBe(0);
@@ -1058,8 +1057,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(v2));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
-        expect(migrated.inProgressPomodoros).toEqual({});
+        expect(migrated.schemaVersion).toBe(10);
         expect(migrated.todos).toEqual({});
         expect(migrated.todoUpdatedAt).toEqual({});
         expect(migrated.todoTombstones).toEqual({});
@@ -1069,7 +1067,7 @@ describe("LocalStagingStore", () => {
         expect(migrated.state.tasks.t1).toBeDefined();
     });
 
-    it("migrates a complete v1 record through v9 in memory without changing the storage key", async () => {
+    it("migrates a complete v1 record through v10 in memory without changing the storage key", async () => {
         const store = new LocalStagingStore(window.localStorage);
         // Persist a fully-populated record, then degrade it to the legacy v1
         // shape by stripping the five new top-level fields and both snapshot
@@ -1105,8 +1103,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(degraded));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(9);
-        expect(migrated.inProgressPomodoros).toEqual({});
+        expect(migrated.schemaVersion).toBe(10);
         // Every legacy value survives the in-memory migration.
         expect(migrated.state.tasks.t1.name).toBe("Legacy task");
         expect(migrated.state.logs).toEqual([{ ...BASE_LOG }]);
@@ -1133,7 +1130,7 @@ describe("LocalStagingStore", () => {
         // One safe staged update stays on schema 8 at the same v1-prefixed key and
         // never creates a worktime:staging:v2:* key.
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "t1" } }));
-        expect(store.read(OWNER_A).schemaVersion).toBe(9);
+        expect(store.read(OWNER_A).schemaVersion).toBe(10);
         const keys: string[] = [];
         for (let i = 0; i < window.localStorage.length; i += 1) keys.push(window.localStorage.key(i) as string);
         expect(keys.filter((candidate) => candidate.startsWith("worktime:staging:"))).toEqual([key]);
@@ -1229,5 +1226,37 @@ describe("LocalStagingStore", () => {
         const store = new LocalStagingStore(window.localStorage);
         await store.update(OWNER_A, (r) => ({ ...r, initialized: true }));
         expect(store.read(OWNER_A).initialized).toBe(true);
+    });
+});
+
+
+describe("log work-window staging compatibility", () => {
+    it("round-trips string, null and historical absent identities in state and baseline", async () => {
+        const storage = corruptStorage({});
+        const store = new LocalStagingStore(storage);
+        const logs = [
+            { ...BASE_LOG, id: "work", work_window_id: BASE_TASK.created_at },
+            { ...BASE_LOG, id: "break", was_break: true, work_window_id: null },
+            { ...BASE_LOG, id: "legacy" },
+        ];
+        await store.update(OWNER_A, (record) => ({
+            ...record,
+            state: { ...record.state, logs },
+            lastSynced: makeBaseline({ logs: Object.fromEntries(logs.map((log) => [log.id, log])) }),
+        }));
+        const loaded = new LocalStagingStore(storage).read(OWNER_A);
+        expect(loaded.schemaVersion).toBe(10);
+        expect(loaded.state.logs).toEqual(logs);
+        expect(loaded.lastSynced?.logs).toEqual(Object.fromEntries(logs.map((log) => [log.id, log])));
+        expect(loaded.state.logs[2]).not.toHaveProperty("work_window_id");
+    });
+
+    it.each(["state", "baseline"])("rejects a numeric identity in %s logs", (location) => {
+        const record = new LocalStagingStore(corruptStorage({})).read(OWNER_A);
+        const malformed = { ...BASE_LOG, work_window_id: 123 };
+        const raw = location === "state"
+            ? { ...record, state: { ...record.state, logs: [malformed] } }
+            : { ...record, lastSynced: makeBaseline({ logs: { [BASE_LOG.id]: malformed } as unknown as SyncSnapshot["logs"] }) };
+        expect(() => parseStagedOwnerRecord(JSON.stringify(raw), OWNER_A)).toThrow(StagingStorageError);
     });
 });

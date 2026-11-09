@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { ProjectManagerProvider, usePM } from "./ProjectManagerContext";
-import { AppStateProvider } from "./AppStateContext";
+import { AppStateProvider, useAppState } from "./AppStateContext";
 import { SyncProvider } from "./SyncContext";
 import { TauriCloseProvider } from "./TauriCloseContext";
 import StateSyncBridge from "./StateSyncBridge";
@@ -10,8 +11,9 @@ import { DataProvider } from "./DataContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import type { SyncOptions, SyncResult } from "../lib/data/DataAccess";
 import { stagingKey } from "../lib/data/staging/LocalStagingStore";
-import { makeAppState } from "../test/mockTauri";
-import type { PMTask, TaskPriority, TaskStatus } from "./types";
+import { makeActiveTimer, makeAppState } from "../test/mockTauri";
+import type { PMTask, Task, TaskPriority, TaskStatus } from "./types";
+import { TaskInspector } from "../components/ProjectManager/TaskInspector";
 
 const OWNER = "owner-1";
 
@@ -89,6 +91,44 @@ function makePMTask(overrides: Partial<PMTask>): PMTask {
         relatedTo: [],
         ...overrides,
     };
+}
+
+type WorkStartControls = { pm: ReturnType<typeof usePM>; app: ReturnType<typeof useAppState> };
+
+function WorkStartProbe({ onChange }: { onChange: (controls: WorkStartControls) => void }) {
+    const pm = usePM();
+    const app = useAppState();
+    useLayoutEffect(() => onChange({ pm, app }), [pm, app, onChange]);
+    return <div data-testid="work-start-status">{pm.state.tasks.pt1?.status ?? "missing"}</div>;
+}
+
+function InspectorLocation() {
+    return <div data-testid="inspector-location">{useLocation().pathname}</div>;
+}
+
+async function renderWorkStart(data: InMemoryDataAccess, options: { withoutBridge?: boolean; inspector?: boolean } = {}) {
+    let current!: WorkStartControls;
+    const children = <>
+        <WorkStartProbe onChange={(value) => { current = value; }} />
+        {options.inspector && <MemoryRouter initialEntries={["/projects"]}><TaskInspector /><InspectorLocation /></MemoryRouter>}
+    </>;
+    const view = render(options.withoutBridge ? wrapWithoutBridge(data, children) : wrap(data, children));
+    await waitFor(() => {
+        expect(current.app.state).not.toBeNull();
+        expect(current.pm.state.meta.initializedAt).toBe("2026-01-01T00:00:00Z");
+    });
+    return { ...view, get current() { return current; } };
+}
+
+function workStartBackend(patch: Partial<Task> = {}): Task {
+    return { id: "bt1", name: "Work task", target_pomodoros: 4, completed_pomodoros: 0,
+        created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false, ...patch };
+}
+
+async function workStartData(status: TaskStatus = "Backlog") {
+    const data = new InMemoryDataAccess(makeAppState({ tasks: { bt1: workStartBackend() }, active_task: "bt1" }));
+    await data.savePMState({ projects: {}, tasks: { pt1: makePMTask({ id: "pt1", title: "Work task", appTaskId: "bt1", status, estimatePomos: 4 }) }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+    return data;
 }
 
 /**
@@ -474,7 +514,504 @@ describe("ProjectManagerContext board ordering persistence", () => {
     });
 });
 
+describe("ProjectManagerContext waiting flag", () => {
+    function WaitingProbe() {
+        const { state, updateTask, archiveTask, moveTaskToStatus } = usePM();
+        const snapshot = Object.fromEntries(
+            Object.values(state.tasks).map((task) => [
+                task.id,
+                { status: task.status, isArchived: task.isArchived, waiting: task.waiting ?? null },
+            ]),
+        );
+        return <div>
+            <div data-testid="waiting-state">{JSON.stringify(snapshot)}</div>
+            <button onClick={() => updateTask("pt1", { status: "Done" })}>done-pt1</button>
+            <button onClick={() => archiveTask("pt2")}>archive-pt2</button>
+            <button onClick={() => updateTask("pt3", { isArchived: true })}>archive-patch-pt3</button>
+            <button onClick={() => moveTaskToStatus("pt4", "Done")}>move-done-pt4</button>
+            <button onClick={() => updateTask("pt5", { waiting: { type: "agent", since: "2026-11-08T10:00:00.000Z" } })}>set-agent-pt5</button>
+            <button onClick={() => updateTask("pt5", { waiting: { type: "person", since: "2026-11-08T10:00:00.000Z" } })}>set-person-pt5</button>
+        </div>;
+    }
+
+    const since = "2026-11-08T09:00:00.000Z";
+
+    function waitingState() {
+        return JSON.parse(screen.getByTestId("waiting-state").textContent || "{}") as Record<string, {
+            status: TaskStatus;
+            isArchived: boolean;
+            waiting: { type: "agent" | "person"; since: string } | null;
+        }>;
+    }
+
+    function waitingSeed(overrides: Record<string, Partial<PMTask>> = {}) {
+        const base: Record<string, Partial<PMTask>> = {
+            pt1: { id: "pt1", title: "Done path", waiting: { type: "agent", since } },
+            pt2: { id: "pt2", title: "Archive helper", waiting: { type: "agent", since } },
+            pt3: { id: "pt3", title: "Archive patch", waiting: { type: "agent", since } },
+            pt4: { id: "pt4", title: "Move path", waiting: { type: "agent", since } },
+            pt5: { id: "pt5", title: "Persist path" },
+        };
+        return {
+            projects: {},
+            tasks: Object.fromEntries(Object.entries({ ...base, ...overrides }).map(([id, patch]) => [id, makePMTask(patch)])),
+            meta: { initializedAt: "2026-01-01T00:00:00Z" },
+        };
+    }
+
+    it("normalizes waiting on load and clears it for Done and archived tasks", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(waitingSeed({
+            pt1: { id: "pt1", title: "Done path", status: "Done", waiting: { type: "agent", since } },
+            pt2: { id: "pt2", title: "Archive helper", status: "In Progress", isArchived: true, waiting: { type: "person", since } },
+            pt3: { id: "pt3", title: "Blocked path", status: "Blocked", waiting: { type: "person", since } },
+            pt4: { id: "pt4", title: "Malformed path", waiting: { type: "robot", since } as any },
+            pt5: { id: "pt5", title: "Bad since", waiting: { type: "agent", since: "not-a-date" } },
+        }));
+        render(wrapWithoutBridge(data, <WaitingProbe />));
+        await waitFor(() => expect(waitingState().pt1?.status).toBe("Done"));
+        const state = waitingState();
+        expect(state.pt1.waiting).toBeNull();
+        expect(state.pt2.waiting).toBeNull();
+        expect(state.pt3).toMatchObject({ status: "Blocked", waiting: { type: "person", since } });
+        expect(state.pt4.waiting).toBeNull();
+        expect(state.pt5.waiting).toBeNull();
+    });
+
+    it("clears waiting immediately on every Done and archive write path", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(waitingSeed());
+        render(wrapWithoutBridge(data, <WaitingProbe />));
+        await waitFor(() => expect(waitingState().pt1?.waiting).toEqual({ type: "agent", since }));
+
+        await act(async () => screen.getByText("done-pt1").click());
+        await act(async () => screen.getByText("archive-pt2").click());
+        await act(async () => screen.getByText("archive-patch-pt3").click());
+        await act(async () => screen.getByText("move-done-pt4").click());
+
+        const state = waitingState();
+        expect(state.pt1).toMatchObject({ status: "Done", waiting: null });
+        expect(state.pt2).toMatchObject({ isArchived: true, waiting: null });
+        expect(state.pt3).toMatchObject({ isArchived: true, waiting: null });
+        expect(state.pt4).toMatchObject({ status: "Done", waiting: null });
+        await waitFor(async () => {
+            const persisted = (await data.loadPMState())?.tasks;
+            expect(persisted?.pt1).toMatchObject({ status: "Done", waiting: null });
+            expect(persisted?.pt2).toMatchObject({ isArchived: true, waiting: null });
+            expect(persisted?.pt3).toMatchObject({ isArchived: true, waiting: null });
+            expect(persisted?.pt4).toMatchObject({ status: "Done", waiting: null });
+        });
+    });
+
+    it("persists a waiting flag and restores it after a provider reload", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(waitingSeed());
+        const first = render(wrapWithoutBridge(data, <WaitingProbe />));
+        await waitFor(() => expect(waitingState().pt5?.waiting).toBeNull());
+
+        await act(async () => screen.getByText("set-person-pt5").click());
+        expect(waitingState().pt5.waiting).toEqual({ type: "person", since: "2026-11-08T10:00:00.000Z" });
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt5?.waiting).toEqual({
+            type: "person",
+            since: "2026-11-08T10:00:00.000Z",
+        }));
+
+        first.unmount();
+        render(wrapWithoutBridge(data, <WaitingProbe />));
+        await waitFor(() => expect(waitingState().pt5?.waiting).toEqual({
+            type: "person",
+            since: "2026-11-08T10:00:00.000Z",
+        }));
+    });
+
+    it("switching the waiting type keeps the original since", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState(waitingSeed());
+        render(wrapWithoutBridge(data, <WaitingProbe />));
+        await waitFor(() => expect(waitingState().pt5?.waiting).toBeNull());
+
+        await act(async () => screen.getByText("set-agent-pt5").click());
+        await act(async () => screen.getByText("set-person-pt5").click());
+        expect(waitingState().pt5.waiting).toEqual({ type: "person", since: "2026-11-08T10:00:00.000Z" });
+    });
+});
+
 describe("StateSyncBridge", () => {
+    it("reports reserved/in-flight links, then clears them without creating a second backend task", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Delayed link", estimatePomos: 2 }) } });
+        const original = data.createTask.bind(data);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const create = vi.spyOn(data, "createTask").mockImplementation(async (...args) => { await gate; return original(...args); });
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkingTaskIds.has("pt1")).toBe(true));
+        // A metadata render while reserved cannot claim the task again.
+        act(() => view.current.pm.updateTask("pt1", { priority: "High" }));
+        expect(create).toHaveBeenCalledOnce();
+        await act(async () => { release(); await gate; });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        await waitFor(() => expect(view.current.pm.linkingTaskIds.size).toBe(0));
+        expect(create).toHaveBeenCalledOnce();
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+        expect(Object.keys(view.current.pm.state.tasks)).toHaveLength(1);
+    });
+
+    it("records create failures, waits for retryLink, then retries successfully", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Retry link" }) } });
+        const create = vi.spyOn(data, "createTask").mockRejectedValueOnce(new Error("Create unavailable"));
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkFailures.pt1).toBe("Create unavailable"));
+        expect(view.current.pm.linkingTaskIds.has("pt1")).toBe(false);
+        await act(async () => { view.current.pm.updateTask("pt1", { priority: "High" }); await view.current.app.refresh(); });
+        expect(create).toHaveBeenCalledOnce();
+        act(() => view.current.pm.retryLink("pt1"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        await waitFor(() => expect(view.current.pm.linkingTaskIds.size).toBe(0));
+        expect(view.current.pm.linkFailures.pt1).toBeUndefined();
+        expect(create).toHaveBeenCalledTimes(2);
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+    });
+
+    it("evicts a cached backend id removed by discard before retrying a failed PM save", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Discard retry" }) } });
+        await data.sync({ reason: "manual" });
+        const originalSave = data.savePMState.bind(data);
+        let rejectLink = true;
+        vi.spyOn(data, "savePMState").mockImplementation(async state => {
+            if (rejectLink && state.tasks.pt1?.appTaskId) throw new Error("Link save unavailable");
+            return originalSave(state);
+        });
+        const create = vi.spyOn(data, "createTask");
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkFailures.pt1).toBe("Link save unavailable"));
+        const removedId = Object.keys(data.store.state.tasks)[0];
+        await act(async () => { await data.discardPendingChanges(); await view.current.app.refresh(); });
+        expect(data.store.state.tasks[removedId]).toBeUndefined();
+        rejectLink = false;
+        act(() => view.current.pm.retryLink("pt1"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        const linkedId = view.current.pm.state.tasks.pt1.appTaskId!;
+        expect(linkedId).not.toBe(removedId);
+        expect(data.store.state.tasks[linkedId]).toBeDefined();
+        expect(create).toHaveBeenCalledTimes(2);
+    });
+
+    it("reuses the created backend id when retrying a failed PM-link save", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Save retry" }) } });
+        const originalSave = data.savePMState.bind(data);
+        let rejectLink = true;
+        vi.spyOn(data, "savePMState").mockImplementation(async (state) => {
+            if (rejectLink && state.tasks.pt1?.appTaskId) throw new Error("Link save unavailable");
+            return originalSave(state);
+        });
+        const create = vi.spyOn(data, "createTask");
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkFailures.pt1).toBe("Link save unavailable"));
+        expect(create).toHaveBeenCalledOnce();
+        rejectLink = false;
+        act(() => view.current.pm.retryLink("pt1"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        expect(create).toHaveBeenCalledOnce();
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+        expect(Object.keys(view.current.pm.state.tasks)).toHaveLength(1);
+    });
+    it.each([false, true])("baselines a persisted running Work timer without advancing Backlog (bridge mounts after load=%s)", async (mountAfterLoad) => {
+        const data = await workStartData();
+        data.store.state.timer = makeActiveTimer({ task_id: "bt1" });
+        let current!: WorkStartControls;
+        function BaselineBridge() {
+            const [mounted, setMounted] = useState(!mountAfterLoad);
+            return <>
+                <button onClick={() => setMounted(true)}>mount-bridge</button>
+                {mounted && <StateSyncBridge />}
+            </>;
+        }
+        render(wrapWithoutBridge(data, <>
+            <WorkStartProbe onChange={(value) => { current = value; }} />
+            <BaselineBridge />
+        </>));
+        expect(current.app.state).toBeNull();
+        await waitFor(() => {
+            expect(current.app.state?.timer?.task_id).toBe("bt1");
+            expect(current.pm.state.tasks.pt1?.status).toBe("Backlog");
+        });
+        if (mountAfterLoad) await act(async () => { screen.getByText("mount-bridge").click(); });
+        await act(async () => { await current.app.refresh(); });
+        expect(current.pm.state.tasks.pt1.status).toBe("Backlog");
+        expect((await data.loadPMState())?.tasks.pt1.status).toBe("Backlog");
+    });
+
+    it("preserves persisted agent waiting through the running baseline and rerenders, then advances on stop/start", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { bt1: workStartBackend() }, active_task: "bt1",
+            timer: makeActiveTimer({ task_id: "bt1" }),
+        }));
+        await data.savePMState({
+            projects: {},
+            tasks: { pt1: makePMTask({
+                id: "pt1", title: "Work task", appTaskId: "bt1", estimatePomos: 4,
+                status: "Backlog", waiting: { type: "agent", since: "2026-01-01T00:00:00Z" },
+            }) },
+            meta: { initializedAt: "2026-01-01T00:00:00Z" },
+        });
+        const expected = { status: "Backlog", waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } };
+        const view = await renderWorkStart(data);
+        expect(view.current.pm.state.tasks.pt1).toMatchObject(expected);
+        await act(async () => { view.current.pm.updateTask("pt1", { title: "Renamed work task" }); });
+        await act(async () => { await view.current.app.refresh(); });
+        await act(async () => { view.current.app.pauseTimer(); });
+        await waitFor(() => expect(view.current.app.state?.timer?.paused).toBe(true));
+        await act(async () => { view.current.app.resumeTimer(); });
+        await waitFor(() => expect(view.current.app.state?.timer?.paused).toBe(false));
+        expect(view.current.pm.state.tasks.pt1).toMatchObject(expected);
+        expect((await data.loadPMState())?.tasks.pt1).toMatchObject(expected);
+
+        await act(async () => { await view.current.app.stopWork(); });
+        await waitFor(() => expect(view.current.app.state?.timer).toBeNull());
+        expect(view.current.pm.state.tasks.pt1).toMatchObject(expected);
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "In Progress", waiting: null }));
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1).toMatchObject({ status: "In Progress", waiting: null }));
+    });
+
+    it.each<TaskStatus>(["Backlog", "Next", "In Progress", "Blocked", "Done"])("applies work-start status rules to %s through the real providers", async (status) => {
+        const data = await workStartData(status);
+        const view = await renderWorkStart(data);
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        const expected = status === "Backlog" || status === "Next" ? "In Progress" : status;
+        await waitFor(() => expect(screen.getByTestId("work-start-status")).toHaveTextContent(expected));
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1.status).toBe(expected));
+    });
+
+    it("clears waiting but keeps Blocked when work starts on a waiting Blocked task", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { bt1: workStartBackend() }, active_task: "bt1",
+        }));
+        const since = "2026-11-08T09:00:00.000Z";
+        await data.savePMState({
+            projects: {},
+            tasks: { pt1: makePMTask({
+                id: "pt1", title: "Blocked task", appTaskId: "bt1", status: "Blocked", estimatePomos: 4,
+                waiting: { type: "agent", since },
+            }) },
+            meta: { initializedAt: "2026-01-01T00:00:00Z" },
+        });
+        const view = await renderWorkStart(data);
+        expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "Blocked", waiting: { type: "agent", since } });
+
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "Blocked", waiting: null }));
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1).toMatchObject({ status: "Blocked", waiting: null }));
+    });
+
+    it("covers timer-page startWork and persists the status through savePMState and provider reload", async () => {
+        const data = await workStartData();
+        const saveSpy = vi.spyOn(data, "savePMState");
+        const view = await renderWorkStart(data);
+        saveSpy.mockClear();
+        await act(async () => { await view.current.app.startWork(); });
+        await waitFor(() => expect(screen.getByTestId("work-start-status")).toHaveTextContent("In Progress"));
+        await waitFor(() => expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({
+            tasks: expect.objectContaining({ pt1: expect.objectContaining({ status: "In Progress" }) }),
+        })));
+        view.unmount();
+        // Reload without the observer so the assertion can only pass because
+        // savePMState stored the advanced status before the first unmount.
+        await renderWorkStart(data, { withoutBridge: true });
+        expect(screen.getByTestId("work-start-status")).toHaveTextContent("In Progress");
+    });
+
+    it("preserves a manual override and new waiting flag through pause/resume, then re-applies after stop/start", async () => {
+        const data = await workStartData();
+        const view = await renderWorkStart(data);
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.status).toBe("In Progress"));
+        const waiting = { type: "person" as const, since: new Date().toISOString() };
+        await act(async () => { view.current.pm.updateTask("pt1", { status: "Next", waiting }); });
+        await act(async () => { view.current.app.pauseTimer(); });
+        await waitFor(() => expect(view.current.app.state?.timer?.paused).toBe(true));
+        await act(async () => { view.current.app.resumeTimer(); });
+        await waitFor(() => expect(view.current.app.state?.timer?.paused).toBe(false));
+        expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "Next", waiting });
+
+        await act(async () => { await view.current.app.stopWork(); });
+        await waitFor(() => expect(view.current.app.state?.timer).toBeNull());
+        expect(view.current.pm.state.tasks.pt1.status).toBe("Next");
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "In Progress", waiting: null }));
+    });
+
+    it("advances a late-arriving PM row exactly once for a pending occupancy", async () => {
+        // Timer and task metadata can arrive in separate provider snapshots.
+        const data = new InMemoryDataAccess(makeAppState(), { createTaskId: () => "bt1" });
+        await data.savePMState({ projects: {}, tasks: {}, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        const view = await renderWorkStart(data);
+        expect(Object.keys(view.current.pm.state.tasks)).toHaveLength(0);
+        // Open a new occupancy after the baseline, before its PM row arrives.
+        await act(async () => {
+            data.store.state.timer = makeActiveTimer({ task_id: "bt1" });
+            await view.current.app.refresh();
+        });
+        expect(view.current.app.state?.timer?.task_id).toBe("bt1");
+        await act(async () => {
+            await data.createTask("Late metadata", 4);
+            await view.current.app.refresh();
+        });
+        await waitFor(() => {
+            const tasks = Object.values(view.current.pm.state.tasks);
+            expect(tasks).toHaveLength(1);
+            expect(tasks[0]).toMatchObject({ appTaskId: "bt1", status: "In Progress" });
+        });
+        const pmId = Object.values(view.current.pm.state.tasks)[0].id;
+        await act(async () => { view.current.pm.updateTask(pmId, { status: "Backlog" }); });
+        await act(async () => { await view.current.app.refresh(); });
+        expect(view.current.pm.state.tasks[pmId].status).toBe("Backlog");
+    });
+
+    it("observes task switches and new window ids without downgrading the outgoing task", async () => {
+        const data = await workStartData();
+        data.store.state.tasks.bt2 = workStartBackend({ id: "bt2", name: "Blocked task" });
+        const pm = (await data.loadPMState())!;
+        await data.savePMState({ ...pm, tasks: { ...pm.tasks, pt2: makePMTask({
+            id: "pt2", title: "Blocked task", appTaskId: "bt2", status: "Blocked", estimatePomos: 4,
+            waiting: { type: "agent", since: "2026-01-01T00:00:00Z" },
+        }) } });
+        const view = await renderWorkStart(data);
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.status).toBe("In Progress"));
+        // Feed the snapshots #173 will produce, without depending on its engine
+        // changes being present in this lane's worktree.
+        const window = view.current.app.state!.timer!;
+        await act(async () => {
+            data.store.state.timer = { ...window, task_id: "bt2" };
+            await view.current.app.refresh();
+        });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt2).toMatchObject({ status: "Blocked", waiting: null }));
+        expect(view.current.pm.state.tasks.pt1.status).toBe("In Progress");
+        await act(async () => { view.current.pm.updateTask("pt1", { status: "Next" }); });
+        await act(async () => {
+            data.store.state.timer = { ...window, task_id: "bt1", window_started_at: "2026-11-08T12:00:00.000Z" };
+            await view.current.app.refresh();
+        });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.status).toBe("In Progress"));
+        await act(async () => { view.current.pm.updateTask("pt1", { status: "Next" }); });
+        await act(async () => {
+            data.store.state.timer = { ...window, window_started_at: "2026-11-08T13:00:00.000Z" };
+            await view.current.app.refresh();
+        });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.status).toBe("In Progress"));
+        expect(view.current.pm.state.tasks.pt2.status).toBe("Blocked");
+    });
+
+    it("preserves status and a bridge progress patch emitted in the same render as work starts", async () => {
+        const now = new Date(Date.now() - 2 * 60_000);
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { bt1: workStartBackend({ completed_pomodoros: 0.5 }) }, active_task: "bt1",
+        }), { now: () => now });
+        await data.savePMState({ projects: {}, tasks: { pt1: makePMTask({
+            id: "pt1", title: "Work task", appTaskId: "bt1", estimatePomos: 4,
+            workedPomos: 0.5, timeSpentMinutes: 12.5,
+        }) }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        const view = await renderWorkStart(data);
+        await act(async () => { await view.current.app.startTaskWork("bt1"); });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({
+            status: "In Progress", estimatePomos: 4, workedPomos: 0.58, timeSpentMinutes: 14.5,
+        }));
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1).toMatchObject({
+            status: "In Progress", workedPomos: 0.58, timeSpentMinutes: 14.5,
+        }));
+    });
+
+    it.each(["patch-first", "start-first"])("composes link/estimate/progress and work-start patches in one tick (%s)", async (order) => {
+        const data = await workStartData();
+        const view = await renderWorkStart(data, { withoutBridge: true });
+        const at = "2026-11-08T12:00:00.000Z";
+        await act(async () => {
+            const { updateTask, recordWorkStart } = view.current.pm;
+            const patch = () => updateTask("pt1", { appTaskId: "new-link", estimatePomos: 7, workedPomos: 1.5, dueDate: "2026-11-09" });
+            if (order === "patch-first") patch();
+            recordWorkStart("pt1", at);
+            if (order === "start-first") patch();
+        });
+        expect(view.current.pm.state.tasks.pt1).toMatchObject({
+            status: "In Progress", appTaskId: "new-link", estimatePomos: 7, workedPomos: 1.5, dueDate: "2026-11-09",
+        });
+        if (order === "patch-first") expect(view.current.pm.state.tasks.pt1.updatedAt).toBe(at);
+    });
+
+    it("avoids PM writes and timestamp changes for unchanged or missing work-start rows", async () => {
+        const data = await workStartData("Blocked");
+        const loadSpy = vi.spyOn(data, "loadPMState");
+        const view = await renderWorkStart(data, { withoutBridge: true });
+        await waitForPMSettled(loadSpy);
+        const saveSpy = vi.spyOn(data, "savePMState");
+        const original = view.current.pm.state;
+        await act(async () => {
+            view.current.pm.recordWorkStart("pt1");
+            view.current.pm.recordWorkStart("missing");
+        });
+        expect(view.current.pm.state).toBe(original);
+        expect(saveSpy).not.toHaveBeenCalled();
+    });
+
+    it("routes linked inspector Start through startTaskWork with the existing id", async () => {
+        const data = await workStartData();
+        const view = await renderWorkStart(data, { inspector: true });
+        await act(async () => { view.current.pm.setSelectedTask("pt1"); });
+        const startSpy = vi.spyOn(view.current.app, "startTaskWork");
+        const createSpy = vi.spyOn(data, "createTask");
+        await act(async () => { screen.getByRole("button", { name: "Start", exact: true }).click(); });
+        expect(startSpy).toHaveBeenCalledExactlyOnceWith("bt1");
+        await waitFor(() => expect(screen.getByTestId("work-start-status")).toHaveTextContent("In Progress"));
+        expect(view.current.app.state?.timer?.task_id).toBe("bt1");
+        expect(view.current.pm.state.tasks.pt1.appTaskId).toBe("bt1");
+        expect(screen.getByTestId("inspector-location")).toHaveTextContent("/");
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it("advances an initially unlinked inspector task after the bridge baselines and clears waiting", async () => {
+        // The bridge mounts and records its empty-occupant baseline before the
+        // user can start work. Legacy auto-linking then links the PM row, so
+        // the Start itself is a NEW occupancy and must advance the status.
+        const data = new InMemoryDataAccess(makeAppState(), { createTaskId: () => "created-backend" });
+        const since = "2026-11-08T09:00:00.000Z";
+        await data.savePMState({ projects: {}, tasks: { pt1: makePMTask({
+            id: "pt1", title: "Inspector task", estimatePomos: 3, waiting: { type: "agent", since },
+        }) }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        const view = await renderWorkStart(data, { inspector: true });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({
+            status: "Backlog", waiting: { type: "agent", since },
+        }));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBe("created-backend"));
+        await act(async () => { view.current.pm.setSelectedTask("pt1"); });
+        const startSpy = vi.spyOn(view.current.app, "startTaskWork");
+        await act(async () => { screen.getByRole("button", { name: "Start", exact: true }).click(); });
+        expect(startSpy).toHaveBeenCalledExactlyOnceWith("created-backend");
+        await waitFor(() => expect(screen.getByTestId("work-start-status")).toHaveTextContent("In Progress"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "In Progress", waiting: null }));
+        expect(view.current.app.state?.timer?.task_id).toBe("created-backend");
+        expect(screen.getByTestId("inspector-location")).toHaveTextContent("/");
+    });
+
+    it("creates and links an unlinked inspector task before starting work without an observer", async () => {
+        const data = new InMemoryDataAccess(makeAppState(), { createTaskId: () => "created-backend" });
+        await data.savePMState({ projects: {}, tasks: { pt1: makePMTask({ id: "pt1", title: "Inspector task", estimatePomos: 3 }) }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        const view = await renderWorkStart(data, { inspector: true, withoutBridge: true });
+        await act(async () => { view.current.pm.setSelectedTask("pt1"); });
+        const startSpy = vi.spyOn(view.current.app, "startTaskWork");
+        const createSpy = vi.spyOn(data, "createTask");
+        await act(async () => { screen.getByRole("button", { name: "Start", exact: true }).click(); });
+        expect(startSpy).toHaveBeenCalledExactlyOnceWith("created-backend");
+        expect(createSpy).toHaveBeenCalledExactlyOnceWith("Inspector task", 3);
+        expect(view.current.app.state?.timer?.task_id).toBe("created-backend");
+        expect(view.current.pm.state.tasks.pt1.appTaskId).toBe("created-backend");
+        expect(screen.getByTestId("inspector-location")).toHaveTextContent("/");
+    });
+
     it("creates PM metadata for backend tasks", async () => {
         const data = new InMemoryDataAccess(makeAppState({ tasks: { bt1: { id: "bt1", name: "Synced task", target_pomodoros: 4, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } } }));
         render(wrap(data, <PMProbe />));
@@ -514,11 +1051,12 @@ describe("StateSyncBridge", () => {
         expect(Object.keys((await data.loadPMState())?.tasks ?? {})).toEqual(["pt1", "pt2", "pt3"]);
     });
 
-    it("marks PM tasks Done when the backend task completes", async () => {
+    it("marks PM tasks Done when the backend task completes and clears waiting", async () => {
         const data = new InMemoryDataAccess(makeAppState({ tasks: { bt1: { id: "bt1", name: "Done task", target_pomodoros: 2, completed_pomodoros: 2, created_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-05T00:00:00Z", break_skips: 0, archived: false } } }));
-        await data.savePMState({ projects: {}, tasks: { pt1: { id: "pt1", title: "Done task", projectId: null, status: "In Progress", priority: "Medium", timeSpentMinutes: 0, workedPomos: 0, tags: [], links: [], checklist: [], sortOrder: 0, isArchived: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", appTaskId: "bt1", relatedTo: [] } }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        await data.savePMState({ projects: {}, tasks: { pt1: { id: "pt1", title: "Done task", projectId: null, status: "In Progress", priority: "Medium", timeSpentMinutes: 0, workedPomos: 0, tags: [], links: [], checklist: [], sortOrder: 0, isArchived: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", appTaskId: "bt1", relatedTo: [], waiting: { type: "agent", since: "2026-11-08T09:00:00.000Z" } } }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
         render(wrap(data, <PMProbe />));
         await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1?.status).toBe("Done"));
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1?.waiting).toBeNull());
     });
 
     it("propagates divergent estimates with N local writes and one bridge sync", async () => {

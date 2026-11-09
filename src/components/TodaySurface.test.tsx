@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TodaySurface } from "./TodaySurface";
 import { AppStateProvider, useAppState } from "../state/AppStateContext";
@@ -152,6 +152,23 @@ function expandSurface() {
 beforeEach(() => localStorage.clear());
 
 describe("TodaySurface", () => {
+    it("pins waiting entries with accessible dots and includes their work in the summary", async () => {
+        await renderSurface({ tasks: {
+            due: pmTask({ id: "due", title: "Due now", estimatePomos: 2, dueDate: todayKey() }),
+            waiting: pmTask({ id: "waiting", title: "Waiting flexible", estimatePomos: 3, waiting: { type: "agent", since: "2026-08-12T09:00:00Z" } }),
+            person: pmTask({ id: "person", title: "Waiting due", estimatePomos: 1, dueDate: todayKey(), waiting: { type: "person", since: "2026-08-12T09:00:00Z" } }),
+        } });
+        expect(await screen.findByText("3 tasks · 6p left")).toBeInTheDocument();
+        expandSurface();
+        const rows = screen.getAllByRole("listitem");
+        expect(rows.map((row) => within(row).getByRole("button", { name: /^Select / }).getAttribute("aria-label")))
+            .toEqual(["Select Waiting due", "Select Waiting flexible", "Select Due now"]);
+        expect(within(rows[0]).getByRole("img", { name: "Waiting on person" })).toHaveAttribute("title", "Waiting on person");
+        expect(within(rows[1]).getByRole("img", { name: "Waiting on agent" })).toBeInTheDocument();
+        expect(screen.getByText("3p left of 3p")).toBeInTheDocument();
+        expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Tasks", "Habits", "Pomodoros"]);
+    });
+
     it("summarises the day while collapsed and reveals the groups when expanded", async () => {
         await renderSurface({
             tasks: {
@@ -303,7 +320,7 @@ describe("TodaySurface", () => {
         await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(linkedId!));
     });
 
-    it("communicates that a timer is already running instead of starting another", async () => {
+    it("communicates that a break is running instead of starting focus", async () => {
         const user = userEvent.setup();
         const running = appTask("app-running", "Running app task");
         await renderSurface({
@@ -314,15 +331,29 @@ describe("TodaySurface", () => {
             appState: {
                 tasks: { [running.id]: running },
                 active_task: running.id,
-                timer: makeActiveTimer({ task_id: running.id }),
+                timer: makeActiveTimer({ task_id: running.id, kind: "ShortBreak" }),
             },
         });
         expandSurface();
         await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent("app-running"));
 
         await user.click(await screen.findByRole("button", { name: "Start focus on Other task" }));
-        expect(await screen.findByRole("status")).toHaveTextContent("A timer is already running.");
+        expect(await screen.findByRole("status")).toHaveTextContent("A break is running.");
         expect(screen.getByTestId("timer-task")).toHaveTextContent("app-running");
+    });
+
+    it("renders the window count for a switched window", async () => {
+        await renderSurface({
+            appState: {
+                logs: [
+                    log({ id: "w-1", duration_minutes: 10, work_window_id: "window-1" }),
+                    log({ id: "w-2", duration_minutes: 15, work_window_id: "window-1" }),
+                ],
+            },
+        });
+
+        expect(await screen.findByText("1p · 25m")).toBeInTheDocument();
+        expect(screen.queryByText("2p · 25m")).not.toBeInTheDocument();
     });
 
     it("shows an empty state for each group", async () => {
@@ -336,5 +367,24 @@ describe("TodaySurface", () => {
         expect(screen.getByText("No tasks")).toBeInTheDocument();
         expect(screen.getByText("No habits")).toBeInTheDocument();
         expect(screen.getByText("No pomodoros")).toBeInTheDocument();
+    });
+});
+
+
+describe("Today work-window handoff", () => {
+    it("joins an existing Work window from another task's Start focus action", async () => {
+        const running = appTask("running", "Running");
+        const incoming = appTask("incoming", "Incoming");
+        const data = await renderSurface({ tasks: {
+            other: pmTask({ id: "other", title: "Incoming", appTaskId: incoming.id, estimatePomos: 2 }),
+        }, appState: { tasks: { running, incoming }, active_task: running.id,
+            timer: makeActiveTimer({ task_id: running.id, window_started_at: new Date().toISOString() }) } });
+        const original = data.store.state.timer!;
+        expandSurface();
+        fireEvent.click(await screen.findByRole("button", { name: "Start focus on Incoming" }));
+        await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(incoming.id));
+        expect(data.store.state.timer?.ends_at).toBe(original.ends_at);
+        expect(data.store.state.timer?.window_started_at).toBe(original.window_started_at);
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
 });

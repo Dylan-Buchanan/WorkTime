@@ -91,9 +91,9 @@ describe("computeActiveFractionComplete", () => {
         const brk = timer({ kind: "ShortBreak", planned_secs: 300 });
         expect(computeActiveFractionComplete(brk, T0, 25)).toBe(0);
     });
-    it("computes elapsed fraction of a work timer", () => {
-        const t = timer({ ends_at: "2026-01-01T00:12:30.000Z" }); // half done
-        expect(computeActiveFractionComplete(t, T0, 25)).toBeCloseTo(0.5, 3);
+    it("does not infer elapsed segment work from a shortened deadline", () => {
+        const t = timer({ ends_at: "2026-01-01T00:12:30.000Z" });
+        expect(computeActiveFractionComplete(t, T0, 25)).toBeCloseTo(0, 3);
     });
 });
 
@@ -211,5 +211,21 @@ describe("buildProjectionBacklogs", () => {
         ], new Date(2026, 7, 12), {});
         expect(result.daily.totalPomodoros).toBe(0);
         expect(result.weekly.totalPomodoros).toBe(0);
+    });
+});
+
+
+describe("segment-relative work fraction", () => {
+    it("keeps an unswitched timer numerically unchanged", () => {
+        for (const seconds of [0, 600, 750, 1499, 1500]) {
+            expect(computeActiveFractionComplete(timer(), T0 + seconds * 1000, 25)).toBeCloseTo(seconds / 1500);
+        }
+    });
+    it("counts only the new segment after switching, including a paused handoff", () => {
+        const switched = timer({ task_id: "t2", planned_secs: 900, started_at: new Date(T0 + 600000).toISOString(), window_started_at: new Date(T0).toISOString() });
+        expect(computeActiveFractionComplete(switched, T0 + 600000, 25)).toBeCloseTo(0);
+        expect(computeActiveFractionComplete(switched, T0 + 900000, 25)).toBeCloseTo(0.2);
+        expect(computeActiveFractionComplete({ ...switched, paused: true, paused_remaining_secs: 900 }, T0 + 9000000, 25)).toBeCloseTo(0);
+        expect(computeActiveFractionComplete(timer({ planned_secs: 3000 }), T0, 25)).toBeCloseTo(0);
     });
 });

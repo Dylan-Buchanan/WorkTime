@@ -1,7 +1,64 @@
 import { test, expect } from "@playwright/test";
-import { baseState, backendState, openApp, syncData, taskFixture } from "./helpers";
+import { baseState, backendState, defaultSettings, openApp, syncData, taskFixture } from "./helpers";
+
+function switchFixtures(workMinutes = 25) {
+    const a = "00000000-0000-4000-8000-00000000000a";
+    const b = "00000000-0000-4000-8000-00000000000b";
+    const tasks = Object.fromEntries([a, b].map((id, index) => [id, {
+        id, title: index === 0 ? "Switch task A" : "Switch task B", appTaskId: id,
+        projectId: null, status: "Next", priority: "High", estimatePomos: 4,
+        timeSpentMinutes: 0, workedPomos: 0, tags: [], links: [], checklist: [], relatedTo: [],
+        sortOrder: index, isArchived: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+    }]));
+    return { a, b, pm: { projects: {}, tasks }, seed: baseState({ active_task: a, tasks: {
+        [a]: taskFixture(a, "Switch task A"), [b]: taskFixture(b, "Switch task B"),
+    }, settings: { ...defaultSettings, work_minutes: workMinutes } }) };
+}
 
 test.describe("Timer workflows", () => {
+    test("Switch hands the running window from A to B without changing persisted ends_at", async ({ browser }) => {
+        const fixture = switchFixtures();
+        const app = await openApp(browser, fixture.seed, fixture.pm);
+        try {
+            await app.page.goto("/");
+            await app.page.getByRole("button", { name: "Start Focus" }).click();
+            await expect(app.page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+            await syncData(app.page);
+            const before = (await backendState(app)).timer!;
+            await app.page.getByRole("button", { name: "Switch", exact: true }).click();
+            await app.page.getByRole("dialog", { name: "Switch task", exact: true }).getByRole("button", { name: /Switch task B/ }).click();
+            await expect(app.page.getByRole("dialog")).toHaveCount(0);
+            await expect(app.page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+            await syncData(app.page);
+            const after = (await backendState(app)).timer!;
+            expect(after.task_id).toBe(fixture.b);
+            expect(after.ends_at).toBe(before.ends_at);
+            expect(after.paused).toBe(false);
+        } finally { await app.cleanup(); }
+    });
+
+    test("Switch slices share one non-null work_window_id after natural completion (#179)", async ({ browser }) => {
+        const fixture = switchFixtures(1);
+        const app = await openApp(browser, fixture.seed, fixture.pm);
+        try {
+            await app.page.clock.install({ time: new Date() });
+            await app.page.goto("/");
+            await app.page.getByRole("button", { name: "Start Focus" }).click();
+            await expect(app.page.getByRole("button", { name: "Switch", exact: true })).toBeVisible();
+            await app.page.clock.fastForward(10_000);
+            await app.page.getByRole("button", { name: "Switch", exact: true }).click();
+            await app.page.getByRole("dialog").getByRole("button", { name: /Switch task B/ }).click();
+            await expect(app.page.getByRole("dialog")).toHaveCount(0);
+            await app.page.clock.fastForward(51_000);
+            await expect(app.page.getByText("SHORTBREAK", { exact: true })).toBeVisible();
+            await syncData(app.page);
+            const logs = (await backendState(app)).logs.filter((log) => !log.was_break);
+            expect(logs).toHaveLength(2);
+            expect(logs.map((log) => log.task_id).sort()).toEqual([fixture.a, fixture.b]);
+            expect(logs[0].work_window_id).toBeTruthy();
+            expect(logs[1].work_window_id).toBe(logs[0].work_window_id);
+        } finally { await app.cleanup(); }
+    });
     test("create a task and run a full focus/stop cycle", async ({ browser }) => {
         const app = await openApp(browser);
         const page = app.page;
@@ -31,7 +88,7 @@ test.describe("Timer workflows", () => {
 
         // Stop early, then verify a partial log was recorded.
         await page.waitForTimeout(1100);
-        await page.getByRole("button", { name: "Stop Early" }).click();
+        await page.getByRole("button", { name: "End focus" }).click();
         await expect(page.getByRole("button", { name: "Start Focus" })).toBeVisible();
 
         await syncData(page);

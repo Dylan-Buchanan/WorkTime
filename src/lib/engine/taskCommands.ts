@@ -8,13 +8,10 @@ import {
     EngineResult,
     normalizePositiveInteger,
     taskOrThrow,
+    windowRemainingSecs,
+    windowStartedAt,
 } from "./core";
-import {
-    cloneInProgressPomodoros,
-    resumablePomodoroElapsedSecs,
-    type InProgressPomodoroMap,
-    withoutInProgressPomodoro,
-} from "./pomodoroProgress";
+import { completeTimer, stopWorkTimer } from "./timerCommands";
 
 /** Rust: set_active_task */
 export function setActiveTask(
@@ -22,114 +19,73 @@ export function setActiveTask(
     taskId: string,
     now: Date,
     logId: string,
-    inProgressPomodoros: InProgressPomodoroMap = {},
 ): EngineResult<void> {
-    const next = cloneAppState(state);
-    let progress = cloneInProgressPomodoros(inProgressPomodoros);
+    let next = cloneAppState(state);
     taskOrThrow(next, taskId);
-
     const timer = next.timer;
-    if (timer && timer.kind === "Work" && timer.task_id !== taskId) {
+    if (timer?.kind === "Work" && timer.task_id !== taskId) {
         const elapsed = elapsedTimerSecs(timer, now);
-        const workSecs = Math.max(0, Math.trunc(next.settings.work_minutes * 60));
-        const savedBase = resumablePomodoroElapsedSecs(progress, timer.task_id, workSecs);
-        const oldTask = next.tasks[timer.task_id];
-
-        if (elapsed > 0) {
-            if (oldTask && workSecs > 0) {
-                oldTask.completed_pomodoros += clampFraction(elapsed / workSecs);
+        const remainder = windowRemainingSecs(timer, now);
+        if (remainder <= 0 || (!timer.paused && now.getTime() >= Date.parse(timer.ends_at))) {
+            // A depleted paused/legacy segment may have an irrelevant future end.
+            next = completeTimer(next, now, logId).state;
+        } else {
+            const workSecs = Math.max(0, Math.trunc(next.settings.work_minutes * 60));
+            const oldTask = next.tasks[timer.task_id];
+            if (elapsed > 0) {
+                if (oldTask && workSecs > 0) oldTask.completed_pomodoros += clampFraction(elapsed / workSecs);
+                appendLog(next, timer.task_id, elapsed / 60, now, false, logId, false, windowStartedAt(timer));
             }
-            appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
-        }
-
-        const savedTotal = Math.min(workSecs, savedBase + elapsed);
-        if (
-            oldTask &&
-            !oldTask.archived &&
-            oldTask.completed_at === null &&
-            savedTotal > 0 &&
-            savedTotal < workSecs
-        ) progress[timer.task_id] = savedTotal;
-        else delete progress[timer.task_id];
-
-        const targetBase = resumablePomodoroElapsedSecs(progress, taskId, workSecs);
-        if (targetBase > 0) progress[taskId] = targetBase;
-        else delete progress[taskId];
-        const remaining = workSecs - targetBase;
-        if (remaining > 0) {
             next.timer = {
                 ...timer,
+                window_started_at: windowStartedAt(timer),
                 task_id: taskId,
-                planned_secs: remaining,
+                planned_secs: remainder,
                 accumulated_secs: 0,
                 started_at: now.toISOString(),
-                ends_at: addSeconds(now, remaining),
-                paused_remaining_secs: timer.paused ? remaining : 0,
+                ends_at: timer.paused ? addSeconds(now, remainder) : timer.ends_at,
+                paused_remaining_secs: timer.paused ? remainder : 0,
             };
-        } else {
-            next.timer = null;
         }
     }
-
     next.active_task = taskId;
-    return { state: next, value: undefined, inProgressPomodoros: progress };
+    return { state: next, value: undefined };
 }
 
 /** Rust: delete_task */
-export function deleteTask(
-    state: AppStateData,
-    taskId: string,
-    inProgressPomodoros: InProgressPomodoroMap = {},
-): EngineResult<void> {
+export function deleteTask(state: AppStateData, taskId: string): EngineResult<void> {
     const next = cloneAppState(state);
     taskOrThrow(next, taskId);
     delete next.tasks[taskId];
     if (next.active_task === taskId) next.active_task = null;
-    return {
-        state: next,
-        value: undefined,
-        inProgressPomodoros: withoutInProgressPomodoro(inProgressPomodoros, taskId),
-    };
+    return { state: next, value: undefined };
 }
 
 /** Rust: archive_task */
-export function archiveTask(
-    state: AppStateData,
-    taskId: string,
-    inProgressPomodoros: InProgressPomodoroMap = {},
-): EngineResult<Task> {
+export function archiveTask(state: AppStateData, taskId: string): EngineResult<Task> {
     const next = cloneAppState(state);
     const task = taskOrThrow(next, taskId);
     task.archived = true;
-    return {
-        state: next,
-        value: { ...task },
-        inProgressPomodoros: withoutInProgressPomodoro(inProgressPomodoros, taskId),
-    };
+    return { state: next, value: { ...task } };
 }
 
 /** Rust: finalize_task */
-export function finalizeTask(
-    state: AppStateData,
-    taskId: string,
-    now: Date,
-    inProgressPomodoros: InProgressPomodoroMap = {},
-): EngineResult<Task> {
-    const next = cloneAppState(state);
+export function finalizeTask(state: AppStateData, taskId: string, now: Date, logId: string): EngineResult<Task> {
+    let next = cloneAppState(state);
+    taskOrThrow(next, taskId);
     const timer = next.timer;
-    if (timer?.task_id === taskId && timer.kind === "Work") next.timer = null;
-
-    const task = taskOrThrow(next, taskId);
-    if (task.completed_at === null) {
-        task.completed_at = now.toISOString();
+    if (timer?.task_id === taskId && timer.kind === "Work") {
+        if (windowRemainingSecs(timer, now) <= 0 || (!timer.paused && now.getTime() >= Date.parse(timer.ends_at))) {
+            next = completeTimer(next, now, logId).state;
+        } else if (elapsedTimerSecs(timer, now) > 0) {
+            next = stopWorkTimer(next, now, logId).state;
+        } else next.timer = null;
     }
+    const task = taskOrThrow(next, taskId);
+    if (task.completed_at === null) task.completed_at = now.toISOString();
     task.archived = true;
     if (next.active_task === taskId) next.active_task = null;
-    return {
-        state: next,
-        value: { ...task },
-        inProgressPomodoros: withoutInProgressPomodoro(inProgressPomodoros, taskId),
-    };
+    return { state: next, value: { ...task } };
 }
 
 /** Rust: set_task_target */

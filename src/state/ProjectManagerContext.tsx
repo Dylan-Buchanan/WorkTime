@@ -8,6 +8,8 @@ import { clearAgentProjectSnapshot, getAgentProjectSnapshot, planAgentSnapshotRe
 import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/snapshotStore";
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { normalizeTaskDueDate } from "../lib/taskDueDate";
+import { applyWorkStart } from "../lib/pm/workStart";
+import { normalizeWaiting, withWaitingInvariant } from "../lib/pm/waiting";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -78,6 +80,11 @@ export type AgentSnapshotRevertResult =
 
 interface PMContextShape {
     state: ProjectManagerState;
+    linkingTaskIds: ReadonlySet<string>;
+    linkFailures: Readonly<Record<string, string>>;
+    retryLink: (pmTaskId: string) => void;
+    /** Internal bridge reporter; link state is surface-local, never persisted. */
+    reportLink: (pmTaskId: string, linking: boolean, error?: string) => void;
     createProject: (name: string, color?: string) => Project;
     updateProject: (id: string, patch: Partial<Project>) => void;
     archiveProject: (id: string, archive?: boolean) => void;
@@ -85,6 +92,7 @@ interface PMContextShape {
     createTask: (title: string, opts?: Partial<PMTask>) => Promise<PMTask>;
     ensureMetadataForAppTask: (appTaskId: string, meta: { title: string; estimatePomos?: number }) => PMTask;
     updateTask: (id: string, patch: Partial<PMTask>) => void;
+    recordWorkStart: (taskId: string, at?: string) => void;
     archiveTask: (id: string, archive?: boolean) => void;
     setSelectedTask: (id: string | null) => void;
     reorderTasks: (idsInOrder: string[], withinStatus?: TaskStatus) => void;
@@ -197,6 +205,25 @@ export const ProjectManagerProvider: React.FC<{
         }
     })();
     const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
+    const [linkingTaskIds, setLinkingTaskIds] = useState<ReadonlySet<string>>(() => new Set());
+    const [linkFailures, setLinkFailures] = useState<Readonly<Record<string, string>>>({});
+    const reportLink = useCallback((id: string, linking: boolean, error?: string) => {
+        setLinkingTaskIds((prev) => {
+            if (prev.has(id) === linking) return prev;
+            const next = new Set(prev);
+            if (linking) next.add(id); else next.delete(id);
+            return next;
+        });
+        if (error !== undefined) setLinkFailures((prev) => ({ ...prev, [id]: error }));
+    }, []);
+    const retryLink = useCallback((id: string) => {
+        setLinkFailures((prev) => {
+            if (!Object.prototype.hasOwnProperty.call(prev, id)) return prev;
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
+    }, []);
     const [hydrated, setHydrated] = useState(false);
     const lastServerSerializedRef = useRef<string | null>(null);
     const pendingServerSerializedRef = useRef<string | null>(null);
@@ -407,11 +434,11 @@ export const ProjectManagerProvider: React.FC<{
                 persist((prev) => {
                     const tasks = { ...prev.tasks };
                     for (const task of plan.restoreTasks) {
-                        tasks[task.id] = { ...task, updatedAt: revertedAt };
+                        tasks[task.id] = withWaitingInvariant({ ...task, updatedAt: revertedAt });
                     }
                     for (const taskId of plan.archiveTaskIds) {
                         const task = tasks[taskId];
-                        if (task) tasks[taskId] = { ...task, isArchived: true, updatedAt: revertedAt };
+                        if (task) tasks[taskId] = withWaitingInvariant({ ...task, isArchived: true, updatedAt: revertedAt });
                     }
                     return { ...prev, tasks };
                 });
@@ -538,12 +565,16 @@ export const ProjectManagerProvider: React.FC<{
                     title,
                     projectId,
                     dueDate,
+                    waiting: Object.prototype.hasOwnProperty.call(opts, "waiting")
+                        ? normalizeWaiting((opts as any).waiting)
+                        : normalizeWaiting(linked.waiting),
                     updatedAt: now(),
                 };
-                created = task;
+                const normalizedTask = withWaitingInvariant(task);
+                created = normalizedTask;
                 return {
                     ...prev,
-                    tasks: { ...prev.tasks, [linked.id]: task },
+                    tasks: { ...prev.tasks, [linked.id]: normalizedTask },
                 };
             }
             const sortOrder = Object.values(prev.tasks).filter((t) => t.status === status).length;
@@ -568,11 +599,13 @@ export const ProjectManagerProvider: React.FC<{
                 updatedAt: now(),
                 appTaskId: (opts as any).appTaskId,
                 relatedTo: (opts as any).relatedTo || [],
+                waiting: normalizeWaiting((opts as any).waiting),
             };
-            created = task;
+            const normalizedTask = withWaitingInvariant(task);
+            created = normalizedTask;
             const next = {
                 ...prev,
-                tasks: { ...prev.tasks, [id]: task },
+                tasks: { ...prev.tasks, [id]: normalizedTask },
             };
             return next;
         });
@@ -645,15 +678,22 @@ export const ProjectManagerProvider: React.FC<{
         });
     };
     const updateTask = (id: string, patch: Partial<PMTask>) => {
-        const t = state.tasks[id];
-        if (!t) return;
         const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "dueDate") ? { ...patch, dueDate: normalizeTaskDueDate(patch.dueDate) } : patch;
-        const upd: PMTask = { ...t, ...normalizedPatch, updatedAt: now() };
-        persist((prev) => ({
-            ...prev,
-            tasks: { ...prev.tasks, [id]: upd },
-        }));
+        persist((prev) => {
+            const task = prev.tasks[id];
+            if (!task) return prev;
+            const merged = { ...task, ...normalizedPatch, updatedAt: now() };
+            return { ...prev, tasks: { ...prev.tasks, [id]: withWaitingInvariant(merged) } };
+        });
     };
+    const recordWorkStart = useCallback((taskId: string, at: string = now()) => {
+        persist((prev) => {
+            const task = prev.tasks[taskId];
+            if (!task) return prev;
+            const next = applyWorkStart(task, at);
+            return next === task ? prev : { ...prev, tasks: { ...prev.tasks, [taskId]: next } };
+        });
+    }, [persist]);
     const ensureMetadataForAppTask = (appTaskId: string, meta: { title: string; estimatePomos?: number }): PMTask => {
         let existing = Object.values(state.tasks).find((t) => t.appTaskId === appTaskId);
         if (!existing) {
@@ -715,7 +755,7 @@ export const ProjectManagerProvider: React.FC<{
             const updatedAt = now();
             orderedIds.forEach((tid, i) => {
                 const task = tasks[tid];
-                tasks[tid] = { ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt };
+                tasks[tid] = withWaitingInvariant({ ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt });
             });
             return { ...prev, tasks };
         });
@@ -759,6 +799,10 @@ export const ProjectManagerProvider: React.FC<{
         <PMContext.Provider
             value={{
                 state,
+                linkingTaskIds,
+                linkFailures,
+                retryLink,
+                reportLink,
                 createProject,
                 updateProject,
                 archiveProject,
@@ -766,6 +810,7 @@ export const ProjectManagerProvider: React.FC<{
                 createTask,
                 ensureMetadataForAppTask,
                 updateTask,
+                recordWorkStart,
                 archiveTask,
                 setSelectedTask,
                 reorderTasks,
@@ -866,6 +911,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
             const sortOrder = Number.isFinite(Number((task as any).sortOrder)) ? Number((task as any).sortOrder) : 0;
             const timeSpentMinutes = Number.isFinite(Number((task as any).timeSpentMinutes)) ? Number((task as any).timeSpentMinutes) : 0;
             const workedPomos = Number.isFinite(Number((task as any).workedPomos)) ? Number((task as any).workedPomos) : 0;
+            const waiting = normalizeWaiting(task.waiting);
             const estimatePomos = ((): number | undefined => {
                 const raw = (task as any).estimatePomos;
                 const n = Number(raw);
@@ -893,6 +939,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
                 createdAt,
                 updatedAt,
                 relatedTo: Array.isArray(task.relatedTo) ? task.relatedTo.filter((value: unknown): value is string => typeof value === "string") : [],
+                waiting: status === "Done" || Boolean(task.isArchived) ? null : waiting,
             };
         });
     }

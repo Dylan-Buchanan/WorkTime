@@ -1,6 +1,6 @@
 import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
-import type { EngineResult, InProgressPomodoroMap } from "../engine";
+import type { EngineResult } from "../engine";
 import {
     archiveTask,
     cloneAppState,
@@ -124,6 +124,12 @@ function changedTaskOf(before: AppStateData, after: AppStateData): { before: Tas
     return null;
 }
 
+/** Compare normalized timer shapes without mutating persisted journal/CAS data. */
+function hasCompletedGeneration(record: StagedOwnerRecord, timer: ActiveTimer): boolean {
+    const key = timerGenerationKey(timer);
+    return record.pendingCompletions.some(entry => entry.generationKey === key || timerGenerationKey(entry.expectedTimer) === key);
+}
+
 /** Monotonic per-owner journal sequence so replay order is stable. */
 function nextCompletionSequence(entries: PendingTimerCompletion[]): number {
     return entries.reduce((max, entry) => Math.max(max, entry.sequence), 0) + 1;
@@ -181,22 +187,44 @@ export class StagedDataAccess implements DataAccess {
      * reject the command and leave the persisted record unchanged.
      */
     private async transition<T>(
-        command: (state: AppStateData, inProgressPomodoros: InProgressPomodoroMap) => EngineResult<T>,
+        command: (state: AppStateData) => EngineResult<T>,
         extra?: (next: StagedOwnerRecord) => StagedOwnerRecord,
     ): Promise<EngineResult<T>> {
         let value!: T;
         const persisted = await this.store.update(this.ownerId, (current) => {
             const before = cloneAppState(current.state);
-            const result = command(before, clone(current.inProgressPomodoros));
+            const result = command(before);
             value = result.value;
             let next: StagedOwnerRecord = {
                 ...current,
                 state: result.state,
-                inProgressPomodoros: result.inProgressPomodoros === undefined
-                    ? current.inProgressPomodoros
-                    : clone(result.inProgressPomodoros),
             };
-            next = stampStagedChanges(next, before, result.state, this.now());
+            const now = this.now();
+            next = stampStagedChanges(next, before, result.state, now);
+            if (before.timer?.kind === "Work" && !result.state.timer &&
+                result.state.current_cycle_pomodoros > before.current_cycle_pomodoros) {
+                // The engine's expired switch/finalize branches completed this
+                // generation. Journal the *completion* slice, before the later
+                // selection/archive edit, exactly as completeTimer does. The
+                // latter edits remain ordinary staged work after CAS resolves.
+                const log = result.state.logs.find(log => !before.logs.some(old => old.id === log.id));
+                if (!log) throw new EngineError("Timer completion must produce exactly one journaled log");
+                const completion = engineCompleteTimer(before, new Date(log.finished_at), log.id);
+                const changed = changedTaskOf(before, completion.state);
+                const entry: PendingTimerCompletion = {
+                    generationKey: timerGenerationKey(before.timer),
+                    sequence: nextCompletionSequence(current.pendingCompletions),
+                    expectedTimer: clone(before.timer),
+                    expectedTimerState: timerSliceOf(before),
+                    resultTimerState: timerSliceOf(completion.state),
+                    taskBefore: changed ? clone(changed.before) : null,
+                    taskAfter: changed ? clone(changed.after) : null,
+                    log: clone(log),
+                    localOnlyGeneration: !sameAsLastSyncedTimer(current, before.timer),
+                    completedAt: log.finished_at,
+                };
+                next = { ...next, timerCompleted: true, pendingCompletions: [...current.pendingCompletions, entry] };
+            }
             if (extra) next = extra(next);
             return next;
         });
@@ -222,17 +250,16 @@ export class StagedDataAccess implements DataAccess {
 
         const timer = record.state.timer;
         if (timer && !timer.paused && new Date(timer.ends_at).getTime() <= this.now().getTime()) {
-            const generationKey = timerGenerationKey(timer);
             // A completed generation may be restored by a stale sync snapshot.
             // Its guard or journal proves that replaying the engine would count
             // the same pomodoro twice. Clear only that stale timer, under the
             // store lock, so the caller can advance to the next timer.
-            if (record.timerCompleted || record.pendingCompletions.some((entry) => entry.generationKey === generationKey)) {
+            if (record.timerCompleted || hasCompletedGeneration(record, timer)) {
                 let repaired = false;
                 record = await this.store.update(this.ownerId, (current) => {
                     const currentTimer = current.state.timer;
                     if (!currentTimer || !equal(currentTimer, timer) ||
-                        (!current.timerCompleted && !current.pendingCompletions.some((entry) => entry.generationKey === generationKey))) return current;
+                        (!current.timerCompleted && !hasCompletedGeneration(current, currentTimer))) return current;
                     repaired = true;
                     const state = { ...current.state, timer: null };
                     return stampStagedChanges({ ...current, state, timerCompleted: true }, current.state, state, this.now());
@@ -258,13 +285,13 @@ export class StagedDataAccess implements DataAccess {
     }
 
     async setActiveTask(taskId: string) {
-        return this.transition((state, progress) =>
-            setActiveTask(state, taskId, this.now(), this.createLogId(), progress));
+        return this.transition((state) =>
+            setActiveTask(state, taskId, this.now(), this.createLogId()));
     }
 
     async startWorkTimer() {
         return this.transition(
-            (state, progress) => startWorkTimer(state, this.now(), progress),
+            (state) => startWorkTimer(state, this.now()),
             (next) => ({ ...next, timerCompleted: false }),
         );
     }
@@ -285,7 +312,7 @@ export class StagedDataAccess implements DataAccess {
         if (record.timerCompleted) {
             return { state: cloneAppState(record.state), value: cloneAppState(record.state), applied: false };
         }
-        if (captured && record.pendingCompletions.some((c) => c.generationKey === timerGenerationKey(captured))) {
+        if (captured && hasCompletedGeneration(record, captured)) {
             return { state: cloneAppState(record.state), value: cloneAppState(record.state), applied: false };
         }
 
@@ -298,7 +325,7 @@ export class StagedDataAccess implements DataAccess {
             if (current.timerCompleted) return current;
             if (
                 latestTimer &&
-                current.pendingCompletions.some((c) => c.generationKey === timerGenerationKey(latestTimer))
+                hasCompletedGeneration(current, latestTimer)
             ) {
                 return current;
             }
@@ -307,7 +334,7 @@ export class StagedDataAccess implements DataAccess {
             // timer slices plus the one generated log for CAS replay later.
             const now = this.now();
             const before = cloneAppState(current.state);
-            const result = engineCompleteTimer(before, now, this.createLogId(), current.inProgressPomodoros);
+            const result = engineCompleteTimer(before, now, this.createLogId());
             const changed = changedTaskOf(before, result.state);
             const newLog = result.state.logs.find((log) => !before.logs.some((existing) => existing.id === log.id));
             if (!newLog) throw new EngineError("Timer completion must produce exactly one journaled log");
@@ -329,7 +356,6 @@ export class StagedDataAccess implements DataAccess {
             let next: StagedOwnerRecord = {
                 ...current,
                 state: result.state,
-                inProgressPomodoros: result.inProgressPomodoros ?? current.inProgressPomodoros,
                 timerCompleted: true,
             };
             next = stampStagedChanges(next, current.state, result.state, now);
@@ -345,8 +371,8 @@ export class StagedDataAccess implements DataAccess {
     }
 
     async stopWorkTimer() {
-        return this.transition((state, progress) =>
-            stopWorkTimer(state, this.now(), this.createLogId(), progress));
+        return this.transition((state) =>
+            stopWorkTimer(state, this.now(), this.createLogId()));
     }
 
     async pauseTimer() {
@@ -366,11 +392,11 @@ export class StagedDataAccess implements DataAccess {
     }
 
     async finalizeTask(taskId: string) {
-        return this.transition((state, progress) => finalizeTask(state, taskId, this.now(), progress));
+        return this.transition((state) => finalizeTask(state, taskId, this.now(), this.createLogId()));
     }
 
     async archiveTask(taskId: string) {
-        return this.transition((state, progress) => archiveTask(state, taskId, progress));
+        return this.transition((state) => archiveTask(state, taskId));
     }
 
     async setTaskTarget(taskId: string, target: number) {
@@ -380,7 +406,7 @@ export class StagedDataAccess implements DataAccess {
     async deleteTask(taskId: string): Promise<EngineResult<void>> {
         const now = this.now();
         return this.transition(
-            (state, progress) => deleteTask(state, taskId, progress),
+            (state) => deleteTask(state, taskId),
             (next) => ({
                 ...next,
                 taskUpdatedAt: omitTaskStamp(next.taskUpdatedAt, taskId),
@@ -409,7 +435,7 @@ export class StagedDataAccess implements DataAccess {
     async resetAppState(): Promise<EngineResult<AppStateData>> {
         const now = this.now();
         return this.transition(
-            (state, progress) => resetAppState(state, progress),
+            (state) => resetAppState(state),
             (next) => ({
                 ...next,
                 taskUpdatedAt: {},

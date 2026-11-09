@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { defaultAppState, startWorkTimer, setActiveTask } from "./engine";
 import type { Habit, HabitCompletion, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
 import {
+    computeActiveFractionComplete,
     buildProjectionBacklogs,
     collectEligibleProjectionTasks,
     getLocalWeekWindow,
@@ -102,6 +104,39 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
 }
 
 describe("buildTodayTasks", () => {
+    it("pins waiting first, then bucket, due date and title without changing scope or remaining work", () => {
+        const waiting = { type: "agent" as const, since: "2026-08-12T09:00:00Z" };
+        const pmTasks = [
+            pmTask({ id: "normal-flex", title: "A", estimatePomos: 2 }),
+            pmTask({ id: "wait-flex", title: "Z", estimatePomos: 1.5, waiting }),
+            pmTask({ id: "wait-today", dueDate: "2026-08-12", estimatePomos: 3, waiting }),
+            pmTask({ id: "wait-overdue-z", title: "Z", dueDate: "2026-08-11", estimatePomos: 1, waiting }),
+            pmTask({ id: "normal-today", dueDate: "2026-08-12", estimatePomos: 1 }),
+            pmTask({ id: "wait-overdue-a", title: "A", dueDate: "2026-08-11", estimatePomos: 2, waiting }),
+            pmTask({ id: "wait-earliest", title: "Z", dueDate: "2026-08-10", estimatePomos: 1, waiting }),
+            pmTask({ id: "normal-overdue-z", title: "Z", dueDate: "2026-08-11", estimatePomos: 1 }),
+            pmTask({ id: "normal-overdue-a", title: "A", dueDate: "2026-08-11", estimatePomos: 1 }),
+            pmTask({ id: "normal-earliest", dueDate: "2026-08-09", estimatePomos: 1 }),
+            pmTask({ id: "future", dueDate: "2026-08-17", estimatePomos: 8, waiting }),
+            pmTask({ id: "done", status: "Done", estimatePomos: 8, waiting }),
+            pmTask({ id: "archived", isArchived: true, estimatePomos: 8, waiting }),
+            pmTask({ id: "unestimated", waiting }),
+        ];
+        const input = { reference: REFERENCE, backendTasks: {}, projects: {} };
+        const pinned = buildTodayTasks({ ...input, pmTasks });
+        const unpinned = buildTodayTasks({ ...input, pmTasks: pmTasks.map((task) => ({ ...task, waiting: null })) });
+
+        expect(pinned.tasks.map((task) => task.id)).toEqual([
+            "wait-earliest", "wait-overdue-a", "wait-overdue-z", "wait-today", "wait-flex",
+            "normal-earliest", "normal-overdue-a", "normal-overdue-z", "normal-today", "normal-flex",
+        ]);
+        expect(pinned.remainingPomodoros).toBe(unpinned.remainingPomodoros);
+        expect(pinned.remainingPomodoros).toBe(14.5);
+        expect(pinned.tasks.map((task) => task.id).sort()).toEqual(unpinned.tasks.map((task) => task.id).sort());
+        expect(pinned.tasks[0].waiting).toEqual(waiting);
+        expect(pinned.tasks[pinned.tasks.length - 1].waiting).toBeNull();
+    });
+
     it("classifies due-today, overdue, and undated work against one reference date", () => {
         const result = buildTodayTasks({
             reference: REFERENCE,
@@ -226,7 +261,7 @@ describe("buildTodayTasks", () => {
             backendTasks: {},
             projects: { weekend: project({ id: "weekend", workableDays: [0, 6] }) },
             pmTasks: [
-                pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2 }),
+                pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2, waiting: { type: "person", since: "2026-08-10T09:00:00Z" } }),
                 pmTask({ id: "today", dueDate: "2026-08-12", estimatePomos: 1.5 }),
                 pmTask({ id: "flexible", estimatePomos: 3 }),
                 pmTask({ id: "this-week", dueDate: "2026-08-14", estimatePomos: 4 }),
@@ -313,6 +348,51 @@ describe("buildTodayPomodoros", () => {
         expect(result.sessions.map((session) => session.id)).toEqual(["afternoon", "morning"]);
     });
 
+    describe("window counting (D7)", () => {
+        const at = (id: string, duration: number, extra: Partial<PomodoroLogEntry> = {}) =>
+            log({ id, duration_minutes: duration, finished_at: "2026-08-12T10:00:00", ...extra });
+
+        it("counts a switched window as one pomodoro", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [at("a", 10, { work_window_id: "w1" }), at("b", 15, { work_window_id: "w1" })],
+            });
+            expect(result.count).toBe(1);
+            expect(result.minutes).toBe(25);
+        });
+
+        it("counts logs with null or absent window ids individually", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [at("a", 10, { work_window_id: null }), at("b", 15)],
+            });
+            expect(result.count).toBe(2);
+            expect(result.minutes).toBe(25);
+        });
+
+        it("treats an empty-string window id like null", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [at("a", 10, { work_window_id: "" }), at("b", 15, { work_window_id: "" })],
+            });
+            expect(result.count).toBe(2);
+        });
+
+        it("handles a mixed day with a window, a legacy log and a break", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [
+                    at("a", 10, { work_window_id: "w1" }),
+                    at("b", 15, { work_window_id: "w1" }),
+                    at("legacy", 20),
+                    at("break", 5, { was_break: true, work_window_id: "w1" }),
+                ],
+            });
+            expect(result.count).toBe(2);
+            expect(result.minutes).toBe(45);
+        });
+    });
+
     it("labels sessions with the project task title, backend name, or a fallback", () => {
         const result = buildTodayPomodoros({
             reference: REFERENCE,
@@ -351,4 +431,27 @@ describe("buildTodayOverview", () => {
         expect(overview.habitsCompleted).toBe(1);
         expect(overview.pomodoros.count).toBe(1);
     });
+});
+
+
+describe("post-review Today accounting", () => {
+    it("preserves 1.6p remaining when A switches to B at ten minutes", () => {
+        const state = defaultAppState();
+        state.tasks = { a: backendTask({ id: "a" }), b: backendTask({ id: "b" }) };
+        state.active_task = "a";
+        const running = startWorkTimer(state, REFERENCE).state;
+        const now = new Date(REFERENCE.getTime() + 600_000);
+        const switched = setActiveTask(running, "b", now, "switch").state;
+        const tasks = [pmTask({ id: "a", appTaskId: "a", estimatePomos: 1 }), pmTask({ id: "b", appTaskId: "b", estimatePomos: 1 })];
+        const remaining = (s: typeof state) => buildTodayTasks({ reference: REFERENCE, pmTasks: tasks, backendTasks: s.tasks, projects: {}, activeWorkTaskId: s.timer!.task_id, activeWorkFraction: computeActiveFractionComplete(s.timer, now.getTime(), 25) }).remainingPomodoros;
+        expect(remaining(running)).toBeCloseTo(1.6);
+        expect(remaining(switched)).toBeCloseTo(remaining(running));
+    });
+    it("orders equal titles and due dates by id independently of insertion order", () => {
+        const tasks = [pmTask({ id: "b", estimatePomos: 1 }), pmTask({ id: "a", estimatePomos: 1 })];
+        for (const pmTasks of [tasks, [...tasks].reverse()]) {
+            expect(buildTodayTasks({ reference: REFERENCE, pmTasks, backendTasks: {}, projects: {} }).tasks.map(t => t.id)).toEqual(["a", "b"]);
+        }
+    });
+
 });

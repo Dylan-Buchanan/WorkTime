@@ -9,6 +9,9 @@ WorkTime is a Windows Tauri desktop app with a React/Vite frontend. The browser 
 - Goals lives in `src/components/GoalsPage.tsx` and `src/components/goals/`; `src/lib/goals/**` contains the pure goals/deck/evidence/goal-set layer with pure unit tests, plus browser export adapters.
 - `pptxgenjs` is browser-only: keep its runtime load a function-local dynamic import in the deck renderer, never in the entry chunk or a static import of `GoalsPage`/`DeckPreview`.
 - Goal-set import always creates a new tracker with fresh IDs; never merge or replace. Write `lastBuiltPeriodStart` only through `stampBuiltPeriod` after successful download initiation.
+- A Work pomodoro is a fixed wall-clock window identified by `window_started_at`; switching tasks mid-window joins that window and hands the remainder to the new task. Never re-introduce per-task partial resume state (the retired `inProgressPomodoros` map).
+- Moving a Backlog/Next PM task to In Progress and clearing `PMTask.waiting` on work start happen only in the single `StateSyncBridge` work-start observer (`src/lib/pm/workStart.ts`); do not advance status or clear waiting from individual start paths.
+- Pomodoro logs carry the nullable `work_window_id`; the Today pomodoro summary counts windows, not log rows.
 - `src-tauri/` contains only the native Tauri startup shell and retained plugin configuration.
 - `e2e/` contains Playwright tests against the real React app and local Supabase.
 - `supabase/` contains the schema/RLS migration, local Auth configuration, invite-signup Edge Function, and setup notes.

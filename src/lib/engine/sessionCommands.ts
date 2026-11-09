@@ -4,6 +4,7 @@ import {
     cloneAppState,
     EngineError,
     EngineResult,
+    windowStartedAt,
 } from "./core";
 
 /** Rust: pause_timer */
@@ -14,6 +15,7 @@ export function pauseTimer(state: AppStateData, now: Date): EngineResult<ActiveT
     if (timer.paused) throw new EngineError("Already paused");
     if (now.getTime() >= new Date(timer.ends_at).getTime()) throw new EngineError("Timer already finished");
 
+    if (timer.kind === "Work") timer.window_started_at = windowStartedAt(timer);
     const segmentElapsed = Math.max(0, Math.trunc((now.getTime() - new Date(timer.started_at).getTime()) / 1000));
     timer.accumulated_secs = (timer.accumulated_secs ?? 0) + segmentElapsed;
     const remaining = timer.planned_secs && timer.planned_secs > 0
@@ -31,6 +33,7 @@ export function resumeTimer(state: AppStateData, now: Date): EngineResult<Active
     if (!timer) throw new EngineError("No active timer");
     if (!timer.paused) throw new EngineError("Timer not paused");
 
+    if (timer.kind === "Work") timer.window_started_at = windowStartedAt(timer);
     const remaining = timer.paused_remaining_secs ?? 0;
     timer.paused = false;
     timer.started_at = now.toISOString();
@@ -48,7 +51,7 @@ export function skipBreak(state: AppStateData, now: Date, logId: string): Engine
 
     const task = next.tasks[timer.task_id];
     if (task) task.break_skips += 1;
-    appendLog(next, timer.task_id, 0, now, true, logId, true);
+    appendLog(next, timer.task_id, 0, now, true, logId, true, null);
     next.timer = null;
     return { state: next, value: cloneAppState(next) };
 }

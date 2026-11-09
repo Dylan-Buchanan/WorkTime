@@ -1,12 +1,9 @@
 import type { ActiveTimer, AppStateData, Settings, Task } from "../../state/types";
 import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY } from "../settings";
-import type { InProgressPomodoroMap } from "./pomodoroProgress";
 
 export interface EngineResult<T> {
     state: AppStateData;
     value: T;
-    /** Updated owner-local progress when this command owns its lifecycle. */
-    inProgressPomodoros?: InProgressPomodoroMap;
 }
 
 export class EngineError extends Error {
@@ -75,6 +72,24 @@ export function elapsedTimerSecs(timer: ActiveTimer, now: Date): number {
     return Math.min(Math.max(0, elapsed), Math.max(0, planned));
 }
 
+export type WorkStartOccupation = "free" | "join" | "blocked";
+
+export function workStartOccupation(timer: ActiveTimer | null): WorkStartOccupation {
+    return timer === null ? "free" : timer.kind === "Work" ? "join" : "blocked";
+}
+
+export function windowStartedAt(timer: ActiveTimer): string {
+    return timer.window_started_at ?? new Date(Date.parse(timer.started_at) - (timer.accumulated_secs ?? 0) * 1000).toISOString();
+}
+
+export function windowRemainingSecs(timer: ActiveTimer, now: Date): number {
+    return Math.max(0, plannedTimerSecs(timer) - elapsedTimerSecs(timer, now));
+}
+
+export function isWorkWindowLive(timer: ActiveTimer | null, now: Date): boolean {
+    return timer?.kind === "Work" && (!!timer.paused || Date.parse(timer.ends_at) > now.getTime());
+}
+
 export function addSeconds(now: Date, seconds: number): string {
     return new Date(now.getTime() + seconds * 1000).toISOString();
 }
@@ -93,7 +108,9 @@ export function appendLog(
     wasBreak: boolean,
     logId: string,
     breakSkipped = false,
+    workWindowId: string | null = null,
 ): void {
+    // Work slices share their window's identity; breaks and skips are not window work.
     state.logs.push({
         id: logId,
         task_id: taskId,
@@ -101,6 +118,7 @@ export function appendLog(
         finished_at: finishedAt.toISOString(),
         was_break: wasBreak,
         break_skipped: breakSkipped,
+        work_window_id: workWindowId,
     });
 }
 

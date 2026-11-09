@@ -5,6 +5,8 @@ import type { SyncSnapshot } from "./staging/types";
 import { StagedDataAccess } from "./StagedDataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
+import { applyCompletionWinner, completionRpcPayload } from "./sync/timerCompletions";
+import { buildPushPlan } from "./sync/merge";
 import { timerGenerationKey } from "./sync/timerCompletions";
 import type {
     ActiveTimer,
@@ -246,7 +248,7 @@ describe("StagedDataAccess", () => {
         expect(await data.loadPMState()).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "2026-01-01T00:00:00.000Z" } });
     });
 
-    it("persists switched progress and resumes it through a new access instance", async () => {
+    it("persists the window remainder and identity through a new access instance", async () => {
         const { executor } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);
         const task2 = { ...TASK_T1, id: "t2", name: "Task 2" };
@@ -269,20 +271,16 @@ describe("StagedDataAccess", () => {
         });
 
         await first.setActiveTask("t2");
-        expect(store.read(OWNER_A).inProgressPomodoros).toEqual({ t1: 600 });
-        expect(store.read(OWNER_A).state.timer).toMatchObject({ task_id: "t2", planned_secs: 1500 });
-        await first.finalizeTask("t2");
+        expect(store.read(OWNER_A).state.timer).toMatchObject({ task_id: "t2", planned_secs: 900, ends_at: "2026-01-01T00:25:00.000Z", window_started_at: "2026-01-01T00:00:00.000Z" });
 
         const reloaded = new StagedDataAccess(OWNER_A, store, executor, {
             now: () => new Date("2026-01-01T00:10:00.000Z"),
         });
         await reloaded.setActiveTask("t1");
-        const resumed = await reloaded.startWorkTimer();
-        expect(resumed.value).toMatchObject({ task_id: "t1", planned_secs: 900 });
-        expect(store.read(OWNER_A).inProgressPomodoros).toEqual({ t1: 600 });
+        expect(store.read(OWNER_A).state.timer).toMatchObject({ task_id: "t1", planned_secs: 900, ends_at: "2026-01-01T00:25:00.000Z", window_started_at: "2026-01-01T00:00:00.000Z" });
     });
 
-    it("completes a resumed timer while keeping the completion journal shape unchanged", async () => {
+    it("completes a fresh window while keeping the completion journal shape unchanged", async () => {
         const { executor } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);
         let now = new Date("2026-01-01T00:00:00.000Z");
@@ -292,20 +290,18 @@ describe("StagedDataAccess", () => {
                 tasks: { t1: { ...TASK_T1, completed_pomodoros: 0.4 } },
                 active_task: "t1",
             }),
-            inProgressPomodoros: { t1: 600, t2: 300 },
         }));
         const data = new StagedDataAccess(OWNER_A, store, executor, {
             now: () => now,
             createLogId: () => "log-resumed",
         });
         const started = await data.startWorkTimer();
-        expect(started.value.planned_secs).toBe(900);
-        now = new Date("2026-01-01T00:15:00.000Z");
+        expect(started.value.planned_secs).toBe(1500);
+        now = new Date("2026-01-01T00:25:00.000Z");
 
         expect((await data.completeTimer(started.value)).applied).toBe(true);
         const record = store.read(OWNER_A);
-        expect(record.state.tasks.t1.completed_pomodoros).toBe(1);
-        expect(record.inProgressPomodoros).toEqual({ t2: 300 });
+        expect(record.state.tasks.t1.completed_pomodoros).toBe(1.4);
         expect(record.pendingCompletions).toHaveLength(1);
         expect(record.pendingCompletions[0].expectedTimerState).toEqual({
             active_task: "t1",
@@ -568,7 +564,6 @@ describe("StagedDataAccess", () => {
                 tasks: { t1: { ...TASK_T1 } },
                 logs: [{ id: "log-1", task_id: "t1", duration_minutes: 25, finished_at: "2026-01-01T00:25:00.000Z", was_break: false, break_skipped: false }],
             }),
-            inProgressPomodoros: { t1: 600, t2: 300 },
         }));
         const data = new StagedDataAccess(OWNER_A, store, executor, {
             now: () => new Date("2026-01-02T00:00:00.000Z"),
@@ -579,7 +574,6 @@ describe("StagedDataAccess", () => {
         expect(record.state.tasks.t1).toBeUndefined();
         expect(record.taskTombstones.t1).toEqual({ id: "t1", deletedAt: "2026-01-02T00:00:00.000Z" });
         expect(record.taskUpdatedAt.t1).toBeUndefined();
-        expect(record.inProgressPomodoros).toEqual({ t2: 300 });
 
         await data.deletePomodoroLog("log-1");
         record = store.read(OWNER_A);
@@ -597,10 +591,6 @@ describe("StagedDataAccess", () => {
         await data.savePMState({ projects: {}, tasks: {}, meta: { initializedAt: "pm-time" } });
         await data.saveHabits([H("h1", { name: "Survivor habit" })], [HC("c1", "h1", { bucket: "2026-01-02" })]);
         await data.createTask("Doomed", 1);
-        await store.update(OWNER_A, (current) => ({
-            ...current,
-            inProgressPomodoros: { "task-1": 600, other: 300 },
-        }));
 
         const result = await data.resetAppState();
         const record = store.read(OWNER_A);
@@ -615,7 +605,6 @@ describe("StagedDataAccess", () => {
         expect(record.taskTombstones).toEqual({});
         expect(record.logTombstones).toEqual({});
         expect(record.pendingCompletions).toEqual([]);
-        expect(record.inProgressPomodoros).toEqual({});
 
         // PM state and its timestamp survive the wipe untouched.
         expect(await data.loadPMState()).toEqual({ projects: {}, tasks: {}, meta: { initializedAt: "pm-time" } });
@@ -1103,4 +1092,95 @@ describe("StagedDataAccess", () => {
         await expect(data.sync(options)).resolves.toEqual(result);
         expect(sync).toHaveBeenCalledWith(options);
     });
+});
+
+
+describe("window completion races and upgrade", () => {
+    it("rejects a captured completion after an expired switch already closed the window", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const timer = makeActiveTimer({ task_id: "t1", started_at: "2026-01-01T00:00:00.000Z", ends_at: "2026-01-01T00:25:00.000Z", planned_secs: 1500, window_started_at: "2026-01-01T00:00:00.000Z" });
+        await store.update(OWNER_A, current => ({ ...current, state: makeAppState({ tasks: { t1: TASK_T1, t2: { ...TASK_T1, id: "t2" } }, active_task: "t1", timer }) }));
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-01T00:25:00.000Z") });
+        await data.setActiveTask("t2");
+        expect((await data.completeTimer(timer)).applied).toBe(false);
+        const state = store.read(OWNER_A).state;
+        expect(state.logs).toHaveLength(1);
+        expect(state.current_cycle_pomodoros).toBe(1);
+        expect(state.tasks.t1.completed_pomodoros).toBe(1);
+    });
+
+    it("completes an upgraded live window as a local-only generation without changing its baseline", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const timer = makeActiveTimer({ task_id: "t1", started_at: "2026-01-01T00:10:00.000Z", accumulated_secs: 600, ends_at: "2026-01-01T00:25:00.000Z", planned_secs: 1500 });
+        await store.update(OWNER_A, current => ({ ...current, state: makeAppState({ tasks: { t1: TASK_T1 }, active_task: "t1", timer }) }));
+        const key = "worktime:staging:v1:" + OWNER_A;
+        const legacy = JSON.parse(window.localStorage.getItem(key)!);
+        legacy.schemaVersion = 9;
+        legacy["inProgress" + "Pomodoros"] = {};
+        window.localStorage.setItem(key, JSON.stringify(legacy));
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-01T00:25:00.000Z") });
+        const upgraded = store.read(OWNER_A).state.timer!;
+        expect(upgraded.window_started_at).toBe("2026-01-01T00:00:00.000Z");
+        expect((await data.completeTimer(upgraded)).applied).toBe(true);
+        const record = store.read(OWNER_A);
+        expect(record.pendingCompletions[0]).toMatchObject({ localOnlyGeneration: true, expectedTimer: upgraded });
+        expect(record.lastSynced).toEqual(legacy.lastSynced);
+    });
+});
+
+
+it("does not replay a pending v9 completion after the live timer migrates to v10", async () => {
+    const { executor } = makeSyncExecutor();
+    const store = new LocalStagingStore(window.localStorage);
+    const timer = await seedExpiredTimer(store, OWNER_A);
+    const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-01T00:26:00Z") });
+    await data.completeTimer(timer);
+    const key = "worktime:staging:v1:" + OWNER_A;
+    const legacy = JSON.parse(window.localStorage.getItem(key)!);
+    legacy.schemaVersion = 9;
+    legacy.timerCompleted = false;
+    legacy.state.timer = timer;
+    // v9 persisted the canonical full timer shape, which had no window field.
+    legacy.pendingCompletions[0].generationKey = JSON.stringify(Object.fromEntries(Object.entries(timer).sort(([a], [b]) => a.localeCompare(b))));
+    window.localStorage.setItem(key, JSON.stringify(legacy));
+    expect(store.read(OWNER_A).state.timer!.window_started_at).toBeTruthy();
+    expect((await data.fetchState()).reconciledTimer?.applied).toBe(false);
+    expect((await data.completeTimer()).applied).toBe(false);
+    const record = store.read(OWNER_A);
+    expect(record.state.logs).toHaveLength(1);
+    expect(record.state.tasks.t1.completed_pomodoros).toBe(1);
+    expect(record.pendingCompletions).toEqual(legacy.pendingCompletions);
+});
+
+it.each(["switch", "finalize"])("journals an engine-internal expired %s so a stale pull cannot credit it twice", async (command) => {
+    const { executor } = makeSyncExecutor();
+    const store = new LocalStagingStore(window.localStorage);
+    const timer = await seedExpiredTimer(store, OWNER_A);
+    await store.update(OWNER_A, r => ({ ...r, initialized: true, lastSynced: makeBaseline(timer), taskUpdatedAt: { t2: "2026-01-01T00:00:00.000Z" }, state: { ...r.state, tasks: { ...r.state.tasks, t2: { ...TASK_T1, id: "t2" } } } }));
+    const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-01T00:26:00Z") });
+    if (command === "switch") await data.setActiveTask("t2"); else await data.finalizeTask("t1");
+    const completed = store.read(OWNER_A);
+    expect(completed.pendingCompletions).toHaveLength(1);
+    expect(completed.timerCompleted).toBe(true);
+    const entry = completed.pendingCompletions[0];
+    expect(entry.expectedTimer).toEqual(timer);
+    expect(completionRpcPayload(entry).p_expected_timer).toEqual(timer);
+    expect(entry.resultTimerState).toMatchObject({ active_task: "t1", timer: null, current_cycle_pomodoros: 1 });
+    expect(buildPushPlan(completed).logUpserts).toEqual([]);
+    expect(buildPushPlan(completed).taskUpserts.some(row => row.value.id === "t1")).toBe(false);
+    const resolved = applyCompletionWinner(completed, entry);
+    expect(resolved.state).toEqual(completed.state);
+    if (command === "finalize") {
+        expect(entry.taskAfter!.archived).toBe(false);
+        expect(resolved.state.tasks.t1.archived).toBe(true);
+    } else expect(resolved.state.active_task).toBe("t2");
+    // A newer stale remote row can also reset the singleton completion flag.
+    await store.update(OWNER_A, r => ({ ...r, timerCompleted: false, state: { ...r.state, timer } }));
+    expect((await data.fetchState()).reconciledTimer?.applied).toBe(false);
+    const repaired = store.read(OWNER_A);
+    expect(repaired.state.logs).toHaveLength(1);
+    expect(repaired.state.tasks.t1.completed_pomodoros).toBe(1);
+    expect(repaired.state.current_cycle_pomodoros).toBe(1);
 });

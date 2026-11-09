@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { TimerPanel } from "./TimerPanel";
 import { AppStateProvider, useAppState } from "../state/AppStateContext";
@@ -84,7 +85,16 @@ const ActiveTaskSwitcher: React.FC<{ taskId: string }> = ({ taskId }) => {
     return <button onClick={() => void setActiveTask(taskId)}>Switch active timer task</button>;
 };
 
-function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
+const SelectedTaskActions = () => {
+    const { state, updateTask } = usePM();
+    const id = state.ui.selectedTaskId;
+    return id ? <>
+        <button onClick={() => updateTask(id, { status: "Done" })}>Complete selected PM task</button>
+        <button onClick={() => updateTask(id, { isArchived: true })}>Archive selected PM task</button>
+    </> : null;
+};
+
+function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode) {
     return (
         <MemoryRouter>
             <TauriCloseProvider>
@@ -94,6 +104,8 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
                             <ProjectManagerProvider>
                                 <HabitProvider>
                                     <SelectionProbe />
+                                    {children}
+                                    <SelectedTaskActions />
                                     {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
                                     <TimerPanel />
                                 </HabitProvider>
@@ -118,6 +130,228 @@ async function renderWithTasks(tasks: Record<string, PMTask>, projects: Record<s
 }
 
 beforeEach(() => localStorage.clear());
+
+type HandoffControls = { app: ReturnType<typeof useAppState>; pm: ReturnType<typeof usePM> };
+function HandoffProbe({ onChange }: { onChange: (value: HandoffControls) => void }) {
+    const app = useAppState();
+    const pm = usePM();
+    useLayoutEffect(() => onChange({ app, pm }), [app, pm, onChange]);
+    return null;
+}
+async function setupHandoff(options: { paused?: boolean; unlinked?: boolean; noTimer?: boolean; kind?: "Work" | "ShortBreak"; missingOccupant?: boolean } = {}) {
+    const a = makeAppTask("a", "Task A");
+    const b = makeAppTask("b", "Task B");
+    const timer = makeActiveTimer({ task_id: "a", paused: options.paused ?? false, paused_remaining_secs: options.paused ? 900 : 0, kind: options.kind ?? "Work" });
+    const data = new InMemoryDataAccess(makeAppState({ tasks: { a, b }, active_task: "a", timer: options.noTimer ? null : timer }));
+    await data.savePMState({ projects: {}, tasks: {
+        ...(!options.missingOccupant ? { pa: makePMTask({ id: "pa", title: "Task A", appTaskId: "a", estimatePomos: 2 }) } : {}),
+        pb: makePMTask({ id: "pb", title: "Task B", appTaskId: options.unlinked ? undefined : "b", estimatePomos: 2 }),
+    }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+    let current!: HandoffControls;
+    const view = render(wrap(data, undefined, <HandoffProbe onChange={(value) => { current = value; }} />));
+    await waitFor(() => expect(current?.pm.state.tasks.pb).toBeDefined());
+    await waitFor(() => expect(current.app.state).not.toBeNull());
+    return { ...view, data, timer, get current() { return current; } };
+}
+async function expireHandoffWindow(view: Awaited<ReturnType<typeof setupHandoff>>) {
+    vi.useFakeTimers();
+    try {
+        vi.setSystemTime(new Date(Date.parse(view.timer.ends_at) + 1));
+        await act(async () => { await view.current.app.completeTimer(); });
+        expect(view.current.app.state?.timer?.kind).toBe("ShortBreak");
+    } finally { vi.useRealTimers(); }
+}
+
+describe("TimerPanel Switch/Waiting sheet", () => {
+    it.each([{ noTimer: true }, { kind: "ShortBreak" as const }])("hides both buttons without a live Work window: %j", async (options) => {
+        await setupHandoff(options);
+        expect(screen.queryByRole("button", { name: "Switch" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Waiting…" })).toBeNull();
+    });
+    it("disables Waiting with an explanation when the occupant has no PM row", async () => {
+        await setupHandoff({ missingOccupant: true });
+        expect(screen.getByRole("button", { name: "Waiting…" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Waiting…" })).toHaveAttribute("title", expect.stringContaining("no linked project-manager task"));
+        expect(screen.getByRole("button", { name: "Switch" })).toBeEnabled();
+    });
+    it("marks the occupant waiting, preserves since on type change, and cancellation leaves the flag and timer running", async () => {
+        const view = await setupHandoff();
+        const pause = vi.spyOn(view.data, "pauseTimer");
+        const resume = vi.spyOn(view.data, "resumeTimer");
+        const stop = vi.spyOn(view.data, "stopWorkTimer");
+        fireEvent.click(screen.getByRole("button", { name: "Waiting…" }));
+        const dialog = screen.getByRole("dialog", { name: "Waiting — switch task" });
+        await waitFor(() => expect(view.current.pm.state.tasks.pa.waiting?.type).toBe("agent"));
+        const since = view.current.pm.state.tasks.pa.waiting!.since;
+        expect(Number.isNaN(Date.parse(since))).toBe(false);
+        fireEvent.click(within(dialog).getByRole("button", { name: "Person" }));
+        await waitFor(() => expect(view.current.pm.state.tasks.pa.waiting).toEqual({ type: "person", since }));
+        const before = view.current.app.remainingMs();
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1100)); });
+        expect(view.current.app.remainingMs()).toBeLessThan(before - 500);
+        expect(within(dialog).queryByText(/^\d{2}:\d{2}$/)).toBeNull();
+        fireEvent.keyDown(document, { key: "Escape" });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(screen.getByRole("button", { name: "Waiting…" })).toHaveFocus();
+        expect(view.current.pm.state.tasks.pa.waiting).toEqual({ type: "person", since });
+        expect(view.data.store.state.timer).toMatchObject({ ends_at: view.timer.ends_at, paused: false });
+        expect(pause).not.toHaveBeenCalled(); expect(resume).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled();
+    });
+    it.each([false, true])("hands over a linked task (paused=%s), resumes before joining, and closes", async (paused) => {
+        const view = await setupHandoff({ paused });
+        const resume = vi.spyOn(view.data, "resumeTimer");
+        const setActive = vi.spyOn(view.data, "setActiveTask");
+        const start = vi.spyOn(view.current.app, "startTaskWork");
+        expect(screen.getByRole("button", { name: "Waiting…" })).toBeVisible();
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        const endsAt = view.data.store.state.timer!.ends_at;
+        expect(view.current.pm.state.tasks.pa.waiting).toBeNull();
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Switch task" })).getByRole("button", { name: /Task B/ }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        if (!paused) expect(start).toHaveBeenCalledWith("b");
+        expect(view.data.store.state.timer).toMatchObject({ task_id: "b", paused: false });
+        if (paused) {
+            expect(resume).toHaveBeenCalledOnce();
+            expect(resume.mock.invocationCallOrder[0]).toBeLessThan(setActive.mock.invocationCallOrder[0]);
+            const resumed = await resume.mock.results[0].value;
+            expect(view.data.store.state.timer?.ends_at).toBe(resumed.state.timer.ends_at);
+        } else {
+            expect(resume).not.toHaveBeenCalled();
+            expect(view.data.store.state.timer?.ends_at).toBe(endsAt);
+        }
+    });
+    it("lines up the selected task if the window becomes a break while open", async () => {
+        const view = await setupHandoff();
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        await expireHandoffWindow(view);
+        await waitFor(() => expect(view.current.app.state?.timer?.kind).toBe("ShortBreak"));
+        const before = { ...view.data.store.state.timer! };
+        const start = vi.spyOn(view.current.app, "startTaskWork");
+        const setActive = vi.spyOn(view.data, "setActiveTask");
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+        expect(await screen.findByText("Task B is lined up for the next focus window.")).toBeVisible();
+        expect(setActive).toHaveBeenCalledWith("b"); expect(start).not.toHaveBeenCalled();
+        expect(view.data.store.state.active_task).toBe("b");
+        expect(view.data.store.state.timer).toEqual(before);
+    });
+    it("starts a fresh window if the timer disappears while open", async () => {
+        const view = await setupHandoff();
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        await act(async () => { await view.current.app.stopWork(); });
+        const start = vi.spyOn(view.data, "startWorkTimer");
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(start).toHaveBeenCalledOnce();
+        expect(view.data.store.state.timer).toMatchObject({ kind: "Work", task_id: "b" });
+    });
+    it("waits for an unlinked task, then joins once its appTaskId appears", async () => {
+        const view = await setupHandoff({ unlinked: true });
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+        expect(screen.getByText("preparing…")).toBeVisible();
+        expect(view.data.store.state.timer?.task_id).toBe("a");
+        await act(async () => { view.current.pm.updateTask("pb", { appTaskId: "b" }); });
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(view.data.store.state.timer).toMatchObject({ task_id: "b", ends_at: view.timer.ends_at });
+    });
+    it("surfaces a permanent link failure and can retry without hanging", async () => {
+        const view = await setupHandoff({ unlinked: true });
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+        await act(async () => { view.current.pm.reportLink("pb", false, "Cannot create task"); });
+        expect(screen.getByRole("alert")).toHaveTextContent("Cannot create task");
+        expect(screen.queryByText("preparing…")).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await act(async () => { view.current.pm.updateTask("pb", { appTaskId: "b" }); });
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(view.data.store.state.timer?.task_id).toBe("b");
+    });
+    it("times out an unlinked selection after 15 seconds", async () => {
+        const view = await setupHandoff({ unlinked: true });
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+            fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+            expect(screen.getByRole("alert")).toHaveTextContent("timed out after 15 seconds");
+            expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+            expect(view.data.store.state.timer?.task_id).toBe("a");
+        } finally { vi.useRealTimers(); }
+    });
+    it.each(["work", "break"])("keeps the sheet open with a %s command error", async (kind) => {
+        const view = await setupHandoff();
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        if (kind === "break") await expireHandoffWindow(view);
+        vi.spyOn(view.data, "setActiveTask").mockRejectedValueOnce(new Error("Handoff unavailable"));
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+        await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("alert")).toHaveTextContent("Handoff unavailable"));
+        expect(view.data.store.state.active_task).toBe("a");
+    });
+    it("preserves the details selection through opening and closing the sheet", async () => {
+        const view = await setupHandoff();
+        fireEvent.click(screen.getByRole("button", { name: "Task Details" }));
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pa");
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pa");
+        expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "false");
+        fireEvent.click(screen.getByRole("button", { name: "Close" }));
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("");
+        expect(view.data.store.state.timer?.task_id).toBe("a");
+    });
+});
+
+describe("TimerPanel waiting badge", () => {
+    it.each([
+        { type: "agent" as const, paused: false },
+        { type: "person" as const, paused: false },
+        { type: "agent" as const, paused: true },
+        { type: "person" as const, paused: true },
+    ])("shows $type waiting while paused=$paused and clears only the flag", async ({ type, paused }) => {
+        const task = makeAppTask("app-waiting", "Waiting work");
+        const timer = makeActiveTimer({ task_id: task.id, paused, paused_remaining_secs: paused ? 713 : 0 });
+        const data = await renderWithTasks({
+            waiting: makePMTask({ id: "waiting", appTaskId: task.id, waiting: { type, since: "2026-01-01T00:00:00Z" } }),
+        }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer });
+        const badge = await screen.findByText(`WAITING · ${type.toUpperCase()}`);
+        expect(badge.parentElement).toHaveAttribute("title", expect.stringMatching(new RegExp(`^Waiting on ${type} · \\d+ days$`)));
+        expect(screen.getByText(paused ? "PAUSED" : "WORK")).toBeInTheDocument();
+        const pause = vi.spyOn(data, "pauseTimer");
+        const resume = vi.spyOn(data, "resumeTimer");
+        const stop = vi.spyOn(data, "stopWorkTimer");
+        const before = { ...data.store.state.timer! };
+
+        fireEvent.click(screen.getByRole("button", { name: "Clear waiting" }));
+
+        await waitFor(() => expect(screen.queryByText(`WAITING · ${type.toUpperCase()}`)).not.toBeInTheDocument());
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.waiting.waiting).toBeNull());
+        expect(data.store.state.timer).toEqual(before);
+        expect(data.store.state.timer).toMatchObject({ ends_at: timer.ends_at, paused, paused_remaining_secs: timer.paused_remaining_secs });
+        expect(pause).not.toHaveBeenCalled();
+        expect(resume).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+    });
+
+    it.each(["ShortBreak", "LongBreak"] as const)("does not show waiting on a %s", async (kind) => {
+        const task = makeAppTask("app-break", "Break task");
+        await renderWithTasks({ waiting: makePMTask({ id: "waiting", appTaskId: task.id, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }) },
+            {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id, kind }) });
+        await screen.findByText(kind.toUpperCase());
+        expect(screen.queryByText(/WAITING ·/)).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Clear waiting" })).not.toBeInTheDocument();
+    });
+
+    it("uses the deterministic app-task link instead of a title fallback or details selection", async () => {
+        const task = makeAppTask("app-work", "Title fallback");
+        await renderWithTasks({
+            other: makePMTask({ id: "other", title: task.name, waiting: { type: "person", since: "2026-01-01T00:00:00Z" } }),
+            later: makePMTask({ id: "later", appTaskId: task.id, sortOrder: 2, waiting: { type: "person", since: "2026-01-01T00:00:00Z" } }),
+            first: makePMTask({ id: "first", appTaskId: task.id, sortOrder: 1, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }),
+        }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id }) });
+        expect(await screen.findByText("WAITING · AGENT")).toBeInTheDocument();
+        expect(screen.queryByText("WAITING · PERSON")).not.toBeInTheDocument();
+    });
+});
 
 describe("TimerPanel task details", () => {
     it("offers a retry when an expired timer cannot transition", async () => {
@@ -356,6 +590,44 @@ describe("TimerPanel projected finish", () => {
 });
 
 describe("TimerPanel today surface", () => {
+    it.each([
+        ["Done", "Complete selected PM task"],
+        ["archived", "Archive selected PM task"],
+    ])("clears a waiting Today selection and closes details when it becomes %s", async (_state, action) => {
+        await renderWithTasks({ today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2,
+            waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }) });
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await screen.findByRole("button", { name: "Select Waiting Today task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today"));
+        expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "false");
+
+        fireEvent.click(screen.getByRole("button", { name: action }));
+
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toBeEmptyDOMElement());
+        expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "true");
+        expect(within(todayRegion).queryByRole("button", { name: "Select Waiting Today task" })).not.toBeInTheDocument();
+        expect(within(todayRegion).queryByRole("img", { name: "Waiting on agent" })).not.toBeInTheDocument();
+    });
+
+    it("returns details to the running task after the explicit Today task becomes Done", async () => {
+        const task = makeAppTask("running", "Running work");
+        await renderWithTasks({
+            running: makePMTask({ id: "running", appTaskId: task.id, title: "Running PM task", estimatePomos: 2 }),
+            today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }),
+        }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id }) });
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await screen.findByRole("button", { name: "Select Waiting Today task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today"));
+        fireEvent.click(screen.getByRole("button", { name: "Complete selected PM task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("running"));
+        const details = document.getElementById("timer-task-details-panel")!;
+        expect(details).toHaveAttribute("aria-hidden", "false");
+        expect(within(details).getByText("Running PM task")).toBeInTheDocument();
+        expect(within(details).queryByText("Waiting Today task")).not.toBeInTheDocument();
+    });
+
     it("renders the today surface below the projected-finish card", async () => {
         await renderWithTasks({
             today: makePMTask({ id: "today", title: "Due today", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
@@ -410,5 +682,92 @@ describe("TimerPanel today surface", () => {
         const details = document.getElementById("timer-task-details-panel");
         await waitFor(() => expect(within(details!).getByText("Due today task")).toBeInTheDocument());
         expect(within(details!).queryByText("Running project task")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today");
+        expect(within(details!).getByText("Due today task")).toBeInTheDocument();
+        // An explicit Today selection is not the aside's auto-selection and
+        // remains selected after closing its details.
+        fireEvent.click(screen.getByRole("button", { name: "Close" }));
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today");
     });
+});
+
+
+describe("focus window display", () => {
+    it("keeps the ring and elapsed display after a switch and labels the stop action End focus", async () => {
+        const nowMs = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+        try {
+            const first = makeAppTask("first", "First");
+            const second = makeAppTask("second", "Second");
+            const data = new InMemoryDataAccess(makeAppState({ tasks: { first, second }, active_task: first.id,
+                timer: makeActiveTimer({ task_id: first.id, started_at: new Date(nowMs - 600000).toISOString(),
+                    ends_at: new Date(nowMs + 900000).toISOString(), planned_secs: 1500,
+                    window_started_at: new Date(nowMs - 600000).toISOString() }) }), { now: () => new Date(nowMs) });
+            const view = render(wrap(data, second.id));
+            await screen.findByRole("button", { name: "End focus" });
+            expect(screen.getByText("10m / 25m")).toBeInTheDocument();
+            const ring = () => view.container.querySelector('[style*="conic-gradient"]') as HTMLElement;
+            const before = ring().style.background;
+            expect(before).toContain("40%");
+            fireEvent.click(screen.getByRole("button", { name: "Switch active timer task" }));
+            await waitFor(() => expect(data.store.state.timer?.task_id).toBe(second.id));
+            expect(data.store.state.timer?.planned_secs).toBe(900);
+            await waitFor(() => expect(screen.getByText(/Focus progress:/).textContent).toContain("0p done"));
+            expect(ring().style.background).toBe(before);
+            expect(screen.getByText("10m / 25m")).toBeInTheDocument();
+            fireEvent.click(screen.getByRole("button", { name: "End focus" }));
+            await waitFor(() => expect(data.store.state.timer).toBeNull());
+        } finally { clock.mockRestore(); }
+    });
+});
+
+
+it.each([
+    { status: "Done" as const }, { status: "Blocked" as const }, { isArchived: true },
+    { waiting: { type: "person" as const, since: "2026-01-01T00:00:00Z" } },
+])("refreshes open sheet candidates when a PM task becomes ineligible: %j", async (patch) => {
+    const view = await setupHandoff();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ })).toBeVisible();
+    await act(async () => { view.current.pm.updateTask("pb", patch); });
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
+});
+
+it("refreshes open sheet candidates when the backend is archived", async () => {
+    const view = await setupHandoff();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    await act(async () => { await view.current.app.archiveTask("b"); });
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
+});
+
+
+it("rechecks project workability using the sheet's open-time date", async () => {
+    const view = await setupHandoff();
+    const opened = new Date();
+    const today = opened.getDay();
+    const tomorrow = (today + 1) % 7 as NonNullable<Project["workableDays"]>[number];
+    const p = { ...makeProject("p"), workableDays: [today as NonNullable<Project["workableDays"]>[number]] };
+    // Introduce the project through the provider's supported creation/update API.
+    let projectId!: string;
+    await act(async () => {
+        const created = view.current.pm.createProject("Scheduled");
+        projectId = created.id;
+    });
+    await act(async () => {
+        view.current.pm.updateProject(projectId, { workableDays: p.workableDays });
+        view.current.pm.updateTask("pb", { projectId });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ })).toBeVisible();
+    // Move the wall clock to tomorrow while the sheet retains today's date.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+        vi.setSystemTime(new Date(opened.getTime() + 86_400_000));
+        await act(async () => { view.current.pm.updateTask("pb", { title: "Task B updated" }); });
+        expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B updated/ })).toBeVisible();
+    } finally { vi.useRealTimers(); }
+    await act(async () => { view.current.pm.updateProject(projectId, { workableDays: [tomorrow] }); });
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
 });
