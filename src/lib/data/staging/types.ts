@@ -252,7 +252,8 @@ function isLog(value: unknown): boolean {
         isFiniteNumber(value.duration_minutes) &&
         typeof value.finished_at === "string" &&
         typeof value.was_break === "boolean" &&
-        typeof value.break_skipped === "boolean"
+        typeof value.break_skipped === "boolean" &&
+        (value.work_window_id === undefined || value.work_window_id === null || typeof value.work_window_id === "string")
     );
 }
 
@@ -852,7 +853,8 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         // Retire the old owner-local progress field; journal and baselines retain
         // their original timer shape so pending CAS replay stays compatible.
         const rest = { ...record };
-        delete rest["inProgress" + "Pomodoros"];
+        // The v9 record still carries this retired key.
+        delete rest.inProgressPomodoros;
         let state = rest.state;
         const timer = isObject(state) ? state.timer : null;
         if (isObject(timer) && timer.kind === "Work" && timer.window_started_at === undefined &&

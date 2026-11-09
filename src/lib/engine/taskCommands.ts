@@ -34,7 +34,7 @@ export function setActiveTask(
             const oldTask = next.tasks[timer.task_id];
             if (elapsed > 0) {
                 if (oldTask && workSecs > 0) oldTask.completed_pomodoros += clampFraction(elapsed / workSecs);
-                appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
+                appendLog(next, timer.task_id, elapsed / 60, now, false, logId, false, windowStartedAt(timer));
             }
             next.timer = {
                 ...timer,

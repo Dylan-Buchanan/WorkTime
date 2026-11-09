@@ -1690,3 +1690,56 @@ function makeTimer(overrides: Partial<ActiveTimer> = {}): ActiveTimer {
         ...overrides,
     };
 }
+
+
+describe("work-window log identity merge", () => {
+    it("preserves identities through pull, baseline and pending push upserts", () => {
+        const baseline = snapshot();
+        const record = recordFromBaseline(baseline);
+        const local = LOG("local", { work_window_id: T1 });
+        const remoteLog = LOG("remote", { work_window_id: T2 });
+        record.state.logs = [local];
+        const merged = mergePulledSnapshot(record, snapshot({ logs: { remote: remoteLog } }), NOW);
+        expect(merged.record.state.logs).toEqual([local, remoteLog]);
+        expect(merged.record.lastSynced?.logs.remote).toEqual(remoteLog);
+        expect(merged.pendingCount).toBe(1);
+        expect(buildPushPlan(merged.record).logUpserts).toEqual([local]);
+    });
+
+    it.each([undefined, null, T1])("uses the immutable remote row for a shared id with local identity %j", (identity) => {
+        const original = LOG("shared");
+        const record = recordFromBaseline(snapshot({ logs: { shared: original } }));
+        record.state.logs = [LOG("shared", { work_window_id: identity })];
+        const remoteLog = LOG("shared", { work_window_id: T2 });
+        const merged = mergePulledSnapshot(record, snapshot({ logs: { shared: remoteLog } }), NOW);
+        expect(merged.record.state.logs).toEqual([remoteLog]);
+        expect(merged.record.lastSynced?.logs.shared).toEqual(remoteLog);
+        expect(merged.pendingCount).toBe(0);
+        expect(buildPushPlan(merged.record).logUpserts).toEqual([]);
+    });
+});
+
+describe("PM waiting whole-blob merge", () => {
+    it.each(["local", "remote"] as const)("keeps the %s winner's waiting value intact", (winner) => {
+        const pm = (type: "agent" | "person", since: string) => ({
+            projects: {},
+            tasks: { waiting: {
+                id: "waiting", title: "Waiting task", projectId: null, status: "In Progress" as const,
+                priority: "Medium" as const, timeSpentMinutes: 0, tags: [], links: [], checklist: [],
+                sortOrder: 0, isArchived: false, createdAt: T1, updatedAt: since, relatedTo: [],
+                waiting: { type, since },
+            } },
+            meta: { initializedAt: T1 },
+        });
+        const base = snapshot({ pmState: { value: pm("agent", T1), updatedAt: T1 } });
+        const localPm = pm("person", T2);
+        const remotePm = pm("agent", T3);
+        const record = recordFromBaseline(base, { pmState: localPm, pmUpdatedAt: winner === "local" ? T3_LATER : T2 });
+        const merged = mergePulledSnapshot(record, snapshot({ pmState: { value: remotePm, updatedAt: T3 } }), NOW);
+        const expected = winner === "local" ? localPm : remotePm;
+        expect(merged.record.pmState).toEqual(expected);
+        expect(merged.record.pmState?.tasks.waiting.waiting).toEqual(expected.tasks.waiting.waiting);
+        expect(merged.pendingCount).toBe(winner === "local" ? 1 : 0);
+        expect(buildPushPlan(merged.record).pmState?.value ?? null).toEqual(winner === "local" ? localPm : null);
+    });
+});

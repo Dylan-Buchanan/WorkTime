@@ -10,6 +10,7 @@ import {
     fullCycleDurationSecs,
     plannedTimerSecs,
     windowRemainingSecs,
+    windowStartedAt,
 } from "./core";
 
 function requireActiveTask(state: AppStateData): string {
@@ -84,7 +85,7 @@ export function completeTimer(
 
     const planned = plannedTimerSecs(timer);
     const wasBreak = timer.kind !== "Work";
-    appendLog(next, timer.task_id, planned / 60, now, wasBreak, logId);
+    appendLog(next, timer.task_id, planned / 60, now, wasBreak, logId, false, wasBreak ? null : windowStartedAt(timer));
 
     if (!wasBreak) {
         const task = next.tasks[timer.task_id];
@@ -120,7 +121,7 @@ export function stopWorkTimer(
     if (task) {
         task.completed_pomodoros += fraction;
     }
-    appendLog(next, timer.task_id, elapsed / 60, now, false, logId);
+    appendLog(next, timer.task_id, elapsed / 60, now, false, logId, false, windowStartedAt(timer));
     next.timer = null;
     return {
         state: next,
