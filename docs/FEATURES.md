@@ -65,3 +65,16 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Review decks** — Build a deck for the most recent completed period and preview it in the app. Reorder goal recaps, hide slides, edit text and speaker notes, or promote recaps to the appendix; thin-content warnings help identify gaps. Preview edits stay in memory for that deck build.
 -   **PowerPoint export** — Download a `.pptx` with editable text, chart images, and speaker notes including suggested speaking seconds. The tracker is marked built only after download initiation succeeds. Export generation loads on demand in the browser/webview. Installed WebView2 download and editable text in PowerPoint were human-verified on 2026-11-01.
 -   **Portable goal sets** — Export tracker and goal definitions to a dated `goals-<tracker>-<YYYY-MM-DD>.json` download, then review an import before creating it. Every import creates a new tracker and fresh goal IDs; it never merges or replaces existing trackers. Project links missing locally are cleared. Check-in history, evidence selections, build markers, and current metric progress are not transferred.
+
+---
+
+## Waiting and task switching
+
+-   **Fixed work window** — A Work pomodoro is a fixed wall-clock window. Switching to another task mid-window hands the remainder to the new task instead of restarting the timer; starting work on another task joins a live window, while a break still refuses. The per-task partial-progress resume map is retired. The discard button is now labelled “End focus”.
+-   **Automatic In Progress** — Starting work on a Backlog or Next task moves it to In Progress from every start path.
+-   **Waiting state** — A task can be marked Waiting on an agent or a person from the TaskInspector Waiting toggle. Waiting is separate from status, and clears when the task is marked Done, archived, or becomes the active task.
+-   **Waiting indicators** — The timer pill shows a WAITING · AGENT / PERSON badge with an × to clear it. Task lists and Today show waiting dots, and waiting tasks are pinned to the top of Today.
+-   **What's next** — A ranking suggests a top pick, a quick win, and next-up tasks, with other options listed below.
+-   **Switch and Waiting… sheet** — The timer page's Switch and Waiting… buttons open an overlay sheet that hands the running window to another task in two clicks.
+-   **Window-aware logs** — Pomodoro logs carry a `work_window_id` (migration `20261108000000_log_work_window_id.sql`), and the Today pomodoro summary counts windows rather than log rows.
+-   **Upgrade note** — Users with a saved partial-pomodoro resume position lose only that resume position on upgrade (staging schema v10). Pomodoros already credited are untouched. The Today summary now counts a switched window as one pomodoro.

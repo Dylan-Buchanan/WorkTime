@@ -1,5 +1,7 @@
 # Epic #159 frozen contract — waiting state and mid-window task switching
 
+Status: epic #159 is complete and released in 0.14.0.
+
 Frozen. Lanes implement against this; changes require ORCH authorization.
 
 Scope: epic #159 and sub-issues #173–#179. Evidence is preserved verbatim in
