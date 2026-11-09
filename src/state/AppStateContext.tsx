@@ -7,6 +7,7 @@ import { useSync } from "./SyncContext";
 import { windowStartedAt, workStartOccupation } from "../lib/engine";
 import type { EngineResult } from "../lib/engine";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
+import type { TimerTransitionEvent } from "./timerTransitions";
 
 type CompletionNotice = ReconciledTimer & { windowId?: string };
 
@@ -72,8 +73,9 @@ interface AppContextShape {
     archiveTask: (id: string) => Promise<void>;
     startTaskWork: (id: string) => Promise<"started" | "joined">;
     subscribeTaskCompletions: (listener: (taskId: string) => void) => () => void;
+    subscribeTimerTransitions: (listener: (event: TimerTransitionEvent) => void) => () => void;
     pauseTimer: () => Promise<void>;
-    resumeTimer: () => Promise<void>;
+    resumeTimer: (options?: { handoff?: boolean }) => Promise<void>;
     isPaused: boolean;
     tick: number;
     resetAll: () => Promise<void>;
@@ -96,10 +98,32 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const stateRef = useRef<AppStateData | null>(null);
     const queuedReconciliationRef = useRef<{ timer: CompletionNotice; state: AppStateData } | null>(null);
     const taskCompletionListenersRef = useRef(new Set<(taskId: string) => void>());
+    const timerTransitionListenersRef = useRef(new Set<(event: TimerTransitionEvent) => void>());
+    const pauseEpisodeRef = useRef<{ taskId: string; windowId: string; at: string; handoff: boolean } | null>(null);
     const terminalTaskIdsRef = useRef(new Set<string>());
     let soundApi: { play: (k: any) => void } | null = null;
     try { soundApi = useSounds(); } catch { /* optional sound setup */ }
     stateRef.current = state;
+
+    const publishTimerTransition = useCallback((event: TimerTransitionEvent) => {
+        for (const listener of [...timerTransitionListenersRef.current]) {
+            try { listener(event); } catch { /* consumers cannot fail a command */ }
+        }
+    }, []);
+    const reconcilePauseEpisode = useCallback((timer: ActiveTimer | null) => {
+        const episode = pauseEpisodeRef.current;
+        // Snapshot adoption may invalidate identity, but can never create a pause
+        // reference. A handoff's running timer still owns its carried episode.
+        if (episode && (timer?.kind !== "Work" || timer.task_id !== episode.taskId ||
+            windowStartedAt(timer) !== episode.windowId || (!timer.paused && !episode.handoff))) {
+            pauseEpisodeRef.current = null;
+        }
+    }, []);
+    const subscribeTimerTransitions = useCallback((listener: (event: TimerTransitionEvent) => void) => {
+        timerTransitionListenersRef.current.add(listener);
+        return () => { timerTransitionListenersRef.current.delete(listener); };
+    }, []);
+    useEffect(() => () => { timerTransitionListenersRef.current.clear(); }, []);
 
     // Same-tab commands already adopt their staged result, so the revision
     // effect's follow-up fetch usually returns an identical view. Skip the
@@ -120,8 +144,9 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (current && JSON.stringify(current) === JSON.stringify(result.state)) return current;
             return result.state;
         });
+        reconcilePauseEpisode(result.state.timer);
         return result;
-    }, [data]);
+    }, [data, reconcilePauseEpisode]);
 
     const maybeNotifyTimerEnd = useCallback(async (kind: TimerKind, taskId?: string) => {
         try {
@@ -171,6 +196,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             }
             stateRef.current = after;
             setState(after);
+            reconcilePauseEpisode(after.timer);
 
             if (!after.timer) {
                 const kind = finishedTimer?.kind ?? reconciliation?.timer.kind;
@@ -188,8 +214,14 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 } else if (after.active_task) {
                     try {
                         const started = await data.startWorkTimer();
+                        const at = new Date().toISOString();
                         stateRef.current = started.state;
                         setState(started.state);
+                        const timer = started.state.timer;
+                        if (!reconciliation && finishedTimer && finishedTimer.kind !== "Work" &&
+                            applied && !alreadyNotified && timer?.kind === "Work" && timer.task_id === after.active_task) {
+                            publishTimerTransition({ type: "enter", taskId: timer.task_id, reason: "break-end", at, windowId: windowStartedAt(timer) });
+                        }
                     } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start work timer"); }
                 }
             }
@@ -207,7 +239,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             queuedReconciliationRef.current = null;
             if (queued) void runProgression(undefined, queued);
         }
-    }, [data, fetchAndSetState, maybeNotifyTimerEnd]);
+    }, [data, fetchAndSetState, maybeNotifyTimerEnd, publishTimerTransition, reconcilePauseEpisode]);
 
     const refresh = useCallback(async (): Promise<AppStateData> => {
         try {
@@ -263,6 +295,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const result = await run();
             stateRef.current = result.state;
             setState(result.state);
+            // Any successful generic command consumes a carried episode. Resume
+            // explicitly restores it below only for a matching handoff resume.
+            if (pauseEpisodeRef.current?.handoff) pauseEpisodeRef.current = null;
+            reconcilePauseEpisode(result.state.timer);
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
             if (rethrow) throw err;
@@ -274,6 +310,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             setError(null);
             const result = await data.createTask(name, target);
             setState(result.state);
+            if (pauseEpisodeRef.current?.handoff) pauseEpisodeRef.current = null;
+            reconcilePauseEpisode(result.state.timer);
             return result.value;
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
@@ -284,8 +322,28 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const adoptTaskTransition = async (run: () => Promise<EngineResult<unknown>>) => {
         const before = stateRef.current;
         const result = await run();
+        const at = new Date().toISOString();
         stateRef.current = result.state;
         setState(result.state);
+        const outgoing = before?.timer;
+        const incoming = result.state.timer;
+        const episode = pauseEpisodeRef.current;
+        // Completion grows logs too, but has no incoming Work occupant.
+        if (before && outgoing?.kind === "Work" && incoming?.kind === "Work" && outgoing.task_id !== incoming.task_id) {
+            const windowId = windowStartedAt(outgoing);
+            const previousIds = new Set(before.logs.map(log => log.id));
+            const gainedWork = result.state.logs.length > before.logs.length &&
+                result.state.logs.slice(before.logs.length).some(log => !previousIds.has(log.id) &&
+                    log.task_id === outgoing.task_id && !log.was_break && log.work_window_id === windowId);
+            const pausedAt = episode && episode.taskId === outgoing.task_id && episode.windowId === windowId &&
+                (outgoing.paused || episode.handoff) ? episode.at : undefined;
+            pauseEpisodeRef.current = null;
+            if (gainedWork) publishTimerTransition({ type: "leave", taskId: outgoing.task_id, reason: "switch", at, windowId, ...(pausedAt ? { pausedAt } : {}) });
+            publishTimerTransition({ type: "enter", taskId: incoming.task_id, reason: "switch", at, windowId, fromTaskId: outgoing.task_id });
+        } else {
+            if (episode?.handoff) pauseEpisodeRef.current = null;
+            reconcilePauseEpisode(incoming);
+        }
         if (before?.timer?.kind === "Work" && !result.state.timer &&
             result.state.current_cycle_pomodoros > before.current_cycle_pomodoros) {
             await runProgression(undefined, {
@@ -304,7 +362,21 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             else throw new Error("Select a task first");
         }
     };
-    const startWork = async () => { try { await ensureActiveTask(); await adoptResult(() => data.startWorkTimer()); } catch (err: any) { setError(err?.message || err?.toString?.() || "Unknown error"); } };
+    const startWork = async () => {
+        try {
+            await ensureActiveTask();
+            // adoptResult intentionally swallows start failures. Only the closure
+            // reaching this assignment proves that a command actually succeeded.
+            let success: { result: EngineResult<unknown>; at: string } | undefined;
+            await adoptResult(async () => {
+                const result = await data.startWorkTimer();
+                success = { result, at: new Date().toISOString() };
+                return result;
+            });
+            const timer = success?.result.state.timer;
+            if (success && timer?.kind === "Work") publishTimerTransition({ type: "enter", taskId: timer.task_id, reason: "start", at: success.at, windowId: windowStartedAt(timer) });
+        } catch (err: any) { setError(err?.message || err?.toString?.() || "Unknown error"); }
+    };
     const startBreak = async () => { try { await ensureActiveTask(); await adoptResult(() => data.startBreakTimer()); } catch (err: any) { setError(err?.message || err?.toString?.() || "Unknown error"); } };
 
     const completeTimer = async () => {
@@ -312,7 +384,23 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (!captured) return;
         await runProgression(captured);
     };
-    const stopWork = () => adoptResult(() => data.stopWorkTimer());
+    const stopWork = async () => {
+        const before = stateRef.current;
+        const episode = pauseEpisodeRef.current;
+        let success: { result: EngineResult<unknown>; at: string } | undefined;
+        await adoptResult(async () => {
+            const result = await data.stopWorkTimer();
+            success = { result, at: new Date().toISOString() };
+            return result;
+        });
+        const timer = before?.timer;
+        if (success && timer?.kind === "Work" && !success.result.state.timer) {
+            const windowId = windowStartedAt(timer);
+            const pausedAt = timer.paused && episode?.taskId === timer.task_id && episode.windowId === windowId ? episode.at : undefined;
+            pauseEpisodeRef.current = null;
+            publishTimerTransition({ type: "leave", taskId: timer.task_id, reason: "stop", at: success.at, windowId, ...(pausedAt ? { pausedAt } : {}) });
+        }
+    };
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
     const finalizeTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
@@ -321,6 +409,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             setError(null);
             const result = await data.archiveTask(id);
             setState(result.state);
+            if (pauseEpisodeRef.current?.handoff) pauseEpisodeRef.current = null;
+            reconcilePauseEpisode(result.state.timer);
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
             throw err;
@@ -340,8 +430,12 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 if (currentOccupation === "blocked") throw new Error("A break is running");
                 if (currentOccupation === "join") return "joined";
                 const started = await data.startWorkTimer();
+                const at = new Date().toISOString();
                 stateRef.current = started.state;
                 setState(started.state);
+                pauseEpisodeRef.current = null;
+                const timer = started.state.timer;
+                if (timer?.kind === "Work") publishTimerTransition({ type: "enter", taskId: timer.task_id, reason: "start", at, windowId: windowStartedAt(timer) });
                 return "started";
             } catch (err: any) {
                 setError(err?.message || err?.toString?.() || "Unknown error");
@@ -355,19 +449,56 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         taskCompletionListenersRef.current.add(listener);
         return () => taskCompletionListenersRef.current.delete(listener);
     }, []);
-    const pauseTimer = async () => { if (stateRef.current?.timer && !stateRef.current.timer.paused) await adoptResult(() => data.pauseTimer(), true); };
-    const resumeTimer = async () => { if (stateRef.current?.timer?.paused) await adoptResult(() => data.resumeTimer(), true); };
+    const pauseTimer = async () => {
+        const before = stateRef.current;
+        if (!before?.timer || before.timer.paused) return;
+        let success: { result: EngineResult<unknown>; at: string } | undefined;
+        await adoptResult(async () => {
+            const result = await data.pauseTimer();
+            success = { result, at: new Date().toISOString() };
+            return result;
+        }, true);
+        const timer = success?.result.state.timer;
+        if (success && before.timer.kind === "Work" && timer?.kind === "Work" && timer.paused &&
+            timer.task_id === before.timer.task_id && windowStartedAt(timer) === windowStartedAt(before.timer)) {
+            const windowId = windowStartedAt(timer);
+            pauseEpisodeRef.current = { taskId: timer.task_id, windowId, at: success.at, handoff: false };
+            publishTimerTransition({ type: "leave", taskId: timer.task_id, reason: "pause", at: success.at, windowId });
+        }
+    };
+    const resumeTimer = async (options?: { handoff?: boolean }) => {
+        const before = stateRef.current;
+        if (!before?.timer?.paused) return;
+        const episode = pauseEpisodeRef.current;
+        let success: { result: EngineResult<unknown>; at: string } | undefined;
+        await adoptResult(async () => {
+            const result = await data.resumeTimer();
+            success = { result, at: new Date().toISOString() };
+            return result;
+        }, true);
+        if (!success) return;
+        pauseEpisodeRef.current = null;
+        const timer = success.result.state.timer;
+        if (before.timer.kind === "Work" && timer?.kind === "Work" && !timer.paused &&
+            timer.task_id === before.timer.task_id && windowStartedAt(timer) === windowStartedAt(before.timer)) {
+            const windowId = windowStartedAt(timer);
+            if (options?.handoff) {
+                if (episode?.taskId === timer.task_id && episode.windowId === windowId) pauseEpisodeRef.current = { ...episode, handoff: true };
+            } else publishTimerTransition({ type: "enter", taskId: timer.task_id, reason: "resume", at: success.at, windowId });
+        }
+    };
     const resetAll = async () => {
         try {
             setError(null);
             const result = await data.resetAppState();
             setState(result.state);
+            pauseEpisodeRef.current = null;
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Failed to reset");
         }
     };
 
-    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, archiveTask, startTaskWork, subscribeTaskCompletions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
+    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, archiveTask, startTaskWork, subscribeTaskCompletions, subscribeTimerTransitions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
 };
 
 export const useAppState = () => {

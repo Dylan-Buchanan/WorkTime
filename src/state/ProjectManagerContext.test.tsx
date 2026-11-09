@@ -164,6 +164,22 @@ class DelayedReloadDataAccess extends InMemoryDataAccess {
 
 beforeEach(() => localStorage.clear());
 
+it("creates and restores a PM task in isolation without timer transition events", async () => {
+    const data = await workStartData();
+    await data.startWorkTimer();
+    const original = structuredClone(data.store.state.timer);
+    const restore = vi.spyOn(data, "setActiveTask");
+    const view = await renderWorkStart(data, { withoutBridge: true });
+    const listener = vi.fn();
+    const unsubscribe = view.current.app.subscribeTimerTransitions(listener);
+    await act(async () => { await view.current.pm.createTask("Another task"); });
+    expect(restore).toHaveBeenCalledWith("bt1");
+    expect(view.current.app.state?.timer).toEqual(original);
+    expect(Object.values(view.current.pm.state.tasks).some(task => task.title === "Another task")).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+});
+
 /** Waits for the mount-time PM reads (hydration + staged reload) to settle. */
 async function waitForPMSettled(loadSpy: ReturnType<typeof vi.spyOn>) {
     await waitFor(() => expect(loadSpy).toHaveBeenCalledTimes(2));
