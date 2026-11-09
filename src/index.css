@@ -310,6 +310,28 @@ input[type="number"] {
     }
 }
 
+@keyframes switch-sheet-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes switch-card-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 @media (prefers-reduced-motion: no-preference) {
     .training-step-forward {
         animation: training-step-forward 520ms ease-out;
@@ -317,5 +339,13 @@ input[type="number"] {
 
     .training-step-back {
         animation: training-step-back 520ms ease-out;
+    }
+
+    .switch-sheet-in {
+        animation: switch-sheet-in 200ms ease-out;
+    }
+
+    .switch-card-in {
+        animation: switch-card-in 260ms ease-out both;
     }
 }

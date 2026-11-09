@@ -75,6 +75,6 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Waiting state** — A task can be marked Waiting on an agent or a person from the TaskInspector Waiting toggle. Waiting is separate from status, and clears when the task is marked Done, archived, or becomes the active task.
 -   **Waiting indicators** — The timer pill shows a WAITING · AGENT / PERSON badge with an × to clear it. Task lists and Today show waiting dots, and waiting tasks are pinned to the top of Today.
 -   **What's next** — A ranking suggests a top pick, a quick win, and next-up tasks, with other options listed below.
--   **Switch and Waiting… sheet** — The timer page's Switch and Waiting… buttons open an overlay sheet that hands the running window to another task in two clicks.
+-   **Switch and Waiting sheet** — The timer page's Switch and Waiting buttons open an overlay sheet that hands the running window to another task in two clicks.
 -   **Window-aware logs** — Pomodoro logs carry a `work_window_id` (migration `20261108000000_log_work_window_id.sql`), and the Today pomodoro summary counts windows rather than log rows.
 -   **Upgrade note** — Users with a saved partial-pomodoro resume position lose only that resume position on upgrade (staging schema v10). Pomodoros already credited are untouched. The Today summary now counts a switched window as one pomodoro.

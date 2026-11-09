@@ -257,9 +257,12 @@ export const HabitProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, [hasLocalStorage, hydrated, state.ui]);
 
     const reloadStagedHabits = useCallback(async () => {
+        const stateBeforeLoad = serializeServerSlice(stateRef.current);
         const loaded = await loadStagedHabits();
         const serialized = JSON.stringify(loaded);
         const currentSerialized = serializeServerSlice(stateRef.current);
+        // The staged snapshot is stale if the local slice changed during the read.
+        if (currentSerialized !== stateBeforeLoad) return;
         if (lastServerSerializedRef.current !== null && currentSerialized !== lastServerSerializedRef.current) return;
         if (serialized === currentSerialized) {
             lastReloadedHabitsRef.current = serialized;

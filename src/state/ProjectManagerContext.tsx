@@ -357,6 +357,7 @@ export const ProjectManagerProvider: React.FC<{
     // local edit that is still being persisted, so applying it would revert the
     // view (dropping a quick-add task's fields or the task itself).
     const reloadStagedPM = useCallback(async () => {
+        const stateBeforeLoad = JSON.stringify(serverSlice(stateRef.current));
         let remote: SyncedPMState | null = null;
         try {
             remote = await data.loadPMState();
@@ -365,6 +366,8 @@ export const ProjectManagerProvider: React.FC<{
         }
         const serialized = JSON.stringify(remote);
         const currentSerialized = JSON.stringify(serverSlice(stateRef.current));
+        // The staged snapshot is stale if the local slice changed during the read.
+        if (currentSerialized !== stateBeforeLoad) return;
         // A local save is either still in flight or failed. Do not replace the
         // newer in-memory edit with the stale staged snapshot on that revision.
         if (lastServerSerializedRef.current !== null && currentSerialized !== lastServerSerializedRef.current) return;

@@ -95,6 +95,21 @@ class UninitializedDataAccess extends InMemoryDataAccess {
     }
 }
 
+class DelayedReloadDataAccess extends InMemoryDataAccess {
+    loadCalls = 0;
+    releaseReload!: () => void;
+    private readonly reloadGate = new Promise<void>((resolve) => {
+        this.releaseReload = resolve;
+    });
+
+    override async loadHabits() {
+        const call = ++this.loadCalls;
+        const snapshot = await super.loadHabits();
+        if (call === 2) await this.reloadGate;
+        return snapshot;
+    }
+}
+
 beforeEach(() => localStorage.clear());
 
 describe("HabitContext", () => {
@@ -164,6 +179,24 @@ describe("HabitContext", () => {
         await waitFor(() => expect(screen.getByTestId("habit-count")).toHaveTextContent("0"));
         expect(saveSpy).not.toHaveBeenCalled();
         expect((await data.loadHabits()).habits).toEqual([]);
+    });
+
+    it("keeps a local habit edit when a stale staged reload finishes", async () => {
+        const data = new DelayedReloadDataAccess(makeAppState());
+        await data.saveHabits([habit("h1", { name: "Original" })], []);
+        render(wrap(data, <HabitProbe />));
+        await waitFor(() => expect(screen.getByTestId("habit-count")).toHaveTextContent("1"));
+        await waitFor(() => expect(data.loadCalls).toBe(2));
+
+        await act(async () => screen.getByText("update").click());
+        expect(screen.getByTestId("first-name")).toHaveTextContent("Updated");
+
+        await act(async () => {
+            data.releaseReload();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(screen.getByTestId("first-name")).toHaveTextContent("Updated");
+        expect((await data.loadHabits()).habits[0].name).toBe("Updated");
     });
 
     it("reloads staged revisions without restaging the reloaded slice", async () => {

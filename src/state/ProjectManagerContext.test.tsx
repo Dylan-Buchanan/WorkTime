@@ -32,6 +32,7 @@ function BridgeProbe() {
     const { state, updateTask } = usePM();
     return <div>
         <div data-testid="pm-task-count">{Object.keys(state.tasks).length}</div>
+        <div data-testid="pm-task-estimate">{state.tasks.pt1?.estimatePomos}</div>
         <button onClick={() => updateTask("pt1", { estimatePomos: 8 })}>estimate-8</button>
     </div>;
 }
@@ -146,6 +147,21 @@ class UninitializedDataAccess extends InMemoryDataAccess {
     }
 }
 
+class DelayedReloadDataAccess extends InMemoryDataAccess {
+    loadCalls = 0;
+    releaseReload!: () => void;
+    private readonly reloadGate = new Promise<void>((resolve) => {
+        this.releaseReload = resolve;
+    });
+
+    override async loadPMState() {
+        const call = ++this.loadCalls;
+        const snapshot = await super.loadPMState();
+        if (call === 2) await this.reloadGate;
+        return snapshot;
+    }
+}
+
 beforeEach(() => localStorage.clear());
 
 /** Waits for the mount-time PM reads (hydration + staged reload) to settle. */
@@ -210,6 +226,27 @@ describe("ProjectManagerContext", () => {
             await data.updateSettings({ ...data.store.state.settings, work_minutes: 30 });
         });
         expect(screen.getByTestId("task-count")).toHaveTextContent("1");
+    });
+
+    it("keeps a local PM edit when a stale staged reload finishes", async () => {
+        const data = new DelayedReloadDataAccess(makeAppState());
+        await data.savePMState({
+            ...serverState(["p1"]),
+            tasks: { pt1: makePMTask({ id: "pt1", projectId: "p1", estimatePomos: 4 }) },
+        });
+        render(wrapWithoutBridge(data, <BridgeProbe />));
+        await waitFor(() => expect(screen.getByTestId("pm-task-estimate")).toHaveTextContent("4"));
+        await waitFor(() => expect(data.loadCalls).toBe(2));
+
+        await act(async () => screen.getByText("estimate-8").click());
+        expect(screen.getByTestId("pm-task-estimate")).toHaveTextContent("8");
+
+        await act(async () => {
+            data.releaseReload();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(screen.getByTestId("pm-task-estimate")).toHaveTextContent("8");
+        expect((await data.loadPMState())?.tasks.pt1?.estimatePomos).toBe(8);
     });
 
     it("does not seed a default PM state before a successful bootstrap pull", async () => {

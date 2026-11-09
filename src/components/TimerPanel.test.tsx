@@ -166,12 +166,12 @@ describe("TimerPanel Switch/Waiting sheet", () => {
     it.each([{ noTimer: true }, { kind: "ShortBreak" as const }])("hides both buttons without a live Work window: %j", async (options) => {
         await setupHandoff(options);
         expect(screen.queryByRole("button", { name: "Switch" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "Waiting…" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Waiting" })).toBeNull();
     });
     it("disables Waiting with an explanation when the occupant has no PM row", async () => {
         await setupHandoff({ missingOccupant: true });
-        expect(screen.getByRole("button", { name: "Waiting…" })).toBeDisabled();
-        expect(screen.getByRole("button", { name: "Waiting…" })).toHaveAttribute("title", expect.stringContaining("no linked project-manager task"));
+        expect(screen.getByRole("button", { name: "Waiting" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Waiting" })).toHaveAttribute("title", expect.stringContaining("no linked project-manager task"));
         expect(screen.getByRole("button", { name: "Switch" })).toBeEnabled();
     });
     it("marks the occupant waiting, preserves since on type change, and cancellation leaves the flag and timer running", async () => {
@@ -179,7 +179,7 @@ describe("TimerPanel Switch/Waiting sheet", () => {
         const pause = vi.spyOn(view.data, "pauseTimer");
         const resume = vi.spyOn(view.data, "resumeTimer");
         const stop = vi.spyOn(view.data, "stopWorkTimer");
-        fireEvent.click(screen.getByRole("button", { name: "Waiting…" }));
+        fireEvent.click(screen.getByRole("button", { name: "Waiting" }));
         const dialog = screen.getByRole("dialog", { name: "Waiting — switch task" });
         await waitFor(() => expect(view.current.pm.state.tasks.pa.waiting?.type).toBe("agent"));
         const since = view.current.pm.state.tasks.pa.waiting!.since;
@@ -192,7 +192,7 @@ describe("TimerPanel Switch/Waiting sheet", () => {
         expect(within(dialog).queryByText(/^\d{2}:\d{2}$/)).toBeNull();
         fireEvent.keyDown(document, { key: "Escape" });
         expect(screen.queryByRole("dialog")).toBeNull();
-        expect(screen.getByRole("button", { name: "Waiting…" })).toHaveFocus();
+        expect(screen.getByRole("button", { name: "Waiting" })).toHaveFocus();
         expect(view.current.pm.state.tasks.pa.waiting).toEqual({ type: "person", since });
         expect(view.data.store.state.timer).toMatchObject({ ends_at: view.timer.ends_at, paused: false });
         expect(pause).not.toHaveBeenCalled(); expect(resume).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled();
@@ -202,7 +202,7 @@ describe("TimerPanel Switch/Waiting sheet", () => {
         const resume = vi.spyOn(view.data, "resumeTimer");
         const setActive = vi.spyOn(view.data, "setActiveTask");
         const start = vi.spyOn(view.current.app, "startTaskWork");
-        expect(screen.getByRole("button", { name: "Waiting…" })).toBeVisible();
+        expect(screen.getByRole("button", { name: "Waiting" })).toBeVisible();
         fireEvent.click(screen.getByRole("button", { name: "Switch" }));
         const endsAt = view.data.store.state.timer!.ends_at;
         expect(view.current.pm.state.tasks.pa.waiting).toBeNull();

@@ -32,6 +32,12 @@ import { useWindowHandoff } from "../hooks/useWindowHandoff";
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
 
+/** Shared size for the timer action rows so every control lines up. */
+const ACTION_BUTTON = "inline-flex min-w-[8.5rem] items-center justify-center rounded border px-4 py-2.5 text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300 disabled:cursor-not-allowed disabled:opacity-50";
+const ACTION_SECONDARY = `${ACTION_BUTTON} border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800`;
+const ACTION_PRIMARY = `${ACTION_BUTTON} border-indigo-600 bg-indigo-600 text-white shadow-sm hover:bg-indigo-500`;
+const ACTION_POSITIVE = `${ACTION_BUTTON} border-emerald-700 bg-emerald-950/40 text-emerald-200 hover:bg-emerald-900/50`;
+
 type FinishProjection =
     | {
           hasWork: true;
@@ -603,79 +609,83 @@ export const TimerPanel: React.FC = () => {
                             </div>
                         )}
                     </div>
-                    <div className="flex flex-wrap gap-2 justify-center text-xs">
-                        {isWorkWindowLive(timer ?? null, new Date()) && <>
-                            <button type="button" className="rounded bg-neutral-800 px-4 py-2 hover:bg-neutral-700 disabled:opacity-50" disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) => openSheet("waiting", event.currentTarget)}>Waiting…</button>
-                            <button type="button" className="rounded bg-neutral-800 px-4 py-2 hover:bg-neutral-700" onClick={(event) => openSheet("switch", event.currentTarget)}>Switch</button>
-                        </>}
-                        {!timer && (
-                            <button
-                                className="px-5 py-2.5 sm:px-4 sm:py-2 rounded bg-indigo-600 hover:bg-indigo-500 transition-colors font-medium text-white shadow-sm"
-                                onMouseEnter={() => play("hover")}
-                                onClick={() => {
-                                    startWork();
-                                    play("startPomodoro");
-                                }}
-                            >
-                                Start Focus
-                            </button>
+                    <div className="flex flex-col items-center gap-2 text-xs">
+                        {isWorkWindowLive(timer ?? null, new Date()) && (
+                            <div className="flex flex-wrap justify-center gap-2">
+                                <button type="button" className={`${ACTION_BUTTON} border-amber-700 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50`} disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) => openSheet("waiting", event.currentTarget)}>Waiting</button>
+                                <button type="button" className={`${ACTION_BUTTON} border-sky-700 bg-sky-950/40 text-sky-200 hover:bg-sky-900/50`} onClick={(event) => openSheet("switch", event.currentTarget)}>Switch</button>
+                            </div>
                         )}
-                        {timer && !isPaused && ms > 0 && (
-                            <button
-                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
-                                onMouseEnter={() => play("hover")}
-                                onClick={() => {
-                                    void pauseTimer().catch(() => {});
-                                    play("pressSide");
-                                }}
-                            >
-                                Pause
-                            </button>
-                        )}
-                        {timer && isPaused && (
-                            <button
-                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
-                                onMouseEnter={() => play("hover")}
-                                onClick={() => {
-                                    void resumeTimer().catch(() => {});
-                                    play("pressSide");
-                                }}
-                            >
-                                Resume
-                            </button>
-                        )}
-                        {timer && !isPaused && ms === 0 && (
-                            <button
-                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
-                                onClick={() => { void app.completeTimer(); play("pressSide"); }}
-                            >
-                                Retry Transition
-                            </button>
-                        )}
-                        {timer && !isPaused && timer.kind === "Work" && ms > 0 && (
-                            <button
-                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-500/30 transition-colors"
-                                onMouseEnter={() => play("hover")}
-                                onClick={() => {
-                                    stopWork();
-                                    play("pressSide");
-                                }}
-                            >
-                                End focus
-                            </button>
-                        )}
-                        {isBreak && timer && ms > 0 && !isPaused && (
-                            <button
-                                className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
-                                onMouseEnter={() => play("hover")}
-                                onClick={() => {
-                                    skipBreak();
-                                    play("pressSide");
-                                }}
-                            >
-                                Skip Break
-                            </button>
-                        )}
+                        <div className="flex flex-wrap justify-center gap-2">
+                            {!timer && (
+                                <button
+                                    className={ACTION_PRIMARY}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={() => {
+                                        startWork();
+                                        play("startPomodoro");
+                                    }}
+                                >
+                                    Start Focus
+                                </button>
+                            )}
+                            {timer && !isPaused && ms > 0 && (
+                                <button
+                                    className={ACTION_SECONDARY}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={() => {
+                                        void pauseTimer().catch(() => {});
+                                        play("pressSide");
+                                    }}
+                                >
+                                    Pause
+                                </button>
+                            )}
+                            {timer && isPaused && (
+                                <button
+                                    className={ACTION_SECONDARY}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={() => {
+                                        void resumeTimer().catch(() => {});
+                                        play("pressSide");
+                                    }}
+                                >
+                                    Resume
+                                </button>
+                            )}
+                            {timer && !isPaused && ms === 0 && (
+                                <button
+                                    className={ACTION_POSITIVE}
+                                    onClick={() => { void app.completeTimer(); play("pressSide"); }}
+                                >
+                                    Retry Transition
+                                </button>
+                            )}
+                            {timer && !isPaused && timer.kind === "Work" && ms > 0 && (
+                                <button
+                                    className={`${ACTION_BUTTON} border-rose-800 bg-rose-950/30 text-rose-200 hover:bg-rose-900/40`}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={() => {
+                                        stopWork();
+                                        play("pressSide");
+                                    }}
+                                >
+                                    End focus
+                                </button>
+                            )}
+                            {isBreak && timer && ms > 0 && !isPaused && (
+                                <button
+                                    className={ACTION_POSITIVE}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={() => {
+                                        skipBreak();
+                                        play("pressSide");
+                                    }}
+                                >
+                                    Skip Break
+                                </button>
+                            )}
+                        </div>
                     </div>
                     {activePomodoroSummary && (
                         <div className="w-full text-[11px] text-neutral-400 bg-neutral-900/50 border border-neutral-800 rounded-md px-3 py-2">
