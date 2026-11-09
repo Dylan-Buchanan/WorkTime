@@ -78,9 +78,9 @@ function systemPrompt(): string {
 }
 
 function resumeNoteFor(task: PMTask, notes: ResumeNoteState): { nextAction?: string; blocker?: string; savedAt: string } | undefined {
-    if (!task.appTaskId) return undefined;
+    if (!task.appTaskId || !Object.prototype.hasOwnProperty.call(notes.notes, task.appTaskId)) return undefined;
     const note = notes.notes[task.appTaskId];
-    if (!note) return undefined;
+    if (!note || typeof note !== "object" || typeof note.nextAction !== "string" || typeof note.whereIAm !== "string") return undefined;
     const nextAction = note.nextAction.trim();
     const blocker = (note.blocker ?? "").trim();
     if (nextAction === "" && blocker === "") return undefined;

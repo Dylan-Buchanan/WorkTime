@@ -62,6 +62,26 @@ describe("End-of-Day workflow", () => {
     beforeEach(() => localStorage.clear());
     afterEach(() => localStorage.clear());
 
+    it.each(["constructor", "__proto__", "toString"])("omits inherited resume notes for app task id %s", async appTaskId => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "No note.", orderedTaskIds: ["a"] }));
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete },
+            resumeNotes: { version: 1, notes: {} }, pmState: state([task("a", 0, { appTaskId })]),
+        });
+        expect(entryFor(serializedContext(complete), "a")).not.toHaveProperty("resumeNote");
+    });
+
+    it.each([null, "invalid", 42, {}, { nextAction: 42, whereIAm: "x" }, { nextAction: "Next", whereIAm: 42 }])(
+        "omits malformed injected resume note %j", async note => {
+            const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "No note.", orderedTaskIds: ["a"] }));
+            await runEndOfDayWorkflow({
+                projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete },
+                resumeNotes: { version: 1, notes: { "app-a": note } } as unknown as ResumeNoteState,
+                pmState: state([task("a", 0, { appTaskId: "app-a" })]),
+            });
+            expect(entryFor(serializedContext(complete), "a")).not.toHaveProperty("resumeNote");
+        });
+
     it("uses completed state and produces only a reorder of every remaining task", async () => {
         const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Start with B tomorrow, then return to A.", orderedTaskIds: ["b", "a"] }));
         const result = await runEndOfDayWorkflow({

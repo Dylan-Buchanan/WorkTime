@@ -155,6 +155,7 @@ export function getResumeNote(
     if (!isValidTaskId(taskId)) return null;
     const read = readState(storage);
     if (!read.ok) return null;
+    if (!Object.prototype.hasOwnProperty.call(read.state.notes, taskId)) return null;
     const note = read.state.notes[taskId];
     return note ? cloneNote(note) : null;
 }
@@ -195,10 +196,11 @@ export function dismissResumeNote(
     dismissedAt: string,
     storage: ResumeNoteStorage | undefined = defaultStorage(),
 ): boolean {
-    if (!isValidTaskId(taskId)) return false;
+    if (!isValidTaskId(taskId) || Number.isNaN(Date.parse(dismissedAt))) return false;
 
     const read = readState(storage);
     if (!read.ok || !storage) return false;
+    if (!Object.prototype.hasOwnProperty.call(read.state.notes, taskId)) return false;
 
     const note = read.state.notes[taskId];
     if (!note) return false;

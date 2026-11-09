@@ -87,6 +87,26 @@ beforeEach(() => {
 });
 
 describe("resume note store", () => {
+    it("does not read or dismiss an inherited toString note", () => {
+        const storage = createStorage();
+        writeState(storage, {});
+        const raw = storage.getItem(RESUME_NOTE_STORAGE_KEY);
+        expect(getResumeNote("toString", storage)).toBeNull();
+        expect(dismissResumeNote("toString", DISMISSED_AT, storage)).toBe(false);
+        expect(storage.getItem(RESUME_NOTE_STORAGE_KEY)).toBe(raw);
+    });
+
+    it("rejects an invalid dismissal date without losing the note on a later save", () => {
+        const storage = createStorage();
+        saveResumeNote("task-1", makeInput(), storage);
+        const raw = storage.getItem(RESUME_NOTE_STORAGE_KEY);
+        expect(dismissResumeNote("task-1", "not-a-date", storage)).toBe(false);
+        expect(storage.getItem(RESUME_NOTE_STORAGE_KEY)).toBe(raw);
+        expect(getResumeNote("task-1", storage)).toEqual(makeNote());
+        expect(saveResumeNote("task-2", makeInput({ nextAction: "Other task" }), storage).ok).toBe(true);
+        expect(getResumeNote("task-1", storage)).toEqual(makeNote());
+    });
+
     it("round trips a note as a clone in the versioned shape", () => {
         const storage = createStorage();
         const result = saveResumeNote("task-1", makeInput(), storage);
