@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AppStateProvider, resetNotifyForTesting, useAppState } from "./AppStateContext";
 import { DataProvider } from "./DataContext";
 import { SyncProvider } from "./SyncContext";
@@ -49,6 +49,41 @@ describe("timer transition events", () => {
         return { data, events, app: () => current, ...view };
     }
 
+    it("publishes pause after its real same-tab revision refresh adopts the committed timer first", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            active_task: "A", timer: makeActiveTimer({ task_id: "A", started_at: W, window_started_at: W, ends_at: at(25) }),
+        }));
+        const events: TimerTransitionEvent[] = [];
+        let current!: ReturnType<typeof useAppState>;
+        let pending!: Promise<void>;
+        function Capture() {
+            current = useAppState();
+            const subscribe = current.subscribeTimerTransitions;
+            useLayoutEffect(() => subscribe(event => events.push(event)), [subscribe]);
+            return <button onClick={() => { pending = current.pauseTimer(); }}>pause with revision</button>;
+        }
+        render(wrap(data, <Capture />));
+        await waitFor(() => expect(current.state?.timer?.paused).toBe(false));
+        const pause = data.pauseTimer.bind(data);
+        const fetch = vi.spyOn(data, "fetchState");
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        vi.spyOn(data, "pauseTimer").mockImplementation(async () => {
+            const result = await pause(); // Real data subscriber -> SyncProvider revision -> refresh.
+            await gate;
+            return result;
+        });
+        time(3);
+        fireEvent.click(screen.getByRole("button", { name: "pause with revision" }));
+        // No explicit refresh: the command's own revision adopts its paused
+        // result while the publisher still holds the running "before" timer.
+        await waitFor(() => expect(current.state?.timer?.paused).toBe(true));
+        expect(fetch).toHaveBeenCalled();
+        expect(events).toEqual([]);
+        await act(async () => { release(); await pending; });
+        expect(events).toEqual([{ type: "leave", taskId: "A", reason: "pause", at: at(3), windowId: W }]);
+    });
+
     it("silences a stale stop captured before an unawaited switch", async () => {
         const c = await setup();
         time(3);
@@ -58,6 +93,113 @@ describe("timer transition events", () => {
         expect(c.events.filter(event => event.reason === "stop")).toEqual([]);
         expect(c.app().state?.timer).toBeNull();
     });
+
+    it("carries pausedAt after handoff resume's real same-tab revision refresh adopts running Work first", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: Object.fromEntries(["A", "B"].map(id => [id, {
+                id, name: id, target_pomodoros: 4, completed_pomodoros: 0,
+                created_at: W, completed_at: null, break_skips: 0, archived: false,
+            }])),
+            active_task: "A", timer: makeActiveTimer({ task_id: "A", started_at: W, window_started_at: W, ends_at: at(25) }),
+        }));
+        const events: TimerTransitionEvent[] = [];
+        let current!: ReturnType<typeof useAppState>;
+        let pending!: Promise<void>;
+        function Capture() {
+            current = useAppState();
+            const subscribe = current.subscribeTimerTransitions;
+            useLayoutEffect(() => subscribe(event => events.push(event)), [subscribe]);
+            return <button onClick={() => { pending = current.resumeTimer({ handoff: true }); }}>handoff with revision</button>;
+        }
+        render(wrap(data, <Capture />));
+        await waitFor(() => expect(current.state?.timer?.paused).toBe(false));
+        time(3);
+        await act(async () => { await current.pauseTimer(); });
+        expect(events).toEqual([{ type: "leave", taskId: "A", reason: "pause", at: at(3), windowId: W }]);
+        events.length = 0;
+        const resume = data.resumeTimer.bind(data);
+        const fetch = vi.spyOn(data, "fetchState");
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        vi.spyOn(data, "resumeTimer").mockImplementation(async () => {
+            const result = await resume();
+            await gate;
+            return result;
+        });
+        time(4);
+        fireEvent.click(screen.getByRole("button", { name: "handoff with revision" }));
+        await waitFor(() => expect(current.state?.timer?.paused).toBe(false));
+        expect(fetch).toHaveBeenCalled();
+        expect(events).toEqual([]);
+        await act(async () => { release(); await pending; });
+        expect(events).toEqual([]);
+        time(5);
+        await act(async () => { await current.setActiveTask("B"); });
+        expect(events).toEqual([
+            { type: "leave", taskId: "A", reason: "switch", at: at(5), windowId: W, pausedAt: at(3) },
+            { type: "enter", taskId: "B", reason: "switch", at: at(5), windowId: W, fromTaskId: "A" },
+        ]);
+    });
+
+    it.each(["pause", "resume", "handoff-resume", "stop", "start"] as const)(
+        "keeps %s current when refresh adopts identical and own-write state before adoption", async command => {
+            const c = await setup(command === "start" ? null : "Work");
+            if (command.includes("resume")) {
+                time(2);
+                await act(async () => { await c.app().pauseTimer(); });
+                c.events.length = 0;
+            }
+            const method = { pause: "pauseTimer", resume: "resumeTimer", "handoff-resume": "resumeTimer", stop: "stopWorkTimer", start: "startWorkTimer" }[command] as
+                "pauseTimer" | "resumeTimer" | "stopWorkTimer" | "startWorkTimer";
+            let release!: () => void;
+            let invoked!: () => void;
+            let commit!: () => void;
+            let committed!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            const invokedGate = new Promise<void>(resolve => { invoked = resolve; });
+            const commitGate = new Promise<void>(resolve => { commit = resolve; });
+            const committedGate = new Promise<void>(resolve => { committed = resolve; });
+            const deferred = <T,>(run: () => Promise<T>) => async () => {
+                invoked();
+                await commitGate;
+                const result = await run();
+                committed();
+                await gate;
+                return result;
+            };
+            const pause = c.data.pauseTimer.bind(c.data);
+            const resume = c.data.resumeTimer.bind(c.data);
+            const stop = c.data.stopWorkTimer.bind(c.data);
+            const start = c.data.startWorkTimer.bind(c.data);
+            if (method === "pauseTimer") vi.spyOn(c.data, method).mockImplementation(deferred(pause));
+            if (method === "resumeTimer") vi.spyOn(c.data, method).mockImplementation(deferred(resume));
+            if (method === "stopWorkTimer") vi.spyOn(c.data, method).mockImplementation(deferred(stop));
+            if (method === "startWorkTimer") vi.spyOn(c.data, method).mockImplementation(deferred(start));
+            time(3);
+            await act(async () => {
+                const app = c.app();
+                const pending = command === "handoff-resume" ? app.resumeTimer({ handoff: true }) :
+                    { pause: app.pauseTimer, resume: app.resumeTimer, stop: app.stopWork, start: app.startWork, "handoff-resume": app.resumeTimer }[command]();
+                await invokedGate;
+                await c.app().refresh(); // Identical pre-command state.
+                commit();
+                await committedGate;
+                await c.app().refresh(); // This command's own committed state.
+                expect(c.events).toEqual([]);
+                release();
+                await pending;
+            });
+            const reason = command === "handoff-resume" ? null : command;
+            expect(c.events).toEqual(reason ? [{
+                type: command === "pause" || command === "stop" ? "leave" : "enter",
+                taskId: "A", reason, at: at(3), windowId: command === "start" ? at(3) : W,
+            }] : []);
+            if (command === "handoff-resume") {
+                time(5);
+                await act(async () => { await c.app().setActiveTask("B"); });
+                expect(c.events[0]).toMatchObject({ type: "leave", taskId: "A", reason: "switch", pausedAt: at(2) });
+            }
+        });
 
     it("publishes exactly one leave for A across overlapping switches", async () => {
         const c = await setup();
