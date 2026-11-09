@@ -2,6 +2,8 @@
 
 ## 0. Status and scope
 
+Status: epic #160 is complete and released in 0.15.0.
+
 Frozen. Lanes implement against this; changes require ORCH authorization.
 
 Amended 2026-11-09 by ORCH: §6 questions resolved (see §6), T14/T15 reconciled with merged #184 code at 186ab46 plus the Q3 follow-up.

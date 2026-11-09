@@ -78,3 +78,14 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Switch and Waiting sheet** — The timer page's Switch and Waiting buttons open an overlay sheet that hands the running window to another task in two clicks.
 -   **Window-aware logs** — Pomodoro logs carry a `work_window_id` (migration `20261108000000_log_work_window_id.sql`), and the Today pomodoro summary counts windows rather than log rows.
 -   **Upgrade note** — Users with a saved partial-pomodoro resume position lose only that resume position on upgrade (staging schema v10). Pomodoros already credited are untouched. The Today summary now counts a switched window as one pomodoro.
+
+---
+
+## Resume notes
+
+-   **Exit memo** — Pausing, ending focus (also available while paused), or switching with elapsed work opens a short sheet asking “Where I am”, “Next action”, and “Open question or blocker (optional)”, 140 characters each. Enter saves and Escape or Skip abandons. The timer action has already happened, so abandoning never changes timer state.
+-   **Switch context** — A switch frame also shows the incoming task's note, or “Starting fresh” when it has none.
+-   **Show, don't re-ask** — A memo saved after a pause appears read-only with Edit on the following switch, and End focus after that memo asks nothing.
+-   **Resume card** — Above the timer buttons after Resume, Start, or switching into a task, the card shows the current note and its age. It becomes a dimmed one-line reminder after a break ends or when the note is older than two hours. A task with prior work but no note shows “No note from your last exit” with Add note. Dismiss hides the card, finished and archived tasks never show it, and a cold load never shows it.
+-   **End-of-Day brief** — Each remaining task's next action and blocker are quoted verbatim in the brief, and notes saved before local midnight are ignored.
+-   **Local-only storage** — Notes live in the surface-local, unsynced `worktime:resume:v1` key, with one current note per task.
