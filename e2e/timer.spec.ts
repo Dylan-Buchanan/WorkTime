@@ -31,7 +31,7 @@ test.describe("Timer workflows", () => {
 
         // Stop early, then verify a partial log was recorded.
         await page.waitForTimeout(1100);
-        await page.getByRole("button", { name: "Stop Early" }).click();
+        await page.getByRole("button", { name: "End focus" }).click();
         await expect(page.getByRole("button", { name: "Start Focus" })).toBeVisible();
 
         await syncData(page);

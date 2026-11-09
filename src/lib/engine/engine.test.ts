@@ -21,6 +21,10 @@ import {
     startWorkTimer,
     stopWorkTimer,
     updateSettings,
+    workStartOccupation,
+    windowStartedAt,
+    windowRemainingSecs,
+    isWorkWindowLive,
 } from ".";
 
 const T0 = new Date("2026-01-01T00:00:00.000Z");
@@ -99,24 +103,22 @@ describe("engine core and state commands", () => {
         const custom: Settings = { work_minutes: 0, short_break_minutes: 7, long_break_minutes: 0, segment_length: 0, start_of_day: "06:30", end_of_day: "18:30" };
         const state = stateWithTask();
         expect(updateSettings(state, custom).value).toEqual(custom);
-        const reset = resetAppState(state, { t1: 600 });
+        const reset = resetAppState(state);
         expect(reset.state).toEqual(defaultAppState());
         expect(reset.value).toEqual(defaultAppState());
         expect(reset.value).not.toBe(reset.state);
-        expect(reset.inProgressPomodoros).toEqual({});
     });
 });
 
 describe("task lifecycle commands", () => {
-    it("switches tasks by saving progress and giving a fresh target a full timer", () => {
+    it("switches tasks within the original work window", () => {
         const state = stateWithTask();
         state.tasks.t2 = task("t2", 2);
         state.timer = timer();
         const result = setActiveTask(state, "t2", at(750), "log-1");
         expect(result.state.tasks.t1.completed_pomodoros).toBe(0.5);
         expect(result.state.logs).toEqual([{ id: "log-1", task_id: "t1", duration_minutes: 12.5, finished_at: at(750).toISOString(), was_break: false, break_skipped: false }]);
-        expect(result.inProgressPomodoros).toEqual({ t1: 750 });
-        expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 1500, accumulated_secs: 0, started_at: at(750).toISOString(), ends_at: at(2250).toISOString() });
+        expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 750, accumulated_secs: 0, started_at: at(750).toISOString(), ends_at: at(1500).toISOString(), window_started_at: T0.toISOString() });
         expect(result.state.active_task).toBe("t2");
     });
 
@@ -146,57 +148,50 @@ describe("task lifecycle commands", () => {
         state.timer = timer({ paused: true, accumulated_secs: 600, paused_remaining_secs: 900 });
         const result = setActiveTask(state, "t2", at(1800), "log-3");
         expect(result.state.tasks.t1.completed_pomodoros).toBe(0.4);
-        expect(result.inProgressPomodoros).toEqual({ t1: 600 });
-        expect(result.state.timer).toMatchObject({ paused: true, paused_remaining_secs: 1500, planned_secs: 1500 });
+        expect(result.state.timer).toMatchObject({ paused: true, paused_remaining_secs: 900, planned_secs: 900 });
     });
 
-    it("resumes and re-saves cumulative progress without double-crediting", () => {
+    it("conserves the remainder on successive switches without mutating input", () => {
         const state = stateWithTask();
         state.tasks.t2 = task("t2");
-        state.timer = timer({ planned_secs: 900, ends_at: at(900).toISOString() });
-        const progress = { t1: 600, t2: 300 };
-        const stateBefore = structuredClone(state);
-        const progressBefore = structuredClone(progress);
-
-        const result = setActiveTask(state, "t2", at(300), "log-repeat", progress);
-
-        expect(result.state.tasks.t1.completed_pomodoros).toBe(0.2);
-        expect(result.state.logs[0].duration_minutes).toBe(5);
-        expect(result.inProgressPomodoros).toEqual({ t1: 900, t2: 300 });
-        expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 1200, ends_at: at(1500).toISOString() });
-        expect(state).toEqual(stateBefore);
-        expect(progress).toEqual(progressBefore);
+        state.timer = timer();
+        const before = structuredClone(state);
+        const first = setActiveTask(state, "t2", at(300), "first");
+        const second = setActiveTask(first.state, "t1", at(301), "second");
+        expect(first.state.timer).toMatchObject({ planned_secs: 1200, ends_at: at(1500).toISOString() });
+        expect(second.state.timer).toMatchObject({ planned_secs: 1199, ends_at: at(1500).toISOString(), window_started_at: T0.toISOString() });
+        expect(second.state.tasks.t1.completed_pomodoros).toBe(0.2);
+        expect(second.state.tasks.t2.completed_pomodoros).toBeCloseTo(1 / 1500);
+        expect(second.state.logs.map(log => log.duration_minutes)).toEqual([5, 1 / 60]);
+        expect(state).toEqual(before);
     });
 
-    it("retains the saved base when switching immediately after resume", () => {
+    it("switches at t=0 without credit or logs and retains the full budget", () => {
         const state = stateWithTask();
         state.tasks.t2 = task("t2");
-        state.timer = timer({ planned_secs: 900, ends_at: at(900).toISOString() });
-
-        const result = setActiveTask(state, "t2", T0, "unused", { t1: 600, t2: 300 });
-
+        state.timer = timer();
+        const result = setActiveTask(state, "t2", T0, "unused");
         expect(result.state.tasks.t1.completed_pomodoros).toBe(0);
         expect(result.state.logs).toEqual([]);
-        expect(result.inProgressPomodoros).toEqual({ t1: 600, t2: 300 });
+        expect(result.state.timer).toMatchObject({ planned_secs: 1500, ends_at: state.timer.ends_at });
     });
 
-    it("does not infer saved progress from a pre-upgrade shortened timer", () => {
+    it("clamps negative elapsed instead of increasing the window budget", () => {
         const state = stateWithTask();
         state.tasks.t2 = task("t2");
-        state.timer = timer({ planned_secs: 750, ends_at: at(750).toISOString() });
-
-        const result = setActiveTask(state, "t2", at(100), "log-upgrade", {});
-
-        expect(result.inProgressPomodoros).toEqual({ t1: 100 });
-        expect(result.state.tasks.t1.completed_pomodoros).toBeCloseTo(100 / 1500);
+        state.timer = timer({ started_at: at(100).toISOString() });
+        const result = setActiveTask(state, "t2", T0, "unused");
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(0);
+        expect(result.state.logs).toEqual([]);
+        expect(result.state.timer?.planned_secs).toBe(1500);
     });
 
     it("finalizes, archives, and clears a work timer and selection", () => {
         const state = stateWithTask(2);
         state.tasks.t1.completed_pomodoros = 2.5;
         state.timer = timer();
-        const result = finalizeTask(state, "t1", at(2000));
-        expect(result.value).toMatchObject({ target_pomodoros: 2, completed_pomodoros: 2.5, completed_at: at(2000).toISOString(), archived: true });
+        const result = finalizeTask(state, "t1", at(2000), "finalize");
+        expect(result.value).toMatchObject({ target_pomodoros: 2, completed_pomodoros: 3.5, completed_at: at(2000).toISOString(), archived: true });
         expect(result.state.timer).toBeNull();
         expect(result.state.active_task).toBeNull();
     });
@@ -204,7 +199,7 @@ describe("task lifecycle commands", () => {
     it("retains a break timer while finalizing", () => {
         const state = stateWithTask();
         state.timer = timer({ kind: "ShortBreak", planned_secs: 300, ends_at: at(300).toISOString() });
-        const result = finalizeTask(state, "t1", at(100));
+        const result = finalizeTask(state, "t1", at(100), "finalize");
         expect(result.state.timer).not.toBeNull();
     });
 
@@ -212,23 +207,21 @@ describe("task lifecycle commands", () => {
         const state = stateWithTask();
         state.tasks.t2 = task("t2");
         state.timer = timer();
-        const deleted = deleteTask(state, "t1", { t1: 600, t2: 300 });
+        const deleted = deleteTask(state, "t1");
         expect(deleted.state).toMatchObject({ active_task: null, timer: state.timer });
         expect(deleted.state.tasks).toEqual({ t2: state.tasks.t2 });
-        expect(deleted.inProgressPomodoros).toEqual({ t2: 300 });
-        const switchedAfterDelete = setActiveTask(deleted.state, "t2", at(100), "log-deleted", deleted.inProgressPomodoros);
-        expect(switchedAfterDelete.inProgressPomodoros).toEqual({ t2: 300 });
+        const switchedAfterDelete = setActiveTask(deleted.state, "t2", at(100), "log-deleted");
 
-        const archived = archiveTask(state, "t1", { t1: 600, t2: 300 });
+        const archived = archiveTask(state, "t1");
         expect(archived.value.archived).toBe(true);
         expect(archived.state.active_task).toBe("t1");
         expect(archived.state.timer).toEqual(state.timer);
-        expect(archived.inProgressPomodoros).toEqual({ t2: 300 });
-        const switchedAfterArchive = setActiveTask(archived.state, "t2", at(100), "log-archived", archived.inProgressPomodoros);
-        expect(switchedAfterArchive.inProgressPomodoros).toEqual({ t2: 300 });
+        const switchedAfterArchive = setActiveTask(archived.state, "t2", at(100), "log-archived");
 
-        const finalized = finalizeTask(state, "t1", at(2000), { t1: 600, t2: 300 });
-        expect(finalized.inProgressPomodoros).toEqual({ t2: 300 });
+        expect(switchedAfterDelete.state.logs[0].duration_minutes).toBeCloseTo(100 / 60);
+        expect(switchedAfterDelete.state.tasks.t1).toBeUndefined();
+        expect(switchedAfterArchive.state.logs[0].duration_minutes).toBeCloseTo(100 / 60);
+        expect(switchedAfterArchive.state.tasks.t1.completed_pomodoros).toBeCloseTo(100 / 1500);
     });
 
     it("allows estimates below completed progress while preserving the minimum target", () => {
@@ -249,25 +242,21 @@ describe("timer lifecycle commands", () => {
         expect(result.value).toMatchObject({ kind: "Work", planned_secs: 1500, started_at: T0.toISOString(), ends_at: at(1500).toISOString() });
     });
 
-    it("starts and completes the remaining part of a saved pomodoro", () => {
+    it("starts a fresh window regardless of previous credited work", () => {
         const state = stateWithTask();
         state.tasks.t1.completed_pomodoros = 0.4;
-        const started = startWorkTimer(state, T0, { t1: 600, t2: 300 });
-        expect(started.value).toMatchObject({ planned_secs: 900, ends_at: at(900).toISOString() });
-        expect(started.inProgressPomodoros).toEqual({ t1: 600, t2: 300 });
-
-        const completed = completeTimer(started.state, at(900), "log-resumed", started.inProgressPomodoros);
-        expect(completed.state.tasks.t1.completed_pomodoros).toBe(1);
+        const started = startWorkTimer(state, T0);
+        expect(started.value).toMatchObject({ planned_secs: 1500, window_started_at: T0.toISOString() });
+        const completed = completeTimer(started.state, at(1500), "completed");
+        expect(completed.state.tasks.t1.completed_pomodoros).toBe(1.4);
         expect(completed.state.current_cycle_pomodoros).toBe(1);
-        expect(completed.state.logs[0].duration_minutes).toBe(15);
-        expect(completed.inProgressPomodoros).toEqual({ t2: 300 });
+        expect(completed.state.logs[0].duration_minutes).toBe(25);
     });
 
-    it("starts fresh and removes non-resumable saved positions", () => {
-        for (const saved of [0, -1, 1500, Number.POSITIVE_INFINITY, 600.5]) {
-            const result = startWorkTimer(stateWithTask(), T0, { t1: saved, t2: 300 });
-            expect(result.value.planned_secs).toBe(1500);
-            expect(result.inProgressPomodoros).toEqual({ t2: 300 });
+    it("refuses to overwrite any existing timer", () => {
+        for (const kind of ["Work", "ShortBreak", "LongBreak"] as const) {
+            const state = { ...stateWithTask(), timer: timer({ kind }) };
+            expect(() => startWorkTimer(state, T0)).toThrow(new EngineError("A timer is already running"));
         }
     });
 
@@ -316,19 +305,20 @@ describe("timer lifecycle commands", () => {
         const state = stateWithTask();
         state.tasks.t1.completed_pomodoros = 0.4;
         state.timer = timer({ planned_secs: 900, ends_at: at(900).toISOString() });
-        const result = stopWorkTimer(state, at(300), "log-6", { t1: 600, t2: 300 });
+        const result = stopWorkTimer(state, at(300), "log-6");
         expect(result.state.tasks.t1.completed_pomodoros).toBeCloseTo(0.6);
         expect(result.state.logs[0].duration_minutes).toBe(5);
         expect(result.state.logs[0].id).toBe("log-6");
         expect(result.state.tasks.t1.completed_at).toBeNull();
-        expect(result.inProgressPomodoros).toEqual({ t2: 300 });
     });
 
-    it("preserves saved work progress when completing a break", () => {
+    it("completes a break without work credit or cycle increments", () => {
         const state = stateWithTask();
         state.timer = timer({ kind: "ShortBreak", planned_secs: 300, ends_at: at(300).toISOString() });
-        const result = completeTimer(state, at(300), "log-break", { t1: 600, t2: 300 });
-        expect(result.inProgressPomodoros).toEqual({ t1: 600, t2: 300 });
+        const result = completeTimer(state, at(300), "log-break");
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(0);
+        expect(result.state.current_cycle_pomodoros).toBe(0);
+        expect(result.state.logs[0]).toMatchObject({ was_break: true, duration_minutes: 5 });
     });
 
     it("preserves the original target when a stopped timer adds fractional overage", () => {
@@ -389,7 +379,7 @@ describe("engine errors and purity", () => {
         expect(() => setActiveTask(defaultAppState(), "missing", T0, "unused")).toThrowError("Task not found");
         expect(() => deleteTask(defaultAppState(), "missing")).toThrowError("Task not found");
         expect(() => archiveTask(defaultAppState(), "missing")).toThrowError("Task not found");
-        expect(() => finalizeTask(defaultAppState(), "missing", T0)).toThrowError("Task not found");
+        expect(() => finalizeTask(defaultAppState(), "missing", T0, "unused")).toThrowError("Task not found");
         expect(() => setTaskTarget(defaultAppState(), "missing", 1)).toThrowError("Task not found");
     });
 
@@ -427,4 +417,104 @@ describe("log ordering contract", () => {
             "2026-01-01T01:00:00.000Z",
         ]);
     });
+});
+
+
+describe("work-window boundaries", () => {
+    it("classifies starts and derives legacy window identity and remaining seconds", () => {
+        expect(workStartOccupation(null)).toBe("free");
+        expect(workStartOccupation(timer())).toBe("join");
+        expect(workStartOccupation(timer({ kind: "ShortBreak" }))).toBe("blocked");
+        expect(workStartOccupation(timer({ kind: "LongBreak" }))).toBe("blocked");
+        expect(windowStartedAt(timer({ started_at: at(600).toISOString(), accumulated_secs: 600 }))).toBe(T0.toISOString());
+        expect(windowStartedAt(timer({ window_started_at: at(-100).toISOString() }))).toBe(at(-100).toISOString());
+        expect(windowRemainingSecs(timer(), at(600))).toBe(900);
+        expect(windowRemainingSecs(timer(), at(2000))).toBe(0);
+        expect(isWorkWindowLive(null, T0)).toBe(false);
+        expect(isWorkWindowLive(timer({ kind: "ShortBreak" }), T0)).toBe(false);
+        expect(isWorkWindowLive(timer(), at(1499))).toBe(true);
+        expect(isWorkWindowLive(timer(), at(1500))).toBe(false);
+        expect(isWorkWindowLive(timer({ paused: true }), at(9000))).toBe(true);
+    });
+
+    it.each([1500, 2000])("completes an expired switch at %s exactly once", (seconds) => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer();
+        const switched = setActiveTask(state, "t2", at(seconds), "expired").state;
+        expect(switched.timer).toBeNull();
+        expect(switched.active_task).toBe("t2");
+        expect(switched.current_cycle_pomodoros).toBe(1);
+        expect(switched.tasks.t1.completed_pomodoros).toBe(1);
+        expect(switched.logs).toHaveLength(1);
+        expect(switched.logs[0].duration_minutes).toBe(25);
+        expect(setActiveTask(switched, "t1", at(seconds), "unused").state.current_cycle_pomodoros).toBe(1);
+    });
+
+    it("reconciles a sub-second legacy span with zero whole seconds remaining", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer({ planned_secs: undefined, ends_at: at(0.5).toISOString() });
+        const result = setActiveTask(state, "t2", T0, "subsecond").state;
+        expect(result.timer).toBeNull();
+        expect(result.current_cycle_pomodoros).toBe(1);
+        expect(result.logs).toHaveLength(1);
+    });
+
+    it("keeps a switched long pause frozen and resumes with the remaining budget", () => {
+        const state = startWorkTimer(stateWithTask(), T0).state;
+        state.tasks.t2 = task("t2");
+        const paused = pauseTimer(state, at(600)).state;
+        const switched = setActiveTask(paused, "t2", at(9000), "paused").state;
+        expect(switched.timer).toMatchObject({ paused: true, planned_secs: 900, paused_remaining_secs: 900, accumulated_secs: 0, window_started_at: T0.toISOString() });
+        expect(() => completeTimer(switched, at(20000), "unused")).toThrow("Timer not finished yet");
+        const resumed = resumeTimer(switched, at(20000)).state;
+        expect(resumed.timer).toMatchObject({ ends_at: at(20900).toISOString(), window_started_at: T0.toISOString() });
+        expect(completeTimer(resumed, at(20900), "finish").state.tasks.t2.completed_pomodoros).toBe(0.6);
+    });
+
+    it("finalize banks a live slice before archiving without completing the cycle", () => {
+        const state = startWorkTimer(stateWithTask(), T0).state;
+        const result = finalizeTask(state, "t1", at(600), "finalize").state;
+        expect(result.tasks.t1).toMatchObject({ archived: true, completed_pomodoros: 0.4 });
+        expect(result.logs[0].duration_minutes).toBe(10);
+        expect(result.timer).toBeNull();
+        expect(result.current_cycle_pomodoros).toBe(0);
+        expect(finalizeTask(state, "t1", T0, "unused").state.logs).toEqual([]);
+    });
+
+    it("finalize of an expired window uses capped completion accounting", () => {
+        const state = startWorkTimer(stateWithTask(), T0).state;
+        const result = finalizeTask(state, "t1", at(2000), "finalize").state;
+        expect(result.tasks.t1).toMatchObject({ archived: true, completed_pomodoros: 1 });
+        expect(result.logs[0].duration_minutes).toBe(25);
+        expect(result.timer).toBeNull();
+        expect(result.current_cycle_pomodoros).toBe(1);
+    });
+
+    it.each([[], [0], [300, 301, 301], [100, 500, 1000, 1499], [0.1, 0.2, 900.9, 1499.9]].map(schedule => [schedule]))(
+        "conserves credit and logged minutes across schedule %j", (schedule: number[]) => {
+            for (const finish of ["complete", "stop"] as const) {
+                let state = startWorkTimer(stateWithTask(), T0).state;
+                state.tasks.t2 = task("t2");
+                schedule.forEach((seconds, index) => {
+                    state = setActiveTask(state, index % 2 ? "t1" : "t2", at(seconds), `switch-${index}`).state;
+                });
+                state = finish === "complete" ? completeTimer(state, at(1500), "finish").state : stopWorkTimer(state, at(1500), "finish").state;
+                const credit = Object.values(state.tasks).reduce((sum, value) => sum + value.completed_pomodoros, 0);
+                const minutes = state.logs.reduce((sum, log) => sum + log.duration_minutes, 0);
+                expect(credit).toBeLessThanOrEqual(1 + 1e-12);
+                expect(minutes).toBeLessThanOrEqual(25 + 1e-12);
+                expect(credit).toBeCloseTo(minutes / 25);
+                if (finish === "complete") {
+                    expect(credit).toBeCloseTo(1);
+                    expect(minutes).toBeCloseTo(25);
+                } else {
+                    // End focus banks whole active seconds; fractional slices
+                    // can leave less than one second unbanked per handoff.
+                    expect(minutes * 60).toBeGreaterThanOrEqual(1500 - schedule.length - 1);
+                }
+            }
+        },
+    );
 });

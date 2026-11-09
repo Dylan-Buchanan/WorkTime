@@ -50,7 +50,7 @@ function IntegrationProbe() {
         <span data-testid="todo-completions">{Object.keys(todos.state.completions).length}</span>
         <span data-testid="timer-task">{app.state?.timer?.task_id ?? ""}</span>
         <span data-testid="action-error">{actionError}</span>
-        <button onClick={() => todo && void todos.startPomodoro(todo.id)}>start-todo</button>
+        <button onClick={() => todo && void todos.startPomodoro(todo.id).catch((error) => setActionError(error.message))}>start-todo</button>
         <button onClick={() => todo && void todos.completeTodo(todo.id).catch((error) => setActionError(error.message))}>complete-todo</button>
         <button onClick={() => app.state?.active_task && void app.finalizeTask(app.state.active_task)}>finalize-linked</button>
     </div>;
@@ -143,5 +143,31 @@ describe("TodoContext", () => {
         await waitFor(() => expect(screen.getByTestId("todo-archived")).toHaveTextContent("true"));
         expect(screen.getByTestId("todo-link")).toHaveTextContent("");
         expect(screen.getByTestId("todo-completions")).toHaveTextContent("1");
+    });
+});
+
+
+describe("to-do start occupation", () => {
+    it.each(["Work", "ShortBreak"] as const)("joins work or refuses a break from the to-do path: %s", async kind => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const running = (await data.createTask("Running", 2)).value;
+        await data.setActiveTask(running.id);
+        if (kind === "Work") await data.startWorkTimer();
+        else await data.startBreakTimer();
+        const original = data.store.state.timer!;
+        await data.saveTodos([todo("td1", "Second path")], []);
+        render(wrapIntegration(data));
+        await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(running.id));
+        await act(async () => screen.getByText("start-todo").click());
+        if (kind === "Work") {
+            await waitFor(() => expect(screen.getByTestId("todo-link").textContent).not.toBe(""));
+            expect(data.store.state.timer?.task_id).toBe(screen.getByTestId("todo-link").textContent);
+            expect(data.store.state.timer?.ends_at).toBe(original.ends_at);
+            expect(screen.getByTestId("action-error")).toBeEmptyDOMElement();
+        } else {
+            await waitFor(() => expect(screen.getByTestId("action-error")).toHaveTextContent("A break is running"));
+            expect(data.store.state.timer).toEqual(original);
+            expect(screen.getByTestId("todo-link")).toBeEmptyDOMElement();
+        }
     });
 });

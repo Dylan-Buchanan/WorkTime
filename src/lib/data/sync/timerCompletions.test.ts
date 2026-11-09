@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
+import { parseStagedOwnerRecord } from "../staging/types";
 import type { PendingTimerCompletion, StagedOwnerRecord, SyncSnapshot, TimerStateSlice } from "../staging/types";
 import { buildPushPlan } from "./merge";
 import {
@@ -109,7 +110,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const base = snapshot();
     return {
-        schemaVersion: 9,
+        schemaVersion: 10,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -121,7 +122,6 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
             current_cycle_pomodoros: 0,
             timer: null,
         },
-        inProgressPomodoros: {},
         pmState: null,
         petProfileTombstone: null,
         taskUpdatedAt: {},
@@ -520,5 +520,24 @@ describe("completionMask", () => {
         expect(plan.taskUpserts).toEqual([]);
         expect(plan.logUpserts).toEqual([]);
         expect(plan.timerState).toBeNull();
+    });
+});
+
+
+describe("window timer replay compatibility", () => {
+    it.each([undefined, "2026-01-10T00:00:00.000Z"])("validates and deduplicates replay with identity %s", (window_started_at) => {
+        const timer = TIMER(window_started_at === undefined ? {} : { window_started_at });
+        const original = entry({ generationKey: timerGenerationKey(timer), expectedTimer: timer, expectedTimerState: timerSlice(timer) });
+        const stored = completedRecord({ pendingCompletions: [original] });
+        const parsed = parseStagedOwnerRecord(JSON.stringify(stored), stored.ownerId);
+        const pending = parsed.pendingCompletions[0];
+        expect(pending).toEqual(original);
+        expect(completionRpcPayload(pending).p_expected_timer).toEqual(timer);
+        expect(timerGenerationKey(timer)).not.toBe(timerGenerationKey({ ...timer, window_started_at: "other-window" }));
+        const resolved = applyCompletionWinner(parsed, pending);
+        expect(resolved.pendingCompletions).toEqual([]);
+        const twice = applyCompletionWinner(resolved, pending);
+        expect(twice.state.logs).toHaveLength(1);
+        expect(twice.state.tasks.t1.completed_pomodoros).toBe(1);
     });
 });

@@ -412,3 +412,32 @@ describe("TimerPanel today surface", () => {
         expect(within(details!).queryByText("Running project task")).not.toBeInTheDocument();
     });
 });
+
+
+describe("focus window display", () => {
+    it("keeps the ring and elapsed display after a switch and labels the stop action End focus", async () => {
+        const nowMs = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+        try {
+            const first = makeAppTask("first", "First");
+            const second = makeAppTask("second", "Second");
+            const data = new InMemoryDataAccess(makeAppState({ tasks: { first, second }, active_task: first.id,
+                timer: makeActiveTimer({ task_id: first.id, started_at: new Date(nowMs - 600000).toISOString(),
+                    ends_at: new Date(nowMs + 900000).toISOString(), planned_secs: 1500,
+                    window_started_at: new Date(nowMs - 600000).toISOString() }) }), { now: () => new Date(nowMs) });
+            const view = render(wrap(data, second.id));
+            await screen.findByRole("button", { name: "End focus" });
+            expect(screen.getByText("10m / 25m")).toBeInTheDocument();
+            const ring = () => view.container.querySelector('[style*="conic-gradient"]') as HTMLElement;
+            const before = ring().style.background;
+            expect(before).toContain("40%");
+            fireEvent.click(screen.getByRole("button", { name: "Switch active timer task" }));
+            await waitFor(() => expect(data.store.state.timer?.task_id).toBe(second.id));
+            expect(data.store.state.timer?.planned_secs).toBe(900);
+            expect(ring().style.background).toBe(before);
+            expect(screen.getByText("10m / 25m")).toBeInTheDocument();
+            fireEvent.click(screen.getByRole("button", { name: "End focus" }));
+            await waitFor(() => expect(data.store.state.timer).toBeNull());
+        } finally { clock.mockRestore(); }
+    });
+});

@@ -276,3 +276,98 @@ describe("AppStateContext", () => {
         await waitFor(() => expect(notifications.some((item) => item.title === "Pomodoro Complete")).toBe(true));
     });
 });
+
+
+describe("task work window joins", () => {
+    async function setupWindow(kind: "Work" | "ShortBreak" | null) {
+        let clock = new Date();
+        const data = new InMemoryDataAccess(makeAppState(), { now: () => clock });
+        const first = (await data.createTask("First", 2)).value;
+        const second = (await data.createTask("Second", 2)).value;
+        await data.setActiveTask(first.id);
+        if (kind === "Work") await data.startWorkTimer();
+        if (kind === "ShortBreak") await data.startBreakTimer();
+        let app!: ReturnType<typeof useAppState>;
+        function Capture() { app = useAppState(); return null; }
+        render(wrap(data, <Capture />));
+        await waitFor(() => expect(app.state).not.toBeNull());
+        return { data, first, second, app: () => app, advance: (seconds: number) => { clock = new Date(clock.getTime() + seconds * 1000); } };
+    }
+
+    it("starts when free and reports started", async () => {
+        const context = await setupWindow(null);
+        let outcome: string | undefined;
+        await act(async () => { outcome = await context.app().startTaskWork(context.second.id); });
+        expect(outcome).toBe("started");
+        expect(context.data.store.state.timer).toMatchObject({ kind: "Work", task_id: context.second.id, planned_secs: 1500 });
+    });
+
+    it("joins a live Work window and reports joined without moving its end", async () => {
+        const context = await setupWindow("Work");
+        const original = context.data.store.state.timer!;
+        context.advance(600);
+        let outcome: string | undefined;
+        const start = vi.spyOn(context.data, "startWorkTimer");
+        await act(async () => { outcome = await context.app().startTaskWork(context.second.id); });
+        expect(outcome).toBe("joined");
+        expect(start).not.toHaveBeenCalled();
+        expect(context.data.store.state.timer).toMatchObject({ task_id: context.second.id, planned_secs: 900, ends_at: original.ends_at, window_started_at: original.window_started_at });
+    });
+
+    it("refuses to start work during a break", async () => {
+        const context = await setupWindow("ShortBreak");
+        const original = structuredClone(context.data.store.state);
+        await act(async () => { await expect(context.app().startTaskWork(context.second.id)).rejects.toThrow(/break is running/i); });
+        expect(context.data.store.state).toEqual(original);
+    });
+
+    it("starts the normal break exactly once after an expired-window join", async () => {
+        const context = await setupWindow("Work");
+        const captured = context.data.store.state.timer!;
+        context.advance(1500);
+        const startBreak = vi.spyOn(context.data, "startBreakTimer");
+        await act(async () => { expect(await context.app().startTaskWork(context.second.id)).toBe("joined"); });
+        await waitFor(() => expect(context.app().state?.timer?.kind).toBe("ShortBreak"));
+        expect(startBreak).toHaveBeenCalledTimes(1);
+        expect(context.data.store.state.timer?.task_id).toBe(context.second.id);
+        expect((await context.data.completeTimer(captured)).applied).toBe(false);
+        expect(context.data.store.state.logs).toHaveLength(1);
+        expect(context.data.store.state.current_cycle_pomodoros).toBe(1);
+    });
+
+    it("banks and progresses an expired finalized window", async () => {
+        const context = await setupWindow("Work");
+        context.advance(1500);
+        const startBreak = vi.spyOn(context.data, "startBreakTimer");
+        await act(async () => { await context.app().finalizeTask(context.first.id); });
+        await waitFor(() => expect(context.app().state?.timer?.kind).toBe("ShortBreak"));
+        expect(startBreak).toHaveBeenCalledTimes(1);
+        expect(context.data.store.state.tasks[context.first.id]).toMatchObject({ archived: true, completed_pomodoros: 1 });
+        expect(context.data.store.state.logs).toHaveLength(1);
+        expect(context.data.store.state.current_cycle_pomodoros).toBe(1);
+    });
+
+    it("serializes a switch winner with an in-flight automatic completion loser", async () => {
+        const context = await setupWindow("Work");
+        context.advance(1500);
+        let release!: () => void;
+        const blocked = new Promise<void>(resolve => { release = resolve; });
+        const original = context.data.completeTimer.bind(context.data);
+        vi.spyOn(context.data, "completeTimer").mockImplementation(async expected => {
+            await blocked;
+            return original(expected);
+        });
+        const startBreak = vi.spyOn(context.data, "startBreakTimer");
+        await act(async () => {
+            const ticking = context.app().completeTimer();
+            await context.app().startTaskWork(context.second.id);
+            release();
+            await ticking;
+        });
+        await waitFor(() => expect(context.app().state?.timer?.kind).toBe("ShortBreak"));
+        expect(startBreak).toHaveBeenCalledTimes(1);
+        expect(context.data.store.state.logs).toHaveLength(1);
+        expect(context.data.store.state.current_cycle_pomodoros).toBe(1);
+        expect(context.data.store.state.timer?.task_id).toBe(context.second.id);
+    });
+});

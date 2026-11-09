@@ -266,7 +266,7 @@ export function computeElapsedSecs(timer: ActiveTimer | null | undefined, nowMs:
 
 export function computeActiveFractionComplete(timer: ActiveTimer | null | undefined, nowMs: number, workMinutesSetting: number): number {
     if (!timer || timer.kind !== "Work") return 0;
-    const planned = timer.planned_secs || workMinutesSetting * 60;
+    const planned = Math.max(workMinutesSetting * 60, timer.planned_secs || 0);
     if (planned <= 0) return 0;
     const remaining = computeRemainingMs(timer, nowMs) / 1000;
     return Math.min(1, Math.max(0, 1 - remaining / planned));

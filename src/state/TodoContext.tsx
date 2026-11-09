@@ -3,6 +3,7 @@ import { completeTodoOccurrence, createTodoCompletion, isValidRule, normalizeRul
 import type { NewTodoInput, Todo, TodoCompletion, TodoRule } from "../lib/todos";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
+import { workStartOccupation } from "../lib/engine";
 import { useOptionalAppState } from "./AppStateContext";
 
 export interface TodoState {
@@ -232,7 +233,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const startPomodoro = useCallback(async (id: string) => {
         let todo = stateRef.current.todos[id];
         if (!todo || todo.isArchived) throw new Error("To-do is no longer active");
-        if (app?.state?.timer) throw new Error("A timer is already running");
+        if (workStartOccupation(app?.state?.timer ?? null) === "blocked") throw new Error("A break is running");
 
         let task = todo.currentTaskId ? app?.state?.tasks[todo.currentTaskId] : null;
         if (task && (task.archived || task.completed_at !== null)) {

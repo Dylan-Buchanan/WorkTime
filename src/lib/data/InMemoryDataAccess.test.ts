@@ -76,53 +76,23 @@ describe("InMemoryDataAccess", () => {
         expect((await paused.fetchState()).reconciledTimer).toBeNull();
     });
 
-    it("mirrors saved-progress resume and preserves local progress on discard", async () => {
+    it("persists the shared window remainder and identity when switching", async () => {
         let now = new Date("2026-01-01T00:00:00.000Z");
-        const state = makeAppState({
-            active_task: "t1",
-            tasks: {
-                t1: {
-                    id: "t1", name: "Task", target_pomodoros: 1, completed_pomodoros: 0.4,
-                    created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false,
-                },
-            },
-        });
-        const store = {
-            state,
-            inProgressPomodoros: { t1: 600, other: 300 },
-            pmState: null,
-            habits: [],
-            habitCompletions: [],
-            todos: [],
-            todoCompletions: [],
-            petActivityRecords: [],
-            petProfile: null,
-            petScheduleItems: [],
-            petReminderMarks: [],
-            petNapRecords: [],
-            petWeightEntries: [],
-            petTrainingSkills: [],
-            petFixations: [],
-            goalTrackers: [], goals: [], goalCheckIns: [],
-            petNotableEvents: [],
-            completed: false,
-        };
-        const data = new InMemoryDataAccess(store, {
-            now: () => now,
-            createLogId: () => "log-resumed",
-        });
-
+        const data = new InMemoryDataAccess(undefined, { now: () => now });
+        const first = (await data.createTask("First", 2)).value;
+        const second = (await data.createTask("Second", 2)).value;
+        await data.setActiveTask(first.id);
         const started = await data.startWorkTimer();
-        expect(started.value.planned_secs).toBe(900);
-        expect(data.store.inProgressPomodoros).toEqual({ t1: 600, other: 300 });
-        now = new Date("2026-01-01T00:15:00.000Z");
-        expect((await data.completeTimer(started.value)).applied).toBe(true);
-        expect(data.store.state.tasks.t1.completed_pomodoros).toBe(1);
-        expect(data.store.inProgressPomodoros).toEqual({ other: 300 });
-
-        data.store.inProgressPomodoros = { retained: 450 };
+        now = new Date("2026-01-01T00:10:00.000Z");
+        const switched = await data.setActiveTask(second.id);
+        expect(switched.state.timer).toMatchObject({ task_id: second.id, planned_secs: 900,
+            ends_at: started.value.ends_at, window_started_at: started.value.window_started_at });
+        expect(data.store.state.tasks[first.id].completed_pomodoros).toBe(0.4);
+        now = new Date("2026-01-01T00:25:00.000Z");
+        expect((await data.completeTimer(switched.state.timer!)).applied).toBe(true);
+        expect(data.store.state.tasks[second.id].completed_pomodoros).toBe(0.6);
         await data.discardPendingChanges();
-        expect(data.store.inProgressPomodoros).toEqual({ retained: 450 });
+        expect(data.store.state.timer).toBeNull();
     });
 
     it("records sync calls, reports pending, and resets pending on success", async () => {

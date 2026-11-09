@@ -234,7 +234,7 @@ export const TimerPanel: React.FC = () => {
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
     const workMinutesSetting = state?.settings?.work_minutes ?? 0;
-    const activeWorkPlannedSecs = timer?.kind === "Work" ? timer.planned_secs || workMinutesSetting * 60 : 0;
+    const activeWorkPlannedSecs = timer?.kind === "Work" ? Math.max(workMinutesSetting * 60, timer.planned_secs || 0) : 0;
     const activeRemainingSecs = timer?.kind === "Work" ? ms / 1000 : 0;
     const activeFractionComplete = timer?.kind === "Work" && activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, 1 - activeRemainingSecs / activeWorkPlannedSecs)) : 0;
 
@@ -242,9 +242,12 @@ export const TimerPanel: React.FC = () => {
     const plannedSecs = timer?.planned_secs || (timer ? (new Date(timer.ends_at).getTime() - new Date(timer.started_at).getTime()) / 1000 : 0);
 
     // Elapsed seconds including accumulated (if paused/resumed) + current run segment
-    const elapsedSecs = useMemo(() => computeElapsedSecs(timer, Date.now(), plannedSecs), [timer, plannedSecs, tick]);
+    const elapsedSecs = useMemo(() => timer?.kind === "Work"
+        ? Math.max(0, activeWorkPlannedSecs - ms / 1000)
+        : computeElapsedSecs(timer, Date.now(), plannedSecs), [timer, plannedSecs, activeWorkPlannedSecs, ms, tick]);
 
-    const pct = plannedSecs > 0 ? Math.min(1, Math.max(0, elapsedSecs / plannedSecs)) : 0;
+    const ringPlannedSecs = timer?.kind === "Work" ? activeWorkPlannedSecs : plannedSecs;
+    const pct = ringPlannedSecs > 0 ? Math.min(1, Math.max(0, elapsedSecs / ringPlannedSecs)) : 0;
 
     const activeAppTaskId = timer?.task_id ?? state?.active_task ?? null;
     const activeAppTask = activeAppTaskId ? state?.tasks[activeAppTaskId] : null;
@@ -560,7 +563,7 @@ export const TimerPanel: React.FC = () => {
                         {timer && (
                             <div className="text-[10px] text-neutral-500">
                                 {/* Show elapsed/planned minutes */}
-                                {Math.round(elapsedSecs / 60)}m / {Math.round(plannedSecs / 60)}m
+                                {Math.round(elapsedSecs / 60)}m / {Math.round(ringPlannedSecs / 60)}m
                             </div>
                         )}
                     </div>
@@ -618,7 +621,7 @@ export const TimerPanel: React.FC = () => {
                                     play("pressSide");
                                 }}
                             >
-                                Stop Early
+                                End focus
                             </button>
                         )}
                         {isBreak && timer && ms > 0 && !isPaused && (

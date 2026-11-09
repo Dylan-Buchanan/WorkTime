@@ -4,6 +4,7 @@ import { useSounds } from "../hooks/useSounds";
 import { computeRemainingMs } from "../lib/timer";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
+import { workStartOccupation } from "../lib/engine";
 import type { EngineResult } from "../lib/engine";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
 
@@ -67,7 +68,7 @@ interface AppContextShape {
     error: string | null;
     finalizeTask: (id: string) => Promise<void>;
     archiveTask: (id: string) => Promise<void>;
-    startTaskWork: (id: string) => Promise<void>;
+    startTaskWork: (id: string) => Promise<"started" | "joined">;
     subscribeTaskCompletions: (listener: (taskId: string) => void) => () => void;
     pauseTimer: () => void;
     resumeTimer: () => void;
@@ -102,6 +103,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // clone for progression/reconciliation callers.
     const fetchAndSetState = useCallback(async () => {
         const result = await data.fetchState();
+        stateRef.current = result.state;
         setState((current) => {
             if (current && JSON.stringify(current) === JSON.stringify(result.state)) return current;
             return result.state;
@@ -122,14 +124,19 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }, []);
 
     const runProgression = useCallback(async (finishedTimer?: ActiveTimer, reconciliation?: { timer: ReconciledTimer; state: AppStateData }) => {
-        if (progressing.current) return;
+        if (progressing.current) {
+            if (reconciliation) queuedReconciliationRef.current = reconciliation;
+            return;
+        }
         progressing.current = true;
         try {
             setError(null);
             let applied = true;
             let after: AppStateData;
             if (reconciliation) {
-                after = reconciliation.state;
+                // A queued handoff may have been overtaken by the tick winner.
+                // Read the current view before deciding whether a break is needed.
+                after = (await fetchAndSetState()).state;
                 applied = reconciliation.timer.applied;
             } else {
                 if (!finishedTimer) return;
@@ -147,18 +154,26 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 // A race loser must adopt the winner's state before deciding whether to start a timer.
                 after = (await fetchAndSetState()).state;
             }
+            stateRef.current = after;
             setState(after);
 
             if (!after.timer) {
                 const kind = finishedTimer?.kind ?? reconciliation?.timer.kind;
                 if (kind === "Work") {
                     try {
+                        // Finalize clears the selection, but the completed task
+                        // still owns the ensuing break. Maintenance clears this
+                        // archived selection again after the break has opened.
+                        const taskId = finishedTimer?.task_id ?? reconciliation?.timer.taskId;
+                        if (!after.active_task && taskId && after.tasks[taskId]) await data.setActiveTask(taskId);
                         const started = await data.startBreakTimer();
+                        stateRef.current = started.state;
                         setState(started.state);
                     } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start break timer"); }
                 } else if (after.active_task) {
                     try {
                         const started = await data.startWorkTimer();
+                        stateRef.current = started.state;
                         setState(started.state);
                     } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start work timer"); }
                 }
@@ -249,7 +264,21 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     };
 
-    const setActiveTask = (id: string) => adoptResult(() => data.setActiveTask(id));
+    const adoptTaskTransition = async (run: () => Promise<EngineResult<unknown>>) => {
+        const before = stateRef.current;
+        const result = await run();
+        stateRef.current = result.state;
+        setState(result.state);
+        if (before?.timer?.kind === "Work" && !result.state.timer &&
+            result.state.current_cycle_pomodoros > before.current_cycle_pomodoros) {
+            await runProgression(undefined, {
+                timer: { kind: "Work", taskId: before.timer.task_id, applied: true },
+                state: result.state,
+            });
+        }
+        return { ...result, state: stateRef.current ?? result.state };
+    };
+    const setActiveTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.setActiveTask(id)));
     const ensureActiveTask = async () => {
         if (!state?.active_task) {
             const tasks = Object.values(state?.tasks || {}).filter((task) => !task.archived);
@@ -269,7 +298,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const stopWork = () => adoptResult(() => data.stopWorkTimer());
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
-    const finalizeTask = (id: string) => adoptResult(() => data.finalizeTask(id));
+    const finalizeTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
     const archiveTask = async (id: string) => {
         try {
             setError(null);
@@ -280,13 +309,17 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             throw err;
         }
     };
-    const startTaskWork = async (id: string) => {
+    const startTaskWork = async (id: string): Promise<"started" | "joined"> => {
         try {
             setError(null);
-            if (stateRef.current?.timer) throw new Error("A timer is already running");
-            await data.setActiveTask(id);
+            const occupation = workStartOccupation(stateRef.current?.timer ?? null);
+            if (occupation === "blocked") throw new Error("A break is running");
+            await adoptTaskTransition(() => data.setActiveTask(id));
+            if (occupation === "join") return "joined";
             const started = await data.startWorkTimer();
+            stateRef.current = started.state;
             setState(started.state);
+            return "started";
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
             throw err;
