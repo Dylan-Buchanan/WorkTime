@@ -70,8 +70,8 @@ interface AppContextShape {
     archiveTask: (id: string) => Promise<void>;
     startTaskWork: (id: string) => Promise<"started" | "joined">;
     subscribeTaskCompletions: (listener: (taskId: string) => void) => () => void;
-    pauseTimer: () => void;
-    resumeTimer: () => void;
+    pauseTimer: () => Promise<void>;
+    resumeTimer: () => Promise<void>;
     isPaused: boolean;
     tick: number;
     resetAll: () => Promise<void>;
@@ -242,13 +242,15 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // follow-up fetch and no sync call: the staged result is the new view.
     // Errors leave React state untouched (last persisted state stays visible)
     // and surface in `error`.
-    const adoptResult = async (run: () => Promise<EngineResult<unknown>>) => {
+    const adoptResult = async (run: () => Promise<EngineResult<unknown>>, rethrow = false) => {
         try {
             setError(null);
             const result = await run();
+            stateRef.current = result.state;
             setState(result.state);
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
+            if (rethrow) throw err;
         }
     };
 
@@ -278,7 +280,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
         return { ...result, state: stateRef.current ?? result.state };
     };
-    const setActiveTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.setActiveTask(id)));
+    const setActiveTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.setActiveTask(id)), true);
     const ensureActiveTask = async () => {
         if (!state?.active_task) {
             const tasks = Object.values(state?.tasks || {}).filter((task) => !task.archived);
@@ -329,8 +331,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         taskCompletionListenersRef.current.add(listener);
         return () => taskCompletionListenersRef.current.delete(listener);
     }, []);
-    const pauseTimer = () => { if (state?.timer && !state.timer.paused) void adoptResult(() => data.pauseTimer()); };
-    const resumeTimer = () => { if (state?.timer?.paused) void adoptResult(() => data.resumeTimer()); };
+    const pauseTimer = async () => { if (stateRef.current?.timer && !stateRef.current.timer.paused) await adoptResult(() => data.pauseTimer(), true); };
+    const resumeTimer = async () => { if (stateRef.current?.timer?.paused) await adoptResult(() => data.resumeTimer(), true); };
     const resetAll = async () => {
         try {
             setError(null);

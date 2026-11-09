@@ -54,7 +54,7 @@ function collectPropagationTargets(
 
 export const StateSyncBridge: React.FC = () => {
     const { state: appState, refresh } = useAppState();
-    const { state: pmState, updateTask, recordWorkStart, ensureMetadataForAppTask } = usePM();
+    const { state: pmState, updateTask, recordWorkStart, ensureMetadataForAppTask, linkFailures, reportLink } = usePM();
     const { sync } = useSync();
     const data = useData();
 
@@ -237,28 +237,36 @@ export const StateSyncBridge: React.FC = () => {
             const appTaskId = pmState.tasks[pmTaskId]?.appTaskId;
             if (!pmState.tasks[pmTaskId] || appTaskId) {
                 linkingTaskIdsRef.current.delete(pmTaskId);
+                reportLink(pmTaskId, false);
                 if (appTaskId) pendingAppTaskLinksRef.current.delete(appTaskId);
             }
         }
         const unlinked = Object.values(pmState.tasks).filter(
-            (t) => !t.isArchived && !t.appTaskId && !linkingTaskIdsRef.current.has(t.id),
+            (t) => !t.isArchived && !t.appTaskId && !linkingTaskIdsRef.current.has(t.id) && !Object.prototype.hasOwnProperty.call(linkFailures, t.id),
         );
         if (unlinked.length === 0) return;
         // Reserve the entire snapshot before the first await. Creating one task
         // can rerender the bridge while the rest of this batch is still queued;
         // per-item reservation lets those later entries be claimed again.
-        unlinked.forEach((task) => linkingTaskIdsRef.current.add(task.id));
+        unlinked.forEach((task) => {
+            linkingTaskIdsRef.current.add(task.id);
+            reportLink(task.id, true);
+        });
         (async () => {
             for (const pmTask of unlinked) {
-                let backendCreated = false;
                 try {
                     // Stage directly through the data layer. Updating AppState
                     // here would run the metadata effect before this PM row is
                     // linked and create a second PM entry for the same task.
-                    const result = await data.createTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
+                    // Retry a failed PM save with the already-created backend
+                    // id rather than creating another task.
+                    let appTaskId = [...pendingAppTaskLinksRef.current].find(([, id]) => id === pmTask.id)?.[0];
+                    if (!appTaskId) {
+                        const result = await data.createTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
+                        appTaskId = result.value.id;
+                        pendingAppTaskLinksRef.current.set(appTaskId, pmTask.id);
+                    }
                     if (!mountedRef.current) return;
-                    backendCreated = true;
-                    pendingAppTaskLinksRef.current.set(result.value.id, pmTask.id);
                     // Persist the relationship before creating the next backend
                     // task. Task staging emits a store revision; relying only on
                     // a React state patch lets that revision reload the previous
@@ -272,15 +280,15 @@ export const StateSyncBridge: React.FC = () => {
                             ...latestPM.tasks,
                             [pmTask.id]: {
                                 ...latestTask,
-                                appTaskId: result.value.id,
+                                appTaskId,
                                 updatedAt: new Date().toISOString(),
                             },
                         },
                     });
                 } catch (err) {
                     console.warn("Failed to create or link backend task for PM entry", pmTask.id, err);
-                } finally {
-                    if (!backendCreated) linkingTaskIdsRef.current.delete(pmTask.id);
+                    linkingTaskIdsRef.current.delete(pmTask.id);
+                    reportLink(pmTask.id, false, err instanceof Error ? err.message : String(err));
                 }
             }
             // Commands are local and adopt their staged results, so collapse the
@@ -296,7 +304,7 @@ export const StateSyncBridge: React.FC = () => {
         })().catch((err) => {
             console.warn("[bridge] unexpected metadata propagation failure", err);
         });
-    }, [pmState?.tasks, appState, data, refresh, updateTask]);
+    }, [pmState?.tasks, appState, data, refresh, updateTask, linkFailures, reportLink]);
 
     // Sync time spent & worked pomodoros to PM metadata.
     useEffect(() => {
@@ -372,11 +380,11 @@ export const StateSyncBridge: React.FC = () => {
         const appTask = appState.tasks[activeId];
         if (!appTask) return;
         const titleNorm = appTask.name.trim().toLowerCase();
-        const candidates = Object.values(pmState.tasks).filter((pmTask) => !pmTask.appTaskId && pmTask.title.trim().toLowerCase() === titleNorm);
+        const candidates = Object.values(pmState.tasks).filter((pmTask) => !pmTask.appTaskId && !linkingTaskIdsRef.current.has(pmTask.id) && !Object.prototype.hasOwnProperty.call(linkFailures, pmTask.id) && pmTask.title.trim().toLowerCase() === titleNorm);
         if (candidates.length === 1) {
             updateTaskRef.current(candidates[0].id, { appTaskId: activeId });
         }
-    }, [appState?.active_task, appState?.tasks, pmState?.tasks, updateTask]);
+    }, [appState?.active_task, appState?.tasks, pmState?.tasks, updateTask, linkFailures]);
 
     return null;
 };

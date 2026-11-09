@@ -637,6 +637,63 @@ describe("ProjectManagerContext waiting flag", () => {
 });
 
 describe("StateSyncBridge", () => {
+    it("reports reserved/in-flight links, then clears them without creating a second backend task", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Delayed link", estimatePomos: 2 }) } });
+        const original = data.createTask.bind(data);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const create = vi.spyOn(data, "createTask").mockImplementation(async (...args) => { await gate; return original(...args); });
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkingTaskIds.has("pt1")).toBe(true));
+        // A metadata render while reserved cannot claim the task again.
+        act(() => view.current.pm.updateTask("pt1", { priority: "High" }));
+        expect(create).toHaveBeenCalledOnce();
+        await act(async () => { release(); await gate; });
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        await waitFor(() => expect(view.current.pm.linkingTaskIds.size).toBe(0));
+        expect(create).toHaveBeenCalledOnce();
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+        expect(Object.keys(view.current.pm.state.tasks)).toHaveLength(1);
+    });
+
+    it("records create failures, waits for retryLink, then retries successfully", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Retry link" }) } });
+        const create = vi.spyOn(data, "createTask").mockRejectedValueOnce(new Error("Create unavailable"));
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkFailures.pt1).toBe("Create unavailable"));
+        expect(view.current.pm.linkingTaskIds.has("pt1")).toBe(false);
+        await act(async () => { view.current.pm.updateTask("pt1", { priority: "High" }); await view.current.app.refresh(); });
+        expect(create).toHaveBeenCalledOnce();
+        act(() => view.current.pm.retryLink("pt1"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        await waitFor(() => expect(view.current.pm.linkingTaskIds.size).toBe(0));
+        expect(view.current.pm.linkFailures.pt1).toBeUndefined();
+        expect(create).toHaveBeenCalledTimes(2);
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+    });
+
+    it("reuses the created backend id when retrying a failed PM-link save", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Save retry" }) } });
+        const originalSave = data.savePMState.bind(data);
+        let rejectLink = true;
+        vi.spyOn(data, "savePMState").mockImplementation(async (state) => {
+            if (rejectLink && state.tasks.pt1?.appTaskId) throw new Error("Link save unavailable");
+            return originalSave(state);
+        });
+        const create = vi.spyOn(data, "createTask");
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkFailures.pt1).toBe("Link save unavailable"));
+        expect(create).toHaveBeenCalledOnce();
+        rejectLink = false;
+        act(() => view.current.pm.retryLink("pt1"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        expect(create).toHaveBeenCalledOnce();
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+        expect(Object.keys(view.current.pm.state.tasks)).toHaveLength(1);
+    });
     it.each([false, true])("baselines a persisted running Work timer without advancing Backlog (bridge mounts after load=%s)", async (mountAfterLoad) => {
         const data = await workStartData();
         data.store.state.timer = makeActiveTimer({ task_id: "bt1" });
