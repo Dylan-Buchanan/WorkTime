@@ -49,6 +49,166 @@ describe("timer transition events", () => {
         return { data, events, app: () => current, ...view };
     }
 
+    it("silences a stale stop captured before an unawaited switch", async () => {
+        const c = await setup();
+        time(3);
+        await act(async () => {
+            await Promise.all([c.app().setActiveTask("B"), c.app().stopWork()]);
+        });
+        expect(c.events.filter(event => event.reason === "stop")).toEqual([]);
+        expect(c.app().state?.timer).toBeNull();
+    });
+
+    it("publishes exactly one leave for A across overlapping switches", async () => {
+        const c = await setup();
+        time(3);
+        await act(async () => {
+            await Promise.all([c.app().setActiveTask("B"), c.app().setActiveTask("C")]);
+        });
+        expect(c.events.filter(event => event.type === "leave" && event.taskId === "A")).toHaveLength(1);
+        expect(c.events).toHaveLength(2);
+        expect(c.app().state?.timer?.task_id).toBe("C");
+    });
+
+    it("does not publish a second switch pair for an overlapping unrelated finalize", async () => {
+        const c = await setup();
+        time(3);
+        await act(async () => {
+            await Promise.all([c.app().setActiveTask("B"), c.app().finalizeTask("C")]);
+        });
+        expect(c.events).toEqual([
+            { type: "leave", taskId: "A", reason: "switch", at: at(3), windowId: W },
+            { type: "enter", taskId: "B", reason: "switch", at: at(3), windowId: W, fromTaskId: "A" },
+        ]);
+        expect(c.app().state?.tasks.C.archived).toBe(true);
+    });
+
+    it.each(["pause", "resume", "handoff-resume", "stop", "start"] as const)(
+        "silences %s when refresh replaces its timer before adoption", async command => {
+            const c = await setup(command === "start" ? null : "Work");
+            if (command.includes("resume")) {
+                time(2);
+                await act(async () => { await c.app().pauseTimer(); });
+                c.events.length = 0;
+            }
+            const method = { pause: "pauseTimer", resume: "resumeTimer", "handoff-resume": "resumeTimer", stop: "stopWorkTimer", start: "startWorkTimer" }[command] as
+                "pauseTimer" | "resumeTimer" | "stopWorkTimer" | "startWorkTimer";
+            let release!: () => void;
+            let committed!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            const committedGate = new Promise<void>(resolve => { committed = resolve; });
+            const deferred = <T,>(run: () => Promise<T>) => async () => {
+                const result = await run();
+                committed();
+                await gate;
+                return result;
+            };
+            if (method === "pauseTimer") {
+                const run = deferred(c.data.pauseTimer.bind(c.data));
+                vi.spyOn(c.data, method).mockImplementation(run);
+            }
+            if (method === "resumeTimer") {
+                const run = deferred(c.data.resumeTimer.bind(c.data));
+                vi.spyOn(c.data, method).mockImplementation(run);
+            }
+            if (method === "stopWorkTimer") {
+                const run = deferred(c.data.stopWorkTimer.bind(c.data));
+                vi.spyOn(c.data, method).mockImplementation(run);
+            }
+            if (method === "startWorkTimer") {
+                const run = deferred(c.data.startWorkTimer.bind(c.data));
+                vi.spyOn(c.data, method).mockImplementation(run);
+            }
+            time(3);
+            await act(async () => {
+                const app = c.app();
+                const pending = command === "handoff-resume" ? app.resumeTimer({ handoff: true }) :
+                    { pause: app.pauseTimer, resume: app.resumeTimer, stop: app.stopWork, start: app.startWork, "handoff-resume": app.resumeTimer }[command]();
+                await committedGate;
+                c.data.store.state.timer = makeActiveTimer({ task_id: "B", started_at: W, window_started_at: W, ends_at: at(25) });
+                await c.app().refresh();
+                release();
+                await pending;
+            });
+            expect(c.events).toEqual([]);
+            expect(c.app().state?.timer?.task_id ?? null).toBe(command === "stop" ? null : "A");
+            if (command === "pause") {
+                await act(async () => { await c.app().stopWork(); });
+                expect(c.events[0]).not.toHaveProperty("pausedAt");
+            }
+            if (command === "handoff-resume") {
+                c.data.store.state.timer = structuredClone(c.app().state!.timer);
+                time(5);
+                await act(async () => { await c.app().refresh(); await c.app().setActiveTask("C"); });
+                expect(c.events[0]).toMatchObject({ type: "leave", taskId: "A", reason: "switch" });
+                expect(c.events[0]).not.toHaveProperty("pausedAt");
+            }
+        });
+
+    it.each(["task-start", "break-end"] as const)("silences a stale %s direct adoption", async origin => {
+        const c = await setup(origin === "task-start" ? null : "ShortBreak");
+        const start = c.data.startWorkTimer.bind(c.data);
+        let release!: () => void;
+        let committed!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const committedGate = new Promise<void>(resolve => { committed = resolve; });
+        vi.spyOn(c.data, "startWorkTimer").mockImplementation(async () => {
+            const result = await start();
+            committed();
+            await gate;
+            return result;
+        });
+        time(5);
+        await act(async () => {
+            const pending = origin === "task-start" ? c.app().startTaskWork("A") : c.app().completeTimer();
+            await committedGate;
+            c.data.store.state.timer!.task_id = "B";
+            await c.app().refresh();
+            release();
+            await pending;
+        });
+        expect(c.events).toEqual([]);
+    });
+
+    it("does not resurrect a handoff episode invalidated by an in-flight archive", async () => {
+        const c = await setup();
+        time(3);
+        await act(async () => { await c.app().pauseTimer(); });
+        const resume = c.data.resumeTimer.bind(c.data);
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        vi.spyOn(c.data, "resumeTimer").mockImplementation(async () => {
+            await gate;
+            return resume();
+        });
+        time(4);
+        await act(async () => {
+            const pending = c.app().resumeTimer({ handoff: true });
+            await c.app().archiveTask("C");
+            release();
+            await pending;
+        });
+        c.events.length = 0;
+        time(5);
+        await act(async () => { await c.app().setActiveTask("B"); });
+        expect(c.events).toHaveLength(2);
+        expect(c.events[0]).toMatchObject({ type: "leave", taskId: "A", reason: "switch" });
+        expect(c.events[0]).not.toHaveProperty("pausedAt");
+    });
+
+    it.each(["accumulated_secs", "paused_remaining_secs"] as const)("discards a pause episode when refresh changes %s", async field => {
+        const c = await setup();
+        time(3);
+        await act(async () => { await c.app().pauseTimer(); });
+        c.data.store.state.timer![field]! += 30;
+        await act(async () => { await c.app().refresh(); });
+        c.events.length = 0;
+        await act(async () => { await c.app().stopWork(); });
+        expect(c.events).toHaveLength(1);
+        expect(c.events[0]).toMatchObject({ reason: "stop", taskId: "A" });
+        expect(c.events[0]).not.toHaveProperty("pausedAt");
+    });
+
     it("publishes the worked pause/resume payloads through retained callbacks in the adopted window", async () => {
         const c = await setup();
         const { pauseTimer, resumeTimer, subscribeTimerTransitions } = c.app();
