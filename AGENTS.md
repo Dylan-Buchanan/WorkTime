@@ -12,6 +12,7 @@ WorkTime is a Windows Tauri desktop app with a React/Vite frontend. The browser 
 - A Work pomodoro is a fixed wall-clock window identified by `window_started_at`; switching tasks mid-window joins that window and hands the remainder to the new task. Never re-introduce per-task partial resume state (the retired `inProgressPomodoros` map).
 - Moving a Backlog/Next PM task to In Progress and clearing `PMTask.waiting` on work start happen only in the single `StateSyncBridge` work-start observer (`src/lib/pm/workStart.ts`); do not advance status or clear waiting from individual start paths.
 - Pomodoro logs carry the nullable `work_window_id`; the Today pomodoro summary counts windows, not log rows.
+- Timer leave/enter transitions are published only by `AppStateContext` command wrappers via `subscribeTimerTransitions` (types in `src/state/timerTransitions.ts`); never derive them from state diffs, and keep refresh, hydration, reconciliation, and natural completion silent.
 - `src-tauri/` contains only the native Tauri startup shell and retained plugin configuration.
 - `e2e/` contains Playwright tests against the real React app and local Supabase.
 - `supabase/` contains the schema/RLS migration, local Auth configuration, invite-signup Edge Function, and setup notes.
