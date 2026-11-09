@@ -14,6 +14,8 @@ import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { toLocalDateKey } from "../lib/timer";
 import { makeActiveTimer, makeAppState } from "../test/mockTauri";
 import type { AppStateData, PMTask, Project, Task } from "../state/types";
+import { ResumeMemoProvider } from "../state/ResumeMemoContext";
+import * as resumeStore from "../lib/resume";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -94,7 +96,14 @@ const SelectedTaskActions = () => {
     </> : null;
 };
 
-function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode) {
+function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode, memoEnabled = false) {
+    const content = <>
+        <SelectionProbe />
+        {children}
+        <SelectedTaskActions />
+        {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
+        <TimerPanel />
+    </>;
     return (
         <MemoryRouter>
             <TauriCloseProvider>
@@ -103,11 +112,7 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.
                         <AppStateProvider>
                             <ProjectManagerProvider>
                                 <HabitProvider>
-                                    <SelectionProbe />
-                                    {children}
-                                    <SelectedTaskActions />
-                                    {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
-                                    <TimerPanel />
+                                    {memoEnabled ? <ResumeMemoProvider>{content}</ResumeMemoProvider> : content}
                                 </HabitProvider>
                             </ProjectManagerProvider>
                         </AppStateProvider>
@@ -130,6 +135,142 @@ async function renderWithTasks(tasks: Record<string, PMTask>, projects: Record<s
 }
 
 beforeEach(() => localStorage.clear());
+
+async function setupMemoTimer(zeroElapsed = false) {
+    const now = Date.now();
+    const started = new Date(now - (zeroElapsed ? 0 : 60_000)).toISOString();
+    const data = new InMemoryDataAccess(makeAppState({
+        tasks: { a: makeAppTask("a", "Task A"), b: makeAppTask("b", "Task B") }, active_task: "a",
+        timer: makeActiveTimer({ task_id: "a", started_at: started, window_started_at: started, ends_at: new Date(now + 1_440_000).toISOString() }),
+    }));
+    await data.savePMState({ projects: {}, tasks: {
+        pa: makePMTask({ id: "pa", title: "Task A", appTaskId: "a", estimatePomos: 2 }),
+        pb: makePMTask({ id: "pb", title: "Task B", appTaskId: "b", estimatePomos: 2 }),
+    }, meta: { initializedAt: started } });
+    let current!: HandoffControls;
+    const view = render(wrap(data, undefined, <HandoffProbe onChange={(value) => { current = value; }} />, true));
+    await waitFor(() => expect(current?.pm.state.tasks.pb).toBeDefined());
+    await screen.findByRole("button", { name: "Pause" });
+    return { ...view, data, get current() { return current; } };
+}
+
+describe("TimerPanel exit memo integration", () => {
+    it.each(["Pause", "End focus"])("commits %s before capture and abandon leaves timer state untouched", async action => {
+        const view = await setupMemoTimer();
+        const save = vi.spyOn(resumeStore, "saveResumeNote");
+        const pause = vi.spyOn(view.data, "pauseTimer");
+        const stop = vi.spyOn(view.data, "stopWorkTimer");
+        const resume = vi.spyOn(view.data, "resumeTimer");
+        fireEvent.click(screen.getByRole("button", { name: action }));
+        await screen.findByRole("dialog", { name: "What were you doing in Task A?" });
+        if (action === "Pause") expect(view.current.app.state?.timer?.paused).toBe(true);
+        else expect(view.current.app.state?.timer).toBeNull();
+        const committed = structuredClone(view.data.store.state);
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        expect(view.data.store.state).toEqual(committed);
+        expect(pause).toHaveBeenCalledTimes(action === "Pause" ? 1 : 0);
+        expect(stop).toHaveBeenCalledTimes(action === "End focus" ? 1 : 0);
+        expect(resume).not.toHaveBeenCalled();
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it.each(["Pause", "End focus"])("opens no capture after a rejected %s command", async action => {
+        const view = await setupMemoTimer();
+        vi.spyOn(view.data, action === "Pause" ? "pauseTimer" : "stopWorkTimer").mockRejectedValue(new Error("Command rejected"));
+        fireEvent.click(screen.getByRole("button", { name: action }));
+        await screen.findByText("Command rejected");
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(view.data.store.state.timer?.paused).toBe(false);
+    });
+
+    it.each([false, true])("hands paused A to B with one dialog at a time and read-only saved A (incoming memo=%s)", async incomingMemo => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            vi.setSystemTime(new Date("2026-11-09T14:03:00Z"));
+            const view = await setupMemoTimer();
+            fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+            await screen.findByRole("dialog");
+            vi.setSystemTime(new Date("2026-11-09T14:04:00Z"));
+            fireEvent.change(screen.getByLabelText("Where I am"), { target: { value: "Saved after pausing" } });
+            fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+            await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+            if (incomingMemo) resumeStore.saveResumeNote("b", { whereIAm: "B memo", nextAction: "B next", savedAt: new Date().toISOString() });
+            const write = vi.spyOn(resumeStore, "saveResumeNote");
+            const observed: { dialogs: number; switchOpen: boolean; focus: Element | null }[] = [];
+            const observer = new MutationObserver(() => {
+                observed.push({ dialogs: screen.queryAllByRole("dialog").length, switchOpen: Boolean(screen.queryByRole("dialog", { name: "Switch task" })), focus: document.activeElement });
+            });
+            observer.observe(view.container, { childList: true, subtree: true });
+            const invoker = screen.getByRole("button", { name: "Switch" });
+            invoker.focus(); fireEvent.click(invoker);
+            expect(screen.getAllByRole("dialog")).toHaveLength(1);
+            const focusOrder: Element[] = [];
+            const onFocus = (event: FocusEvent) => { if (event.target instanceof Element) focusOrder.push(event.target); };
+            document.addEventListener("focusin", onFocus);
+            let committedWhileSwitchOpen = false;
+            const unsubscribe = view.current.app.subscribeTimerTransitions(event => {
+                if (event.type === "enter" && event.reason === "switch") {
+                    committedWhileSwitchOpen = view.data.store.state.timer?.task_id === "b" && Boolean(screen.queryByRole("dialog", { name: "Switch task" }));
+                }
+            });
+            fireEvent.click(within(screen.getByRole("dialog", { name: "Switch task" })).getByRole("button", { name: /Task B/ }));
+            const memoDialog = await screen.findByRole("dialog", { name: "What were you doing in Task A?" });
+            await waitFor(() => expect(memoDialog).toHaveFocus());
+            unsubscribe(); observer.disconnect(); document.removeEventListener("focusin", onFocus);
+            expect(committedWhileSwitchOpen).toBe(true);
+            expect(observed.every(entry => entry.dialogs <= 1)).toBe(true);
+            expect(focusOrder.indexOf(invoker)).toBeGreaterThanOrEqual(0);
+            expect(focusOrder.indexOf(memoDialog)).toBeGreaterThan(focusOrder.indexOf(invoker));
+            expect(memoDialog).toHaveFocus();
+            expect(screen.queryByRole("textbox")).toBeNull();
+            expect(screen.getByText("Saved after pausing")).toBeVisible();
+            expect(screen.getByRole("button", { name: "Edit" })).toBeVisible();
+            expect(screen.getByText(incomingMemo ? "B memo" : "Starting fresh — no note yet.")).toBeVisible();
+            const committed = structuredClone(view.data.store.state);
+            fireEvent.keyDown(memoDialog, { key: "Enter" });
+            expect(screen.queryByRole("dialog")).toBeNull();
+            expect(write).not.toHaveBeenCalled();
+            expect(view.data.store.state).toEqual(committed);
+            expect(committed.timer).toMatchObject({ task_id: "b", paused: false });
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("ends paused focus directly and skips capture for a memo saved after the pause", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            vi.setSystemTime(new Date("2026-11-09T14:03:00Z"));
+            const view = await setupMemoTimer();
+            fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+            await screen.findByRole("dialog");
+            vi.setSystemTime(new Date("2026-11-09T14:04:00Z"));
+            fireEvent.change(screen.getByLabelText("Where I am"), { target: { value: "Paused memo" } });
+            fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+            await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+            expect(screen.getByRole("button", { name: "End focus" })).toBeVisible();
+            const resume = vi.spyOn(view.data, "resumeTimer");
+            const stop = vi.spyOn(view.data, "stopWorkTimer");
+            fireEvent.click(screen.getByRole("button", { name: "End focus" }));
+            await waitFor(() => expect(view.current.app.state?.timer).toBeNull());
+            await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+            expect(stop).toHaveBeenCalledOnce(); expect(resume).not.toHaveBeenCalled();
+            expect(screen.queryByRole("dialog")).toBeNull();
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("opens no memo for a real zero-elapsed SwitchSheet handover", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            vi.setSystemTime(new Date("2026-11-09T14:03:00Z"));
+            const view = await setupMemoTimer(true);
+            fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+            fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ }));
+            await waitFor(() => expect(view.current.app.state?.timer?.task_id).toBe("b"));
+            await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+            expect(screen.queryByRole("dialog")).toBeNull();
+            expect(view.data.store.state.logs).toHaveLength(0);
+        } finally { vi.useRealTimers(); }
+    });
+});
 
 type HandoffControls = { app: ReturnType<typeof useAppState>; pm: ReturnType<typeof usePM> };
 function HandoffProbe({ onChange }: { onChange: (value: HandoffControls) => void }) {

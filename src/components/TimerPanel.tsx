@@ -661,7 +661,7 @@ export const TimerPanel: React.FC = () => {
                                     Retry Transition
                                 </button>
                             )}
-                            {timer && !isPaused && timer.kind === "Work" && ms > 0 && (
+                            {timer && timer.kind === "Work" && ms > 0 && (
                                 <button
                                     className={`${ACTION_BUTTON} border-rose-800 bg-rose-950/30 text-rose-200 hover:bg-rose-900/40`}
                                     onMouseEnter={() => play("hover")}

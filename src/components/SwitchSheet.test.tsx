@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode, useState } from "react";
+import { ResumeMemoProvider, useResumeMemo } from "../state/ResumeMemoContext";
+import { AppStateProvider, useAppState } from "../state/AppStateContext";
+import { ProjectManagerProvider } from "../state/ProjectManagerContext";
+import { DataProvider } from "../state/DataContext";
+import { SyncProvider } from "../state/SyncContext";
+import { TauriCloseProvider } from "../state/TauriCloseContext";
+import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
+import { makeAppState } from "../test/mockTauri";
 import { SwitchSheet, type SwitchSheetProps } from "./SwitchSheet";
 import type { RankedCandidate } from "../lib/whatsNext";
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
@@ -15,6 +24,46 @@ function props(overrides: Partial<SwitchSheetProps> = {}): SwitchSheetProps {
 }
 
 describe("SwitchSheet", () => {
+    it("holds queued memo presentation through StrictMode focus cleanup and restores the invoker before the memo focuses", async () => {
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { A: {
+            id: "A", name: "Task A", target_pomodoros: 2, completed_pomodoros: 0, completed_at: null,
+            archived: false, break_skips: 0, created_at: "2026-11-09T14:00:00Z",
+        } } }));
+        function Flow() {
+            const memo = useResumeMemo();
+            const app = useAppState();
+            const [open, setOpen] = useState(false);
+            return <>
+                <button disabled={!app.state} onClick={() => setOpen(true)}>Open switch</button>
+                {open && <SwitchSheet {...props({ onSelect: () => memo.openMemo("A"), onClose: () => setOpen(false) })} />}
+            </>;
+        }
+        render(<StrictMode><TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="sheet-hold-owner">
+            <AppStateProvider><ProjectManagerProvider><ResumeMemoProvider><Flow /></ResumeMemoProvider></ProjectManagerProvider></AppStateProvider>
+        </SyncProvider></DataProvider></TauriCloseProvider></StrictMode>);
+        const invoker = await screen.findByRole("button", { name: "Open switch" });
+        await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+        expect(invoker).toBeEnabled();
+        invoker.focus(); fireEvent.click(invoker);
+        fireEvent.click(screen.getByRole("button", { name: /Task a/ }));
+        await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        expect(screen.getByRole("dialog", { name: "Switch task" })).toHaveFocus();
+        expect(screen.queryByLabelText("Where I am")).toBeNull();
+        const focusOrder: EventTarget[] = [];
+        const onFocus = (event: FocusEvent) => { if (event.target) focusOrder.push(event.target); };
+        document.addEventListener("focusin", onFocus);
+        fireEvent.click(screen.getByRole("button", { name: "Close" }));
+        const memoDialog = await screen.findByRole("dialog", { name: "What were you doing in Task A?" });
+        await waitFor(() => expect(memoDialog).toHaveFocus());
+        document.removeEventListener("focusin", onFocus);
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        expect(memoDialog).toHaveFocus();
+        expect(focusOrder.indexOf(invoker)).toBeGreaterThanOrEqual(0);
+        expect(focusOrder.indexOf(memoDialog)).toBeGreaterThan(focusOrder.indexOf(invoker));
+        fireEvent.keyDown(memoDialog, { key: "Escape" });
+        expect(invoker).toHaveFocus();
+    });
     it("labels a modal, renders card details and only present tier headers", () => {
         const input = props({ result: { top: [candidate("a", "top-pick"), candidate("c", "next-up")], continuation: [] } });
         render(<SwitchSheet {...input} />);

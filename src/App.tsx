@@ -34,6 +34,7 @@ import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataA
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
 import { supabase } from "./lib/supabase";
 import { TAURI_WINDOWS_ENTRY_PATH } from "./lib/integrations/githubOAuthReturn";
+import { ResumeMemoProvider } from "./state/ResumeMemoContext";
 
 // Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
 // only downloaded when their route is visited, keeping the entry chunk small.
@@ -167,12 +168,14 @@ const AuthenticatedShell: React.FC = () => {
                                         <PetProvider>
                                             <PetActivityProvider>
                                                 <PetReminderProvider>
+                                                <ResumeMemoProvider>
                                                 <StateSyncBridge />
                                                 <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
                                                     <TopNav />
                                                     <UnsyncedBanner />
                                                     <div className="flex-1 min-h-0"><Outlet /></div>
                                                 </div>
+                                                </ResumeMemoProvider>
                                                 </PetReminderProvider>
                                             </PetActivityProvider>
                                         </PetProvider>

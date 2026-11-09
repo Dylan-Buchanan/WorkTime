@@ -3,6 +3,7 @@ import type { Project, TaskPriority } from "../state/types";
 import type { PromotionTier, RankedCandidate, WhatsNextResult } from "../lib/whatsNext";
 import { formatPomodoroCount } from "../lib/timer";
 import { Check, ChevronRight, Bot, User } from "lucide-react";
+import { useOptionalResumeMemo } from "../state/ResumeMemoContext";
 
 export interface SwitchSheetProps {
     mode: "switch" | "waiting";
@@ -64,7 +65,9 @@ export function SwitchSheet(props: SwitchSheetProps) {
     const closeRef = useRef(onClose);
     closeRef.current = onClose;
     const [expanded, setExpanded] = useState(false);
+    const holdMemoPresentation = useOptionalResumeMemo()?.holdMemoPresentation;
     useEffect(() => {
+        const releaseMemoPresentation = holdMemoPresentation?.();
         const invoker = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         const dialog = dialogRef.current;
         dialog?.focus();
@@ -84,8 +87,9 @@ export function SwitchSheet(props: SwitchSheetProps) {
         return () => {
             document.removeEventListener("keydown", onKey);
             if (invoker?.isConnected) invoker.focus();
+            releaseMemoPresentation?.();
         };
-    }, []);
+    }, [holdMemoPresentation]);
 
     const card = ({ task, projectId, remainingPomodoros, dueDate }: RankedCandidate, index: number) => {
         const project = projectId ? projects[projectId] : undefined;
