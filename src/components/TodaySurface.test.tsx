@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TodaySurface } from "./TodaySurface";
 import { AppStateProvider, useAppState } from "../state/AppStateContext";
@@ -152,6 +152,23 @@ function expandSurface() {
 beforeEach(() => localStorage.clear());
 
 describe("TodaySurface", () => {
+    it("pins waiting entries with accessible dots and includes their work in the summary", async () => {
+        await renderSurface({ tasks: {
+            due: pmTask({ id: "due", title: "Due now", estimatePomos: 2, dueDate: todayKey() }),
+            waiting: pmTask({ id: "waiting", title: "Waiting flexible", estimatePomos: 3, waiting: { type: "agent", since: "2026-08-12T09:00:00Z" } }),
+            person: pmTask({ id: "person", title: "Waiting due", estimatePomos: 1, dueDate: todayKey(), waiting: { type: "person", since: "2026-08-12T09:00:00Z" } }),
+        } });
+        expect(await screen.findByText("3 tasks · 6p left")).toBeInTheDocument();
+        expandSurface();
+        const rows = screen.getAllByRole("listitem");
+        expect(rows.map((row) => within(row).getByRole("button", { name: /^Select / }).getAttribute("aria-label")))
+            .toEqual(["Select Waiting due", "Select Waiting flexible", "Select Due now"]);
+        expect(within(rows[0]).getByRole("img", { name: "Waiting on person" })).toHaveAttribute("title", "Waiting on person");
+        expect(within(rows[1]).getByRole("img", { name: "Waiting on agent" })).toBeInTheDocument();
+        expect(screen.getByText("3p left of 3p")).toBeInTheDocument();
+        expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Tasks", "Habits", "Pomodoros"]);
+    });
+
     it("summarises the day while collapsed and reveals the groups when expanded", async () => {
         await renderSurface({
             tasks: {

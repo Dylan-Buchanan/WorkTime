@@ -1,4 +1,5 @@
-import type { Habit, HabitCompletion, HabitFrequency, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
+import type { Habit, HabitCompletion, HabitFrequency, PMTask, PMTaskWaiting, PomodoroLogEntry, Project, Task } from "../state/types";
+import { waitingOf } from "./pm/waiting";
 import { getBucketKey, isHabitCompleted } from "./habits";
 import {
     classifyDueScope,
@@ -24,6 +25,7 @@ export interface TodayTaskEntry {
     workedPomos: number;
     remainingPomodoros: number;
     isActive: boolean;
+    waiting: PMTaskWaiting | null;
 }
 
 export interface TodayTaskList {
@@ -67,6 +69,7 @@ function toTodayTask(
         workedPomos: entry.workedPomos,
         remainingPomodoros: entry.remainingPomodoros,
         isActive: entry.isActive,
+        waiting: waitingOf(entry.task),
     };
 }
 
@@ -83,6 +86,8 @@ export function buildTodayTasks(input: BuildTodayTasksInput): TodayTaskList {
         })
         .map((entry) => toTodayTask(entry, input.projects, todayKey))
         .sort((left, right) => {
+            const waitingDelta = Number(right.waiting !== null) - Number(left.waiting !== null);
+            if (waitingDelta !== 0) return waitingDelta;
             const bucketDelta = BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket];
             if (bucketDelta !== 0) return bucketDelta;
             const leftKey = left.dueKey ?? "9999-12-31";

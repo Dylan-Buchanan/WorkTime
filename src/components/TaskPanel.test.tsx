@@ -8,6 +8,7 @@ import { DataProvider } from "../state/DataContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
+import type { PMTask } from "../state/types";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -34,6 +35,28 @@ function sortSelect(): HTMLSelectElement {
 }
 
 beforeEach(() => localStorage.clear());
+
+describe("TaskPanel waiting", () => {
+    it.each(["agent", "person"] as const)("shows an accessible %s dot and a row tooltip line", async (type) => {
+        const appTask = {
+            id: "app-task", name: "Waiting task", target_pomodoros: 2, completed_pomodoros: 0,
+            created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false,
+        };
+        const task: PMTask = {
+            id: "pm-task", title: "Waiting task", appTaskId: appTask.id, projectId: null,
+            status: "In Progress", priority: "Medium", timeSpentMinutes: 0, tags: [], links: [], checklist: [],
+            sortOrder: 0, isArchived: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+            relatedTo: [], waiting: { type, since: "2026-08-12T09:00:00Z" },
+        };
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { [appTask.id]: appTask }, active_task: appTask.id }));
+        await data.savePMState({ projects: {}, tasks: { [task.id]: task }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        render(wrap(data, <TaskPanel />));
+        const dot = await screen.findByRole("img", { name: `Waiting on ${type}` });
+        expect(dot).toHaveAttribute("title", `Waiting on ${type}`);
+        expect(dot.closest("li")).toHaveAttribute("title", `Project: No project\nPriority: Medium\nEstimate: 2 pomodoros\nWaiting on ${type}`);
+        expect(screen.getByText("ACTIVE")).toBeInTheDocument();
+    });
+});
 
 describe("TaskPanel sort persistence", () => {
     it("persists the selected sort option and restores it on a fresh mount", () => {

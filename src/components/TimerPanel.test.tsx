@@ -84,6 +84,15 @@ const ActiveTaskSwitcher: React.FC<{ taskId: string }> = ({ taskId }) => {
     return <button onClick={() => void setActiveTask(taskId)}>Switch active timer task</button>;
 };
 
+const SelectedTaskActions = () => {
+    const { state, updateTask } = usePM();
+    const id = state.ui.selectedTaskId;
+    return id ? <>
+        <button onClick={() => updateTask(id, { status: "Done" })}>Complete selected PM task</button>
+        <button onClick={() => updateTask(id, { isArchived: true })}>Archive selected PM task</button>
+    </> : null;
+};
+
 function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
     return (
         <MemoryRouter>
@@ -94,6 +103,7 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string) {
                             <ProjectManagerProvider>
                                 <HabitProvider>
                                     <SelectionProbe />
+                                    <SelectedTaskActions />
                                     {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
                                     <TimerPanel />
                                 </HabitProvider>
@@ -118,6 +128,58 @@ async function renderWithTasks(tasks: Record<string, PMTask>, projects: Record<s
 }
 
 beforeEach(() => localStorage.clear());
+
+describe("TimerPanel waiting badge", () => {
+    it.each([
+        { type: "agent" as const, paused: false },
+        { type: "person" as const, paused: false },
+        { type: "agent" as const, paused: true },
+        { type: "person" as const, paused: true },
+    ])("shows $type waiting while paused=$paused and clears only the flag", async ({ type, paused }) => {
+        const task = makeAppTask("app-waiting", "Waiting work");
+        const timer = makeActiveTimer({ task_id: task.id, paused, paused_remaining_secs: paused ? 713 : 0 });
+        const data = await renderWithTasks({
+            waiting: makePMTask({ id: "waiting", appTaskId: task.id, waiting: { type, since: "2026-01-01T00:00:00Z" } }),
+        }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer });
+        const badge = await screen.findByText(`WAITING · ${type.toUpperCase()}`);
+        expect(badge.parentElement).toHaveAttribute("title", expect.stringMatching(new RegExp(`^Waiting on ${type} · \\d+ days$`)));
+        expect(screen.getByText(paused ? "PAUSED" : "WORK")).toBeInTheDocument();
+        const pause = vi.spyOn(data, "pauseTimer");
+        const resume = vi.spyOn(data, "resumeTimer");
+        const stop = vi.spyOn(data, "stopWorkTimer");
+        const before = { ...data.store.state.timer! };
+
+        fireEvent.click(screen.getByRole("button", { name: "Clear waiting" }));
+
+        await waitFor(() => expect(screen.queryByText(`WAITING · ${type.toUpperCase()}`)).not.toBeInTheDocument());
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.waiting.waiting).toBeNull());
+        expect(data.store.state.timer).toEqual(before);
+        expect(data.store.state.timer).toMatchObject({ ends_at: timer.ends_at, paused, paused_remaining_secs: timer.paused_remaining_secs });
+        expect(pause).not.toHaveBeenCalled();
+        expect(resume).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+    });
+
+    it.each(["ShortBreak", "LongBreak"] as const)("does not show waiting on a %s", async (kind) => {
+        const task = makeAppTask("app-break", "Break task");
+        await renderWithTasks({ waiting: makePMTask({ id: "waiting", appTaskId: task.id, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }) },
+            {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id, kind }) });
+        await screen.findByText(kind.toUpperCase());
+        expect(screen.queryByText(/WAITING ·/)).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Clear waiting" })).not.toBeInTheDocument();
+    });
+
+    it("uses the deterministic app-task link instead of a title fallback or details selection", async () => {
+        const task = makeAppTask("app-work", "Title fallback");
+        await renderWithTasks({
+            other: makePMTask({ id: "other", title: task.name, waiting: { type: "person", since: "2026-01-01T00:00:00Z" } }),
+            later: makePMTask({ id: "later", appTaskId: task.id, sortOrder: 2, waiting: { type: "person", since: "2026-01-01T00:00:00Z" } }),
+            first: makePMTask({ id: "first", appTaskId: task.id, sortOrder: 1, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }),
+        }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id }) });
+        expect(await screen.findByText("WAITING · AGENT")).toBeInTheDocument();
+        expect(screen.queryByText("WAITING · PERSON")).not.toBeInTheDocument();
+    });
+});
 
 describe("TimerPanel task details", () => {
     it("offers a retry when an expired timer cannot transition", async () => {
@@ -356,6 +418,44 @@ describe("TimerPanel projected finish", () => {
 });
 
 describe("TimerPanel today surface", () => {
+    it.each([
+        ["Done", "Complete selected PM task"],
+        ["archived", "Archive selected PM task"],
+    ])("clears a waiting Today selection and closes details when it becomes %s", async (_state, action) => {
+        await renderWithTasks({ today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2,
+            waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }) });
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await screen.findByRole("button", { name: "Select Waiting Today task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today"));
+        expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "false");
+
+        fireEvent.click(screen.getByRole("button", { name: action }));
+
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toBeEmptyDOMElement());
+        expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "true");
+        expect(within(todayRegion).queryByRole("button", { name: "Select Waiting Today task" })).not.toBeInTheDocument();
+        expect(within(todayRegion).queryByRole("img", { name: "Waiting on agent" })).not.toBeInTheDocument();
+    });
+
+    it("returns details to the running task after the explicit Today task becomes Done", async () => {
+        const task = makeAppTask("running", "Running work");
+        await renderWithTasks({
+            running: makePMTask({ id: "running", appTaskId: task.id, title: "Running PM task", estimatePomos: 2 }),
+            today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }),
+        }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id }) });
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await screen.findByRole("button", { name: "Select Waiting Today task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("today"));
+        fireEvent.click(screen.getByRole("button", { name: "Complete selected PM task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("running"));
+        const details = document.getElementById("timer-task-details-panel")!;
+        expect(details).toHaveAttribute("aria-hidden", "false");
+        expect(within(details).getByText("Running PM task")).toBeInTheDocument();
+        expect(within(details).queryByText("Waiting Today task")).not.toBeInTheDocument();
+    });
+
     it("renders the today surface below the projected-finish card", async () => {
         await renderWithTasks({
             today: makePMTask({ id: "today", title: "Due today", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
