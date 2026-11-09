@@ -2,6 +2,7 @@ import React from "react";
 import { usePM } from "../../state/ProjectManagerContext";
 import { PMTask, TaskPriority, TaskStatus } from "../../state/types";
 import { useAppState } from "../../state/AppStateContext";
+import { waitingOf } from "../../lib/pm/waiting";
 import { useNavigate } from "react-router-dom";
 import type { GoogleCalendarDataAccess } from "../../lib/data/GoogleCalendarDataAccess";
 import type { GoogleCalendarOAuthReturn } from "../../lib/integrations";
@@ -91,6 +92,9 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
 
     if (!task) return <div className="h-full flex items-center justify-center text-xs text-neutral-500">Select a task</div>;
 
+    const waiting = waitingOf(task);
+    const waitingAvailable = task.status !== "Done" && !task.isArchived;
+
     return (
         <div className="flex flex-col h-full min-h-0 text-xs">
             <div className="px-4 py-3 border-b border-neutral-800 space-y-2 bg-neutral-900/30">
@@ -116,6 +120,43 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
                             <option key={s}>{s}</option>
                         ))}
                     </Select>
+                    {waitingAvailable && (waiting ? (
+                        <div className="flex items-center gap-1">
+                            <div className="inline-flex overflow-hidden rounded border border-neutral-800" role="group" aria-label="Waiting on">
+                                {(["agent", "person"] as const).map((type) => (
+                                    <button
+                                        key={type}
+                                        type="button"
+                                        aria-pressed={waiting.type === type}
+                                        onClick={() => updateTask(task.id, { waiting: { type, since: waiting.since } })}
+                                        className={`px-2 py-1 text-[10px] transition-colors ${
+                                            waiting.type === type
+                                                ? "bg-neutral-700 text-neutral-100"
+                                                : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+                                        }`}
+                                    >
+                                        {type === "agent" ? "Agent" : "Person"}
+                                    </button>
+                                ))}
+                            </div>
+                            <button
+                                type="button"
+                                aria-label="Clear waiting"
+                                onClick={() => updateTask(task.id, { waiting: null })}
+                                className="px-2 py-1 rounded text-[10px] text-neutral-500 hover:text-neutral-100 hover:bg-neutral-800 transition-colors"
+                            >
+                                ×
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => updateTask(task.id, { waiting: { type: "agent", since: new Date().toISOString() } })}
+                            className="px-2 py-1 rounded text-[10px] text-neutral-300 bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                        >
+                            Waiting
+                        </button>
+                    ))}
                 </div>
             </div>
             <div className="flex-1 min-h-0 app-scrollbar overflow-y-auto px-4 py-4 space-y-5">

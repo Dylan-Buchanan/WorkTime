@@ -164,6 +164,7 @@ describe("goalSetFile serializeGoalSet", () => {
             expect(json).not.toContain(banned);
         }
         expect(json).not.toMatch(/"id"/);
+        expect(json).not.toContain("waiting");
         const raw = JSON.parse(json);
         expect(Object.keys(raw.goals[1].metric)).toEqual(["label", "target", "unit"]);
         expect(raw.goals[1].metric).toEqual({ label: "Sessions", target: 8, unit: "" });
@@ -218,6 +219,7 @@ describe("goalSetFile parseGoalSet", () => {
         const file = parseGoalSet(serializeGoalSet(tracker, goals));
         expect(file.tracker).toEqual(trackerDefinitionOf(tracker));
         expect(file.tracker.cadence).toEqual(GOALS_FIXTURE_EVERY_N_WEEKS);
+        expect(JSON.stringify(file)).not.toContain("waiting");
 
         const materialized = materializeGoalSet(file, NOW, ids());
         expect(materialized.tracker).not.toBe(tracker);
