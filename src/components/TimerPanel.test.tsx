@@ -16,6 +16,9 @@ import { makeActiveTimer, makeAppState } from "../test/mockTauri";
 import type { AppStateData, PMTask, Project, Task } from "../state/types";
 import { ResumeMemoProvider } from "../state/ResumeMemoContext";
 import * as resumeStore from "../lib/resume";
+import { afterEach } from "vitest";
+import { useResumeMemo } from "../state/ResumeMemoContext";
+import type { TimerEnterReason } from "../state/timerTransitions";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -911,4 +914,360 @@ it("rechecks project workability using the sheet's open-time date", async () => 
     } finally { vi.useRealTimers(); }
     await act(async () => { view.current.pm.updateProject(projectId, { workableDays: [tomorrow] }); });
     expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
+});
+
+const CARD_NOW = "2026-11-09T14:00:00.000Z";
+const CARD_MEMO = { whereIAm: "Card parser draft", nextAction: "Card error tests", blocker: "Card schema question", savedAt: "2026-11-09T13:52:00.000Z" };
+type CardControls = HandoffControls & { memo: ReturnType<typeof useResumeMemo> };
+function CardProbe({ onChange }: { onChange: (value: CardControls) => void }) {
+    const app = useAppState();
+    const pm = usePM();
+    const memo = useResumeMemo();
+    useLayoutEffect(() => onChange({ app, pm, memo }), [app, pm, memo, onChange]);
+    return null;
+}
+function cardLog(taskId = "a", wasBreak = false, duration = 0): AppStateData["logs"][number] {
+    return { id: `history-${taskId}`, task_id: taskId, was_break: wasBreak, break_skipped: wasBreak,
+        duration_minutes: duration, finished_at: "2026-11-09T13:00:00.000Z" };
+}
+async function setupResumeCard(options: {
+    reason?: TimerEnterReason;
+    state?: Partial<AppStateData>;
+    pmTasks?: Record<string, PMTask>;
+} = {}) {
+    const reason = options.reason ?? "resume";
+    const initialTimer = reason === "start" ? null : makeActiveTimer({
+        task_id: reason === "switch" || reason === "break-end" ? "b" : "a",
+        kind: reason === "break-end" ? "ShortBreak" : "Work",
+        paused: reason === "resume", paused_remaining_secs: reason === "resume" ? 1500 : 0,
+        started_at: CARD_NOW, window_started_at: CARD_NOW,
+        ends_at: new Date(Date.parse(CARD_NOW) + (reason === "break-end" ? 1000 : 1_500_000)).toISOString(),
+    });
+    const data = new InMemoryDataAccess(makeAppState({
+        tasks: { a: makeAppTask("a", "Task A"), b: makeAppTask("b", "Task B") },
+        active_task: reason === "switch" ? "b" : "a", timer: initialTimer, ...options.state,
+    }));
+    await data.savePMState({ projects: {}, tasks: options.pmTasks ?? {
+        pa: makePMTask({ id: "pa", title: "PM title differs", appTaskId: "a", estimatePomos: 2 }),
+        pb: makePMTask({ id: "pb", title: "Task B", appTaskId: "b", estimatePomos: 2 }),
+    }, meta: { initializedAt: CARD_NOW } });
+    let current!: CardControls;
+    const tree = () => wrap(data, undefined, <CardProbe onChange={value => { current = value; }} />, true);
+    const view = render(tree());
+    await waitFor(() => expect(current?.app.state).not.toBeNull());
+    await waitFor(() => expect(Object.keys(current.pm.state.tasks)).toHaveLength(Object.keys(options.pmTasks ?? { pa: 1, pb: 1 }).length));
+    async function enter() {
+        await act(async () => {
+            if (reason === "start") await current.app.startWork();
+            else if (reason === "resume") await current.app.resumeTimer();
+            else if (reason === "switch") await current.app.setActiveTask("a");
+            else {
+                vi.setSystemTime(new Date(Date.parse(initialTimer!.ends_at) + 1));
+                await current.app.completeTimer();
+            }
+        });
+        await waitFor(() => expect(current.memo.lastEnter?.reason).toBe(reason));
+    }
+    return { ...view, data, tree, enter, get current() { return current; } };
+}
+const resumeCard = () => screen.queryByRole("region", { name: "Resume Task A" });
+
+describe("TimerPanel resume card integration", () => {
+    beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(CARD_NOW)); });
+    afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+    it.each([
+        { reason: "resume", ageMs: 30 * 60_000, weight: "full" },
+        { reason: "switch", ageMs: 2 * 60 * 60_000, weight: "full" },
+        { reason: "start", ageMs: 2 * 60 * 60_000 + 1, weight: "dimmed-line" },
+        { reason: "break-end", ageMs: 60_000, weight: "dimmed-line" },
+    ] as const)("T12 $reason with memo age $ageMs has weight $weight without requiring logs", async ({ reason, ageMs, weight }) => {
+        resumeStore.saveResumeNote("a", { ...CARD_MEMO, savedAt: new Date(Date.parse(CARD_NOW) - ageMs).toISOString() });
+        const view = await setupResumeCard({ reason });
+        expect(resumeCard()).toBeNull();
+        await view.enter();
+        expect(resumeCard()).toHaveAttribute("data-weight", weight);
+        expect(resumeCard()).toHaveTextContent("Task A");
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.whereIAm);
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.nextAction);
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.blocker);
+        vi.setSystemTime(new Date(Date.parse(CARD_NOW) + 5 * 60 * 60_000));
+        // A metadata render must not age a card relative to the wall clock.
+        await act(async () => { view.current.pm.setSelectedTask("pb"); });
+        expect(resumeCard()).toHaveAttribute("data-weight", weight);
+    });
+
+    it.each(["start", "resume", "switch"] as const)("T12 %s with a zero-minute non-break task log shows the full empty state", async reason => {
+        const view = await setupResumeCard({ reason, state: { logs: [cardLog()] } });
+        await view.enter();
+        expect(resumeCard()).toHaveAttribute("data-weight", "full");
+        expect(within(resumeCard()!).getByText("No note from your last exit")).toBeVisible();
+        expect(within(resumeCard()!).getByRole("button", { name: "Add note" })).toBeVisible();
+    });
+
+    it.each([
+        { history: "brand-new", logs: [], credit: 0 },
+        { history: "aggregate-only credit", logs: [], credit: 3 },
+        { history: "break/skip-only history", logs: [cardLog("a", true)], credit: 0 },
+        { history: "another task's work", logs: [cardLog("b")], credit: 0 },
+    ])("T12 start without a memo and $history shows no card", async ({ logs, credit }) => {
+        const view = await setupResumeCard({ reason: "start", state: {
+            tasks: { a: { ...makeAppTask("a", "Task A"), completed_pomodoros: credit } }, logs,
+        }, pmTasks: { pa: makePMTask({ id: "pa", appTaskId: "a", workedPomos: 8 }) } });
+        await view.enter();
+        expect(resumeCard()).toBeNull();
+    });
+
+    it("T12 break-end without a memo shows nothing despite prior work", async () => {
+        const view = await setupResumeCard({ reason: "break-end", state: { logs: [cardLog()] } });
+        await view.enter();
+        expect(resumeCard()).toBeNull();
+    });
+
+    it.each(["resume", "start", "switch", "break-end"] as const)("T12 dismissed memo stays hidden on %s without becoming an empty card", async reason => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        resumeStore.dismissResumeNote("a", CARD_NOW);
+        const view = await setupResumeCard({ reason, state: { logs: [cardLog()] } });
+        await view.enter();
+        expect(resumeCard()).toBeNull();
+        expect(screen.queryByText("No note from your last exit")).toBeNull();
+    });
+
+    it("T12 mismatched enter/task hides, regardless of selected details", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        expect(resumeCard()).toBeVisible();
+        await act(async () => { view.current.pm.setSelectedTask("pb"); });
+        expect(resumeCard()).toHaveAttribute("data-task-id", "a");
+        // Snapshot refresh changes the occupant silently, retaining the old enter.
+        view.data.store.state.timer = { ...view.data.store.state.timer!, task_id: "b" };
+        await act(async () => { await view.current.app.refresh(); });
+        expect(view.current.memo.lastEnter?.taskId).toBe("a");
+        expect(screen.queryByRole("region", { name: /^Resume / })).toBeNull();
+    });
+
+    it("pause, save, resume shows fields and age; any leave hides the card", async () => {
+        const view = await setupMemoTimer();
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        await screen.findByRole("dialog");
+        fireEvent.change(screen.getByLabelText("Where I am"), { target: { value: CARD_MEMO.whereIAm } });
+        fireEvent.change(screen.getByLabelText("Next action"), { target: { value: CARD_MEMO.nextAction } });
+        fireEvent.change(screen.getByLabelText("Open question or blocker (optional)"), { target: { value: CARD_MEMO.blocker } });
+        fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(resumeCard()).toBeNull();
+        vi.setSystemTime(new Date(Date.parse(CARD_NOW) + 8 * 60_000));
+        fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+        await waitFor(() => expect(resumeCard()).toHaveAttribute("data-weight", "full"));
+        expect(resumeCard()).toHaveTextContent("8 min ago");
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.whereIAm);
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.nextAction);
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.blocker);
+        fireEvent.click(screen.getByRole("button", { name: "End focus" }));
+        await screen.findByRole("dialog");
+        expect(resumeCard()).toBeNull();
+        expect(view.data.store.state.timer).toBeNull();
+    });
+
+    it("cold mount with a running timer and memo invents no card or enter", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard({ state: { timer: makeActiveTimer({ task_id: "a" }) } });
+        await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+        expect(view.current.memo.lastEnter).toBeNull();
+        expect(resumeCard()).toBeNull();
+    });
+
+    it("renders no card without the optional provider even after a real enter", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupHandoff({ paused: true });
+        await act(async () => { await view.current.app.resumeTimer(); });
+        expect(resumeCard()).toBeNull();
+        expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+    });
+
+    it("uses Work occupant over active_task and ignores title-fallback PM metadata", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard({ state: { active_task: "b" }, pmTasks: {
+            // An unrelated, archived title match must not make Task A gone.
+            wrong: makePMTask({ id: "wrong", title: "Task A", appTaskId: "b", isArchived: true }),
+        } });
+        await view.enter();
+        expect(resumeCard()).toHaveAttribute("data-task-id", "a");
+        expect(view.current.app.state?.active_task).toBe("b");
+        expect(resumeCard()).toHaveTextContent(CARD_MEMO.whereIAm);
+    });
+
+    it("uses active_task during a break or idle, independent of the break occupant and open details", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        fireEvent.click(screen.getByRole("button", { name: "Task Details" }));
+        await act(async () => { view.current.pm.setSelectedTask("pb"); });
+        view.data.store.state.timer = makeActiveTimer({ task_id: "b", kind: "ShortBreak" });
+        await act(async () => { await view.current.app.refresh(); });
+        expect(resumeCard()).toHaveAttribute("data-task-id", "a");
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pb");
+        view.data.store.state.timer = null;
+        await act(async () => { await view.current.app.refresh(); });
+        expect(resumeCard()).toHaveAttribute("data-task-id", "a");
+    });
+
+    it.each(["finalize", "app archive", "PM archive", "missing app"])("hides on %s and retains the stored memo", async terminal => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        expect(resumeCard()).toBeVisible();
+        await act(async () => {
+            if (terminal === "finalize") await view.current.app.finalizeTask("a");
+            else if (terminal === "app archive") await view.current.app.archiveTask("a");
+            else if (terminal === "PM archive") view.current.pm.updateTask("pa", { isArchived: true });
+            else {
+                delete view.data.store.state.tasks.a;
+                await view.current.app.refresh();
+            }
+        });
+        expect(resumeCard()).toBeNull();
+        expect(resumeStore.getResumeNote("a")).toEqual(CARD_MEMO);
+        if (terminal === "PM archive") expect(view.current.app.state?.tasks.a.archived).toBe(false);
+    });
+
+    it("permits missing PM metadata and stays visible when a valid link arrives", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard({ pmTasks: {} });
+        await view.enter();
+        expect(resumeCard()).toBeVisible();
+        await act(async () => {
+            const task = await view.current.pm.createTask("Delayed metadata");
+            view.current.pm.updateTask(task.id, { appTaskId: "a" });
+        });
+        expect(resumeCard()).toBeVisible();
+    });
+
+    it("persists existing-note dismissal across remount/enters until a shared-sheet save clears it", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        fireEvent.click(within(resumeCard()!).getByRole("button", { name: "Dismiss" }));
+        await waitFor(() => expect(resumeCard()).toBeNull());
+        expect(resumeStore.getResumeNote("a")?.dismissedAt).toBe(CARD_NOW);
+        expect(view.current.memo.notesVersion).toBe(1);
+        view.rerender(view.tree());
+        expect(resumeCard()).toBeNull();
+        view.unmount();
+        const remount = render(view.tree());
+        await waitFor(() => expect(view.current.app.state?.timer?.task_id).toBe("a"));
+        await act(async () => { await view.current.app.pauseTimer(); });
+        await screen.findByRole("dialog");
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        vi.setSystemTime(new Date(Date.parse(CARD_NOW) + 60_000));
+        await view.enter();
+        expect(resumeCard()).toBeNull();
+        await act(async () => { view.current.memo.openMemo("a"); });
+        await screen.findByRole("dialog");
+        fireEvent.change(screen.getByLabelText("Next action"), { target: { value: "Replacement action" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(resumeCard()).toHaveTextContent("Replacement action");
+        expect(resumeStore.getResumeNote("a")?.dismissedAt).toBeUndefined();
+        expect(view.current.memo.notesVersion).toBe(1);
+        remount.unmount();
+    });
+
+    it("keeps the card visible and notesVersion unchanged when persistent dismiss fails", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        vi.spyOn(resumeStore, "dismissResumeNote").mockReturnValue(false);
+        fireEvent.click(within(resumeCard()!).getByRole("button", { name: "Dismiss" }));
+        expect(resumeCard()).toBeVisible();
+        expect(view.current.memo.notesVersion).toBe(0);
+        expect(resumeStore.getResumeNote("a")?.dismissedAt).toBeUndefined();
+    });
+
+    it("dismisses the empty state in memory without writes/version changes, then re-shows only for a different enter at", async () => {
+        const view = await setupResumeCard({ state: { logs: [cardLog()] } });
+        await view.enter();
+        const dismiss = vi.spyOn(resumeStore, "dismissResumeNote");
+        const save = vi.spyOn(resumeStore, "saveResumeNote");
+        const writes = vi.spyOn(Storage.prototype, "setItem");
+        fireEvent.click(within(resumeCard()!).getByRole("button", { name: "Dismiss" }));
+        expect(resumeCard()).toBeNull();
+        view.rerender(view.tree());
+        await act(async () => { view.current.pm.setSelectedTask("pb"); });
+        expect(resumeCard()).toBeNull();
+        expect(dismiss).not.toHaveBeenCalled();
+        expect(save).not.toHaveBeenCalled();
+        expect(writes.mock.calls.filter(([key]) => key === resumeStore.RESUME_NOTE_STORAGE_KEY)).toHaveLength(0);
+        expect(view.current.memo.notesVersion).toBe(0);
+        await act(async () => { await view.current.app.pauseTimer(); });
+        await screen.findByRole("dialog");
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        await view.enter(); // A different event object with the SAME at stays hidden.
+        expect(resumeCard()).toBeNull();
+        await act(async () => { await view.current.app.pauseTimer(); });
+        await screen.findByRole("dialog");
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        vi.setSystemTime(new Date(Date.parse(CARD_NOW) + 60_000));
+        await view.enter();
+        expect(resumeCard()).toHaveTextContent("No note from your last exit");
+        expect(view.current.memo.notesVersion).toBe(0);
+        expect(resumeStore.getResumeNote("a")).toBeNull();
+    });
+
+    it("Add opens the single shared sheet for the Work card task and a save re-reads via notesVersion", async () => {
+        const view = await setupResumeCard({ state: { active_task: "b", logs: [cardLog()] } });
+        await view.enter();
+        const before = structuredClone(view.data.store.state);
+        fireEvent.click(within(resumeCard()!).getByRole("button", { name: "Add note" }));
+        await screen.findByRole("dialog", { name: "What were you doing in Task A?" });
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        expect(view.data.store.state).toEqual(before);
+        expect(view.current.memo.lastEnter?.taskId).toBe("a");
+        fireEvent.change(screen.getByLabelText("Where I am"), { target: { value: "Added from card" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(resumeCard()).toHaveTextContent("Added from card");
+        expect(view.current.memo.notesVersion).toBe(1);
+        expect(resumeStore.getResumeNote("b")).toBeNull();
+    });
+
+    it("re-reads the store on each enter and card task change", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        await act(async () => { await view.current.app.pauseTimer(); });
+        await screen.findByRole("dialog");
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        resumeStore.saveResumeNote("a", { ...CARD_MEMO, nextAction: "Fresh external note" });
+        vi.setSystemTime(new Date(Date.parse(CARD_NOW) + 1000));
+        await view.enter();
+        expect(resumeCard()).toHaveTextContent("Fresh external note");
+        resumeStore.saveResumeNote("b", { ...CARD_MEMO, whereIAm: "Incoming B card" });
+        await act(async () => { await view.current.app.setActiveTask("b"); });
+        await waitFor(() => expect(screen.getByRole("region", { name: "Resume Task B" })).toHaveTextContent("Incoming B card"));
+        if (screen.queryByRole("dialog")) fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        expect(resumeCard()).toBeNull();
+    });
+
+    it("keeps the bounded card immediately before the action cluster, outside the details drawer", async () => {
+        resumeStore.saveResumeNote("a", { ...CARD_MEMO, whereIAm: "x".repeat(140) });
+        const view = await setupResumeCard();
+        await view.enter();
+        const card = resumeCard()!;
+        const actionCluster = card.nextElementSibling!;
+        expect(within(actionCluster as HTMLElement).getByRole("button", { name: "Waiting" })).toBeVisible();
+        expect(within(actionCluster as HTMLElement).getByRole("button", { name: "Pause" })).toBeVisible();
+        expect(card.closest("aside")).toBeNull();
+        expect(card.closest("[aria-live]")).toBeNull();
+        expect(card.parentElement).toHaveClass("min-w-0", "w-full");
+        expect(card.parentElement?.parentElement).toHaveClass("min-w-0", "flex-1");
+        fireEvent.click(screen.getByRole("button", { name: "Task Details" }));
+        expect(document.getElementById("timer-task-details-panel")).toHaveClass("md:w-80");
+        expect(card).toBeVisible();
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pa");
+        fireEvent.click(within(card).getByRole("button", { name: "Expand note" }));
+        expect(within(card).getByText("x".repeat(140))).toBeVisible();
+        expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pa");
+    });
 });

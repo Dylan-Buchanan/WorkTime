@@ -28,6 +28,9 @@ import { isWorkWindowLive } from "../lib/engine";
 import { rankWhatsNext } from "../lib/whatsNext";
 import { SwitchSheet } from "./SwitchSheet";
 import { useWindowHandoff } from "../hooks/useWindowHandoff";
+import { useOptionalResumeMemo } from "../state/ResumeMemoContext";
+import { getResumeNote } from "../lib/resume";
+import { ResumeCard } from "./ResumeCard";
 
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
@@ -245,6 +248,22 @@ export const TimerPanel: React.FC = () => {
     const [todayDetailsTaskId, setTodayDetailsTaskId] = useState<string | null>(null);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
+    const resumeMemo = useOptionalResumeMemo();
+    const lastEnter = resumeMemo?.lastEnter;
+    const notesVersion = resumeMemo?.notesVersion;
+    const cardTaskId = timer?.kind === "Work" ? timer.task_id : state?.active_task;
+    const cardTask = cardTaskId ? state?.tasks[cardTaskId] : undefined;
+    const cardMemo = useMemo(() => lastEnter && cardTaskId ? getResumeNote(cardTaskId) : null,
+        [lastEnter, cardTaskId, notesVersion]);
+    const [dismissedEmptyCards, setDismissedEmptyCards] = useState<Record<string, string>>({});
+    const cardWeight = lastEnter?.reason === "break-end" || (cardMemo && lastEnter &&
+        Date.parse(lastEnter.at) - Date.parse(cardMemo.savedAt) > 2 * 60 * 60 * 1000) ? "dimmed-line" : "full";
+    const showResumeCard = resumeMemo && lastEnter && cardTask && lastEnter.taskId === cardTask.id &&
+        cardTask.completed_at === null && !cardTask.archived &&
+        !findPMTaskByAppTaskId(pmState.tasks, cardTask.id)?.isArchived &&
+        (cardMemo ? !cardMemo.dismissedAt : cardWeight === "full" &&
+            state?.logs.some(log => log.task_id === cardTaskId && !log.was_break) &&
+            dismissedEmptyCards[cardTask.id] !== lastEnter.at);
     const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
     const waiting = waitingTask ? waitingOf(waitingTask) : null;
     const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; reference: Date; occupantId: string | null } | null>(null);
@@ -551,8 +570,8 @@ export const TimerPanel: React.FC = () => {
 
     return (
         <div className="w-full min-h-full flex">
-            <div className="flex-1 flex flex-col items-center p-4 sm:p-6 text-center select-none relative">
-                <div className="my-auto flex flex-col items-center gap-6 max-w-md w-full">
+            <div className="min-w-0 flex-1 flex flex-col items-center p-4 sm:p-6 text-center select-none relative">
+                <div className="my-auto min-w-0 flex flex-col items-center gap-6 max-w-md w-full">
                     <div className="flex flex-col items-center gap-3">
                         <div className="relative w-52 h-52 sm:w-64 sm:h-64 md:w-72 md:h-72">
                             {/* Progress ring */}
@@ -609,6 +628,13 @@ export const TimerPanel: React.FC = () => {
                             </div>
                         )}
                     </div>
+                    {showResumeCard && <ResumeCard key={`${cardTask.id}:${lastEnter.at}`} taskId={cardTask.id}
+                        taskName={cardTask.name} memo={cardMemo} weight={cardWeight} enteredAt={lastEnter.at}
+                        onAdd={() => resumeMemo.openMemo(cardTask.id)}
+                        onDismiss={() => {
+                            if (cardMemo) resumeMemo.dismissNote(cardTask.id);
+                            else setDismissedEmptyCards(previous => ({ ...previous, [cardTask.id]: lastEnter.at }));
+                        }} />}
                     <div className="flex flex-col items-center gap-2 text-xs">
                         {isWorkWindowLive(timer ?? null, new Date()) && (
                             <div className="flex flex-wrap justify-center gap-2">
