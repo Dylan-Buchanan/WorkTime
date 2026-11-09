@@ -202,24 +202,21 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
                         <button
                             className="text-[10px] px-2.5 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                             onClick={async () => {
-                                // Link or create timer task
-                                let appId = task.appTaskId;
-                                if (!appId) {
-                                    const est = task.estimatePomos || 1;
-                                    try {
+                                try {
+                                    let appId = task.appTaskId;
+                                    if (!appId) {
+                                        const est = task.estimatePomos || 1;
                                         const created = await app.createTask(task.title || "Untitled", est);
                                         appId = created.id;
                                         updateTask(task.id, {
                                             appTaskId: created.id,
                                         });
-                                    } catch (err) {
-                                        console.error("Failed to create timer task", err);
-                                        return;
                                     }
-                                } else {
-                                    await app.setActiveTask(appId);
+                                    await app.startTaskWork(appId);
+                                } catch (err) {
+                                    console.error("Failed to create timer task", err);
+                                    return;
                                 }
-                                await app.startWork();
                                 navigate("/");
                             }}
                         >
