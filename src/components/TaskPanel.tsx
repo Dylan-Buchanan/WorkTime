@@ -5,6 +5,8 @@ import { usePM } from "../state/ProjectManagerContext";
 import { PMTask, TaskPriority } from "../state/types";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useOptionalTodos } from "../state/TodoContext";
+import { waitingOf } from "../lib/pm/waiting";
+import { WaitingDot } from "./WaitingIndicator";
 
 export const TASK_SORT_LS_KEY = "task_panel_sort_v1";
 
@@ -304,6 +306,7 @@ export const TaskPanel: React.FC = () => {
                             {!collapsed && (
                                 <ul className="space-y-1 px-2 pb-2">
                                     {group.items.map(({ task: t, projectName, pmTask, estimate, dueTimestamp }) => {
+                                        const waiting = pmTask ? waitingOf(pmTask) : null;
                                         const dueLabel = dueTimestamp ? new Date(dueTimestamp).toLocaleDateString() : null;
                                         const tooltipParts: string[] = [];
                                         if (pmTask) {
@@ -314,6 +317,7 @@ export const TaskPanel: React.FC = () => {
                                             tooltipParts.push("Project: No project");
                                         }
                                         tooltipParts.push(`Estimate: ${estimate} pomodoros`);
+                                        if (waiting) tooltipParts.push(`Waiting on ${waiting.type}`);
                                         const active = state?.active_task === t.id;
                                         const renderKey = `${t.id}:${pmTask?.estimatePomos ?? ""}:${pmTask?.priority ?? ""}:${pmTask?.projectId ?? ""}:${pmTask?.dueDate ?? ""}`;
                                         return (
@@ -332,6 +336,7 @@ export const TaskPanel: React.FC = () => {
                                                     {t.name} ({Math.round(t.completed_pomodoros * 10) / 10}/{pmTask?.estimatePomos ?? t.target_pomodoros})
                                                 </span>
                                                 {active && <span className="rounded bg-indigo-600 px-1.5 py-0.5 text-[9px] font-medium tracking-wide text-white">ACTIVE</span>}
+                                                {waiting && <WaitingDot waiting={waiting} />}
                                                 {active && !t.completed_at && (
                                                     <button
                                                         onMouseEnter={() => play("hover")}

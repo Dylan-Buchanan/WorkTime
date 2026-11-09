@@ -20,6 +20,9 @@ import { isProjectWorkableOnDate } from "../lib/projectSchedule";
 import { addProjectedDuration, combinedProjectFinish } from "../lib/projection";
 import { CalendarDays, CalendarRange, Check, Clock3, Coffee, Info, Target } from "lucide-react";
 import { TodaySurface } from "./TodaySurface";
+import { WaitingBadge } from "./WaitingIndicator";
+import { waitingOf } from "../lib/pm/waiting";
+import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
 
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
@@ -224,13 +227,15 @@ export const TimerPanel: React.FC = () => {
     const { state, startWork, skipBreak, remainingMs, error, pauseTimer, resumeTimer, isPaused, tick } = app;
     const stopWork = app.stopWork; // preserve existing functionality
     const { play } = useSounds();
-    const { state: pmState, setSelectedTask } = usePM();
+    const { state: pmState, setSelectedTask, updateTask } = usePM();
     const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
     const [todayDetailsTaskId, setTodayDetailsTaskId] = useState<string | null>(null);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
+    const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
+    const waiting = waitingTask ? waitingOf(waitingTask) : null;
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
     const workMinutesSetting = state?.settings?.work_minutes ?? 0;
@@ -328,6 +333,17 @@ export const TimerPanel: React.FC = () => {
             closeDetails();
         }
     }, [canShowDetails, detailsOpen, closeDetails]);
+
+    useEffect(() => {
+        if (!todayDetailsTaskId) return;
+        const task = pmState.tasks[todayDetailsTaskId];
+        if (task && task.status !== "Done" && !task.isArchived) return;
+        setTodayDetailsTaskId(null);
+        if (pmSelectedId === todayDetailsTaskId) setSelectedTask(null);
+        if (!linkedTaskId && !activeAppTaskId && (!pmSelectedId || pmSelectedId === todayDetailsTaskId)) {
+            setDetailsOpen(false);
+        }
+    }, [todayDetailsTaskId, pmState.tasks, pmSelectedId, linkedTaskId, activeAppTaskId, setSelectedTask]);
 
     useEffect(() => {
         if (!detailsOpen) return;
@@ -529,6 +545,7 @@ export const TimerPanel: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2 flex-wrap justify-center">
                             {kindBadge}
+                            {waiting && waitingTask && <WaitingBadge waiting={waiting} nowMs={Date.now()} onClear={() => updateTask(waitingTask.id, { waiting: null })} />}
                             {taskName && (
                                 <span className="px-2 py-1 rounded bg-neutral-800 text-[10px] max-w-55 truncate" title={taskName}>
                                     {taskName}

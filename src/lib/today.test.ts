@@ -102,6 +102,39 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
 }
 
 describe("buildTodayTasks", () => {
+    it("pins waiting first, then bucket, due date and title without changing scope or remaining work", () => {
+        const waiting = { type: "agent" as const, since: "2026-08-12T09:00:00Z" };
+        const pmTasks = [
+            pmTask({ id: "normal-flex", title: "A", estimatePomos: 2 }),
+            pmTask({ id: "wait-flex", title: "Z", estimatePomos: 1.5, waiting }),
+            pmTask({ id: "wait-today", dueDate: "2026-08-12", estimatePomos: 3, waiting }),
+            pmTask({ id: "wait-overdue-z", title: "Z", dueDate: "2026-08-11", estimatePomos: 1, waiting }),
+            pmTask({ id: "normal-today", dueDate: "2026-08-12", estimatePomos: 1 }),
+            pmTask({ id: "wait-overdue-a", title: "A", dueDate: "2026-08-11", estimatePomos: 2, waiting }),
+            pmTask({ id: "wait-earliest", title: "Z", dueDate: "2026-08-10", estimatePomos: 1, waiting }),
+            pmTask({ id: "normal-overdue-z", title: "Z", dueDate: "2026-08-11", estimatePomos: 1 }),
+            pmTask({ id: "normal-overdue-a", title: "A", dueDate: "2026-08-11", estimatePomos: 1 }),
+            pmTask({ id: "normal-earliest", dueDate: "2026-08-09", estimatePomos: 1 }),
+            pmTask({ id: "future", dueDate: "2026-08-17", estimatePomos: 8, waiting }),
+            pmTask({ id: "done", status: "Done", estimatePomos: 8, waiting }),
+            pmTask({ id: "archived", isArchived: true, estimatePomos: 8, waiting }),
+            pmTask({ id: "unestimated", waiting }),
+        ];
+        const input = { reference: REFERENCE, backendTasks: {}, projects: {} };
+        const pinned = buildTodayTasks({ ...input, pmTasks });
+        const unpinned = buildTodayTasks({ ...input, pmTasks: pmTasks.map((task) => ({ ...task, waiting: null })) });
+
+        expect(pinned.tasks.map((task) => task.id)).toEqual([
+            "wait-earliest", "wait-overdue-a", "wait-overdue-z", "wait-today", "wait-flex",
+            "normal-earliest", "normal-overdue-a", "normal-overdue-z", "normal-today", "normal-flex",
+        ]);
+        expect(pinned.remainingPomodoros).toBe(unpinned.remainingPomodoros);
+        expect(pinned.remainingPomodoros).toBe(14.5);
+        expect(pinned.tasks.map((task) => task.id).sort()).toEqual(unpinned.tasks.map((task) => task.id).sort());
+        expect(pinned.tasks[0].waiting).toEqual(waiting);
+        expect(pinned.tasks[pinned.tasks.length - 1].waiting).toBeNull();
+    });
+
     it("classifies due-today, overdue, and undated work against one reference date", () => {
         const result = buildTodayTasks({
             reference: REFERENCE,
@@ -226,7 +259,7 @@ describe("buildTodayTasks", () => {
             backendTasks: {},
             projects: { weekend: project({ id: "weekend", workableDays: [0, 6] }) },
             pmTasks: [
-                pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2 }),
+                pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2, waiting: { type: "person", since: "2026-08-10T09:00:00Z" } }),
                 pmTask({ id: "today", dueDate: "2026-08-12", estimatePomos: 1.5 }),
                 pmTask({ id: "flexible", estimatePomos: 3 }),
                 pmTask({ id: "this-week", dueDate: "2026-08-14", estimatePomos: 4 }),

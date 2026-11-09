@@ -15,6 +15,7 @@ import {
 } from "../lib/today";
 import { workStartOccupation } from "../lib/engine";
 import { useSounds } from "../hooks/useSounds";
+import { WaitingDot } from "./WaitingIndicator";
 
 const CONTENT_ID = "today-surface-content";
 
@@ -53,6 +54,7 @@ const TaskRow: React.FC<{
         >
             <span className="flex flex-wrap items-center gap-1.5">
                 <span className="truncate text-[11px] font-medium text-neutral-100">{task.title}</span>
+                {task.waiting && <WaitingDot waiting={task.waiting} />}
                 {task.isActive && <span className="rounded-full bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium text-indigo-300">Running</span>}
                 {task.bucket === "overdue" && <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-300">Overdue</span>}
             </span>
