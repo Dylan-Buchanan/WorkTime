@@ -11,6 +11,20 @@ function props(overrides: Partial<ResumeCardProps> = {}): ResumeCardProps {
 
 describe("ResumeCard presentation of T12 props", () => {
     it.each([
+        { whereIAm: "", nextAction: "Cover errors", present: "Next action", absent: "Where I am" },
+        { whereIAm: "Parser drafted", nextAction: "", present: "Where I am", absent: "Next action" },
+    ])("omits empty $absent in summary and expanded view", ({ whereIAm, nextAction, present, absent }) => {
+        render(<ResumeCard {...props({ memo: { whereIAm, nextAction, savedAt: memo.savedAt } })} />);
+        const card = screen.getByRole("region");
+        expect(card).toHaveTextContent(present);
+        expect(card).not.toHaveTextContent(absent);
+        fireEvent.click(screen.getByRole("button", { name: "Expand note" }));
+        expect(within(card).getByText(present)).toBeVisible();
+        expect(within(card).queryByText(absent)).toBeNull();
+        expect(card).toHaveTextContent(whereIAm || nextAction);
+    });
+
+    it.each([
         { row: "resume, 30-minute memo", weight: "full", ageMs: 30 * 60_000, age: "30 min ago" },
         { row: "switch, exactly two-hour memo", weight: "full", ageMs: 2 * 60 * 60_000, age: "2 h ago" },
         { row: "start, two hours plus one millisecond", weight: "dimmed-line", ageMs: 2 * 60 * 60_000 + 1, age: "2 h ago" },

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { ResumeMemoSheet, type ResumeMemoSheetProps } from "./ResumeMemoSheet";
 
 const memo = { whereIAm: "At the parser", nextAction: "Add coverage", blocker: "API question", savedAt: "2026-11-09T14:04:00Z" };
@@ -8,6 +8,23 @@ function props(overrides: Partial<ResumeMemoSheetProps> = {}): ResumeMemoSheetPr
 }
 
 describe("ResumeMemoSheet", () => {
+    it.each([
+        { whereIAm: "", nextAction: "Cover errors", present: "Next action", absent: "Where I am" },
+        { whereIAm: "Parser drafted", nextAction: "", present: "Where I am", absent: "Next action" },
+    ])("omits empty $absent in outgoing and incoming read-only notes", ({ whereIAm, nextAction, present, absent }) => {
+        const partial = { whereIAm, nextAction, savedAt: memo.savedAt };
+        render(<ResumeMemoSheet {...props({ mode: "switch",
+            outgoing: { taskId: "A", taskName: "Task A", memo: partial, alreadyCaptured: true },
+            incoming: { taskId: "B", taskName: "Task B", memo: partial },
+        })} />);
+        for (const name of ["Task A saved note", "Task B incoming note"]) {
+            const note = screen.getByRole("region", { name });
+            expect(within(note).getByText(present)).toBeVisible();
+            expect(within(note).queryByText(absent)).toBeNull();
+            expect(note).toHaveTextContent(whereIAm || nextAction);
+        }
+    });
+
     it("labels a modal and three prefilled single-line fields without a live region", () => {
         const view = render(<ResumeMemoSheet {...props()} />);
         const dialog = screen.getByRole("dialog", { name: "What were you doing in Task A?" });
@@ -18,7 +35,7 @@ describe("ResumeMemoSheet", () => {
             expect(screen.getByLabelText(label)).toHaveAttribute("type", "text");
         }
         expect(view.container.querySelector("[aria-live], [role=alert], [role=status]")).toBeNull();
-        expect(dialog.firstElementChild).toHaveAccessibleName("Close resume memo backdrop");
+        expect(dialog.firstElementChild).toHaveAccessibleName("Skip note");
         // Width is bounded by the viewport padding and w-full, including at 360px.
         expect(dialog).toHaveClass("fixed", "inset-0", "p-4");
         expect(dialog.lastElementChild).toHaveClass("w-full", "min-w-0", "max-w-xl");
@@ -47,7 +64,7 @@ describe("ResumeMemoSheet", () => {
         const input = props();
         render(<ResumeMemoSheet {...input} />);
         if (method === "Escape") fireEvent.keyDown(screen.getByLabelText("Next action"), { key: "Escape" });
-        else fireEvent.click(screen.getByRole("button", { name: method === "Skip" ? "Skip" : "Close resume memo backdrop" }));
+        else fireEvent.click(screen.getByRole("button", { name: method === "Skip" ? "Skip" : "Skip note" }));
         expect(input.onDismiss).toHaveBeenCalledOnce();
         expect(input.onSave).not.toHaveBeenCalled();
     });

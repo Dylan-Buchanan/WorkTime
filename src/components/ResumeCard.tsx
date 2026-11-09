@@ -25,8 +25,8 @@ export function ResumeCard({ taskId, taskName, memo, weight, enteredAt, onDismis
     const dimmed = weight === "dimmed-line";
     const age = memo ? noteAge(memo.savedAt, enteredAt) : null;
     const summary = memo ? [
-        `Where I am: ${memo.whereIAm}`,
-        `Next action: ${memo.nextAction}`,
+        ...(memo.whereIAm ? [`Where I am: ${memo.whereIAm}`] : []),
+        ...(memo.nextAction ? [`Next action: ${memo.nextAction}`] : []),
         ...(memo.blocker ? [`Blocker: ${memo.blocker}`] : []),
     ].join(" · ") : "No note from your last exit";
     const control = "shrink-0 rounded px-1 py-1 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-300";
@@ -50,8 +50,8 @@ export function ResumeCard({ taskId, taskName, memo, weight, enteredAt, onDismis
         {expanded && memo && <div id={contentId} className="mt-2 min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere] select-text">
             {dimmed && <p>{taskName} · {age}</p>}
             <dl>
-                <dt className="font-medium">Where I am</dt><dd>{memo.whereIAm}</dd>
-                <dt className="mt-1 font-medium">Next action</dt><dd>{memo.nextAction}</dd>
+                {memo.whereIAm && <><dt className="font-medium">Where I am</dt><dd>{memo.whereIAm}</dd></>}
+                {memo.nextAction && <><dt className="mt-1 font-medium">Next action</dt><dd>{memo.nextAction}</dd></>}
                 {memo.blocker && <><dt className="mt-1 font-medium">Blocker</dt><dd>{memo.blocker}</dd></>}
             </dl>
         </div>}

@@ -158,6 +158,14 @@ async function setupMemoTimer(zeroElapsed = false) {
 }
 
 describe("TimerPanel exit memo integration", () => {
+    it("keeps the timer Resume button uniquely named while the pause memo is open", async () => {
+        await setupMemoTimer();
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        await screen.findByRole("dialog", { name: "What were you doing in Task A?" });
+        expect(screen.getByRole("button", { name: "Resume" })).toBeVisible();
+        expect(screen.getAllByRole("button", { name: /resume/i })).toHaveLength(1);
+    });
+
     it.each(["Pause", "End focus"])("commits %s before capture and abandon leaves timer state untouched", async action => {
         const view = await setupMemoTimer();
         const save = vi.spyOn(resumeStore, "saveResumeNote");

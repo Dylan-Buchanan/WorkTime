@@ -52,8 +52,8 @@ export function ResumeMemoSheet({ mode, outgoing, incoming, onSave, onDismiss, e
         finally { submitting.current = false; setPending(false); }
     };
     const memoText = (memo: ResumeNote) => <dl className="space-y-2 break-words">
-        <div><dt className="text-neutral-400">Where I am</dt><dd>{memo.whereIAm}</dd></div>
-        <div><dt className="text-neutral-400">Next action</dt><dd>{memo.nextAction}</dd></div>
+        {memo.whereIAm && <div><dt className="text-neutral-400">Where I am</dt><dd>{memo.whereIAm}</dd></div>}
+        {memo.nextAction && <div><dt className="text-neutral-400">Next action</dt><dd>{memo.nextAction}</dd></div>}
         {memo.blocker && <div><dt className="text-neutral-400">Open question or blocker (optional)</dt><dd>{memo.blocker}</dd></div>}
     </dl>;
     return <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={headingId}
@@ -63,7 +63,7 @@ export function ResumeMemoSheet({ mode, outgoing, incoming, onSave, onDismiss, e
                 event.preventDefault(); onDismiss();
             }
         }}>
-        <button type="button" tabIndex={-1} aria-label="Close resume memo backdrop" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onDismiss} />
+        <button type="button" tabIndex={-1} aria-label="Skip note" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onDismiss} />
         <div className="app-scrollbar relative z-10 max-h-[85vh] w-full min-w-0 max-w-xl overflow-y-auto rounded-2xl border border-neutral-700 bg-neutral-950 p-5 text-neutral-200 shadow-2xl">
             <h2 id={headingId} className="mb-4 break-words text-lg font-semibold">What were you doing in {outgoing.taskName}?</h2>
             {editing ? <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="min-w-0 space-y-3">

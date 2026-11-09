@@ -34,7 +34,7 @@ import { SupabaseGoogleCalendarDataAccess } from "./lib/data/GoogleCalendarDataA
 import { SupabaseGitHubDataAccess } from "./lib/data/GitHubDataAccess";
 import { supabase } from "./lib/supabase";
 import { TAURI_WINDOWS_ENTRY_PATH } from "./lib/integrations/githubOAuthReturn";
-import { ResumeMemoProvider } from "./state/ResumeMemoContext";
+import { ResumeMemoProvider, useOptionalResumeMemo } from "./state/ResumeMemoContext";
 
 // Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
 // only downloaded when their route is visited, keeping the entry chunk small.
@@ -232,6 +232,10 @@ const TopNav: React.FC = () => {
 const MainLayout: React.FC = () => {
     const isDesktop = useMediaQuery("(min-width: 1024px)");
     const [panelOpen, setPanelOpen] = useState(false);
+    const holdMemoPresentation = useOptionalResumeMemo()?.holdMemoPresentation;
+    useEffect(() => {
+        if (panelOpen && !isDesktop) return holdMemoPresentation?.();
+    }, [panelOpen, isDesktop, holdMemoPresentation]);
     useEffect(() => {
         if (isDesktop) setPanelOpen(false);
     }, [isDesktop]);
