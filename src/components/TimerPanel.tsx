@@ -23,6 +23,10 @@ import { TodaySurface } from "./TodaySurface";
 import { WaitingBadge } from "./WaitingIndicator";
 import { waitingOf } from "../lib/pm/waiting";
 import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
+import { isWorkWindowLive } from "../lib/engine";
+import { rankWhatsNext, type WhatsNextResult } from "../lib/whatsNext";
+import { SwitchSheet } from "./SwitchSheet";
+import { useWindowHandoff } from "../hooks/useWindowHandoff";
 
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
@@ -236,6 +240,23 @@ export const TimerPanel: React.FC = () => {
     const timer = state?.timer;
     const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
     const waiting = waitingTask ? waitingOf(waitingTask) : null;
+    const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; result: WhatsNextResult; occupantId: string | null } | null>(null);
+    const handoff = useWindowHandoff(() => setSheet(null));
+    const openSheet = (mode: "switch" | "waiting", invoker: HTMLButtonElement) => {
+        const reference = new Date();
+        invoker.focus();
+        handoff.cancel();
+        if (mode === "waiting" && waitingTask) {
+            updateTask(waitingTask.id, { waiting: { type: "agent", since: reference.toISOString() } });
+        }
+        setSheet({ mode, occupantId: waitingTask?.id ?? null, result: rankWhatsNext({
+            pmTasks: Object.values(pmState.tasks), backendTasks: state?.tasks ?? {}, projects: pmState.projects,
+            currentOccupantId: waitingTask?.id ?? null, reference,
+        }) });
+    };
+    const closeSheet = () => { handoff.cancel(); setSheet(null); };
+    const sheetOccupant = sheet?.occupantId ? pmState.tasks[sheet.occupantId] : undefined;
+    const sheetWaiting = sheetOccupant ? waitingOf(sheetOccupant) : null;
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
     const workMinutesSetting = state?.settings?.work_minutes ?? 0;
@@ -585,6 +606,10 @@ export const TimerPanel: React.FC = () => {
                         )}
                     </div>
                     <div className="flex flex-wrap gap-2 justify-center text-xs">
+                        {isWorkWindowLive(timer ?? null, new Date()) && <>
+                            <button type="button" className="rounded bg-neutral-800 px-4 py-2 hover:bg-neutral-700 disabled:opacity-50" disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) => openSheet("waiting", event.currentTarget)}>Waiting…</button>
+                            <button type="button" className="rounded bg-neutral-800 px-4 py-2 hover:bg-neutral-700" onClick={(event) => openSheet("switch", event.currentTarget)}>Switch</button>
+                        </>}
                         {!timer && (
                             <button
                                 className="px-5 py-2.5 sm:px-4 sm:py-2 rounded bg-indigo-600 hover:bg-indigo-500 transition-colors font-medium text-white shadow-sm"
@@ -602,7 +627,7 @@ export const TimerPanel: React.FC = () => {
                                 className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
-                                    pauseTimer();
+                                    void pauseTimer().catch(() => {});
                                     play("pressSide");
                                 }}
                             >
@@ -614,7 +639,7 @@ export const TimerPanel: React.FC = () => {
                                 className="px-4 py-2.5 sm:px-3 sm:py-2 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
                                 onMouseEnter={() => play("hover")}
                                 onClick={() => {
-                                    resumeTimer();
+                                    void resumeTimer().catch(() => {});
                                     play("pressSide");
                                 }}
                             >
@@ -718,6 +743,16 @@ export const TimerPanel: React.FC = () => {
                     </div>
                 )}
             </aside>
+            {sheet && <SwitchSheet
+                mode={sheet.mode} result={sheet.result} projects={pmState.projects}
+                linkStateOf={handoff.linkStateOf} linkErrorOf={handoff.linkErrorOf}
+                waitingType={sheetWaiting?.type}
+                onSetWaitingType={(type) => {
+                    if (sheet.occupantId && sheetWaiting) updateTask(sheet.occupantId, { waiting: { ...sheetWaiting, type } });
+                }}
+                onSelect={handoff.select} onRetryLink={handoff.retry} onClose={closeSheet}
+                busyTaskId={handoff.busyTaskId} notice={handoff.notice} error={handoff.error}
+            />}
         </div>
     );
 };

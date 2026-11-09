@@ -80,6 +80,11 @@ export type AgentSnapshotRevertResult =
 
 interface PMContextShape {
     state: ProjectManagerState;
+    linkingTaskIds: ReadonlySet<string>;
+    linkFailures: Readonly<Record<string, string>>;
+    retryLink: (pmTaskId: string) => void;
+    /** Internal bridge reporter; link state is surface-local, never persisted. */
+    reportLink: (pmTaskId: string, linking: boolean, error?: string) => void;
     createProject: (name: string, color?: string) => Project;
     updateProject: (id: string, patch: Partial<Project>) => void;
     archiveProject: (id: string, archive?: boolean) => void;
@@ -200,6 +205,25 @@ export const ProjectManagerProvider: React.FC<{
         }
     })();
     const [state, setState] = useState<ProjectManagerState>(() => buildDefaultState());
+    const [linkingTaskIds, setLinkingTaskIds] = useState<ReadonlySet<string>>(() => new Set());
+    const [linkFailures, setLinkFailures] = useState<Readonly<Record<string, string>>>({});
+    const reportLink = useCallback((id: string, linking: boolean, error?: string) => {
+        setLinkingTaskIds((prev) => {
+            if (prev.has(id) === linking) return prev;
+            const next = new Set(prev);
+            if (linking) next.add(id); else next.delete(id);
+            return next;
+        });
+        if (error !== undefined) setLinkFailures((prev) => ({ ...prev, [id]: error }));
+    }, []);
+    const retryLink = useCallback((id: string) => {
+        setLinkFailures((prev) => {
+            if (!Object.prototype.hasOwnProperty.call(prev, id)) return prev;
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
+    }, []);
     const [hydrated, setHydrated] = useState(false);
     const lastServerSerializedRef = useRef<string | null>(null);
     const pendingServerSerializedRef = useRef<string | null>(null);
@@ -775,6 +799,10 @@ export const ProjectManagerProvider: React.FC<{
         <PMContext.Provider
             value={{
                 state,
+                linkingTaskIds,
+                linkFailures,
+                retryLink,
+                reportLink,
                 createProject,
                 updateProject,
                 archiveProject,

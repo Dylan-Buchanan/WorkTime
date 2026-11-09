@@ -110,6 +110,39 @@ afterEach(() => {
 });
 
 describe("AppStateContext", () => {
+    it("awaits pause/resume adoption and reads current state even through retained callbacks", async () => {
+        const data = new ContextFakeDataAccess(makeAppState({ timer: makeActiveTimer({ task_id: "t1" }) }));
+        let current!: ReturnType<typeof useAppState>;
+        function Commands() { current = useAppState(); return <span>{current.state?.timer?.paused ? "paused" : "running"}</span>; }
+        render(wrap(data, <Commands />));
+        await waitFor(() => expect(current.state?.timer).toBeTruthy());
+        const { pauseTimer, resumeTimer } = current;
+        const originalPause = data.pauseTimer.bind(data);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        vi.spyOn(data, "pauseTimer").mockImplementation(async () => { await gate; return originalPause(); });
+        const resume = vi.spyOn(data, "resumeTimer");
+        let settled = false;
+        let pause!: Promise<void>;
+        act(() => { pause = pauseTimer(); void pause.then(() => { settled = true; }); });
+        expect(pause).toBeInstanceOf(Promise);
+        expect(settled).toBe(false);
+        await act(async () => { release(); await pause; });
+        expect(settled).toBe(true);
+        expect(current.state?.timer?.paused).toBe(true);
+        // This resume callback was captured while running. It must consult
+        // stateRef and see the adopted pause, even in the same async sequence.
+        await act(async () => {
+            const promise = resumeTimer();
+            expect(promise).toBeInstanceOf(Promise);
+            await promise;
+            await pauseTimer();
+            await resumeTimer();
+        });
+        expect(resume).toHaveBeenCalledTimes(2);
+        expect(current.state?.timer?.paused).toBe(false);
+        expect(screen.getByText("running")).toBeVisible();
+    });
     it("loads staged local state on mount", async () => {
         const state = makeAppState({ tasks: { t1: { id: "t1", name: "Backend task", target_pomodoros: 2, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false } } });
         const data = new ContextFakeDataAccess(state);
