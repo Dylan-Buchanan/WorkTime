@@ -20,13 +20,17 @@ test.describe("Timer workflows", () => {
         const fixture = switchFixtures();
         const app = await openApp(browser, fixture.seed, fixture.pm);
         try {
+            await app.page.clock.install({ time: new Date() });
             await app.page.goto("/");
             await app.page.getByRole("button", { name: "Start Focus" }).click();
             await expect(app.page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
             await syncData(app.page);
             const before = (await backendState(app)).timer!;
+            await app.page.clock.fastForward(10_000);
             await app.page.getByRole("button", { name: "Switch", exact: true }).click();
             await app.page.getByRole("dialog", { name: "Switch task", exact: true }).getByRole("button", { name: /Switch task B/ }).click();
+            await expect(app.page.getByRole("dialog", { name: "What were you doing in Switch task A?" })).toBeVisible();
+            await app.page.keyboard.press("Escape");
             await expect(app.page.getByRole("dialog")).toHaveCount(0);
             await expect(app.page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
             await syncData(app.page);
@@ -48,6 +52,8 @@ test.describe("Timer workflows", () => {
             await app.page.clock.fastForward(10_000);
             await app.page.getByRole("button", { name: "Switch", exact: true }).click();
             await app.page.getByRole("dialog").getByRole("button", { name: /Switch task B/ }).click();
+            await expect(app.page.getByRole("dialog", { name: "What were you doing in Switch task A?" })).toBeVisible();
+            await app.page.keyboard.press("Escape");
             await expect(app.page.getByRole("dialog")).toHaveCount(0);
             await app.page.clock.fastForward(51_000);
             await expect(app.page.getByText("SHORTBREAK", { exact: true })).toBeVisible();
@@ -82,6 +88,8 @@ test.describe("Timer workflows", () => {
 
         // Pause / resume.
         await page.getByRole("button", { name: "Pause" }).click();
+        await expect(page.getByRole("dialog", { name: "What were you doing in Write the report?" })).toBeVisible();
+        await page.keyboard.press("Escape");
         await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
         await page.getByRole("button", { name: "Resume" }).click();
         await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
@@ -89,6 +97,8 @@ test.describe("Timer workflows", () => {
         // Stop early, then verify a partial log was recorded.
         await page.waitForTimeout(1100);
         await page.getByRole("button", { name: "End focus" }).click();
+        await expect(page.getByRole("dialog", { name: "What were you doing in Write the report?" })).toBeVisible();
+        await page.keyboard.press("Escape");
         await expect(page.getByRole("button", { name: "Start Focus" })).toBeVisible();
 
         await syncData(page);

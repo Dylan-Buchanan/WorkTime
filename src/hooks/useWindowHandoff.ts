@@ -58,7 +58,7 @@ export function useWindowHandoff(onSuccess: () => void, sheet?: { reference: Dat
                 await latest.setActiveTask(task.appTaskId);
                 if (operation.current === token) setNotice(`${task.title} is lined up for the next focus window.`);
             } else {
-                if (latest.state.timer?.paused) await latest.resumeTimer();
+                if (latest.state.timer?.paused) await latest.resumeTimer({ handoff: true });
                 // Closing during an awaited resume cancels the pending choice.
                 if (operation.current !== token) return;
                 const ready = eligibleTask(id);

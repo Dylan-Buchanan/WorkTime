@@ -11,6 +11,13 @@ beforeEach(() => {
     contexts.pm = { state: { projects: {}, tasks: { candidate: { id: "candidate", appTaskId: "b", title: "Candidate" } } }, linkFailures: {}, retryLink: vi.fn() };
 });
 describe("useWindowHandoff", () => {
+    it("marks the paused Work resume as a handoff before selecting", async () => {
+        const { result } = renderHook(() => useWindowHandoff(vi.fn()));
+        await act(async () => { result.current.select("candidate"); });
+        expect(contexts.app.resumeTimer).toHaveBeenCalledExactlyOnceWith({ handoff: true });
+        expect(contexts.app.startTaskWork).toHaveBeenCalledExactlyOnceWith("b");
+    });
+
     it("awaits resume before joining and finishing the selection", async () => {
         let release!: () => void;
         contexts.app.resumeTimer.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
