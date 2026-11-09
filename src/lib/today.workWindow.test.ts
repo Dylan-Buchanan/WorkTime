@@ -11,7 +11,7 @@ const log = (id: string, duration: number, day = 8, wasBreak = false, skipped = 
 });
 
 describe("Today work-window identity compatibility", () => {
-    it("keeps counts, minutes and sessions identical with or without window ids", () => {
+    it("keeps minutes and sessions identical with or without window ids; counts windows", () => {
         const logs = [log("slice-a", 5), log("slice-b", 20), log("stop", 2.5),
             log("break", 5, 8, true), log("skip", 0, 8, true, true), log("yesterday", 25, 7)];
         const legacy = buildTodayPomodoros({ logs, reference });
@@ -20,6 +20,9 @@ describe("Today work-window identity compatibility", () => {
         });
         expect(legacy.count).toBe(3);
         expect(legacy.minutes).toBe(27.5);
-        expect(stamped).toEqual(legacy);
+        // D7: the shared window collapses the three work rows into one pomodoro; minutes and sessions are unchanged.
+        expect(stamped.count).toBe(1);
+        expect(stamped.minutes).toBe(legacy.minutes);
+        expect(stamped.sessions).toEqual(legacy.sessions);
     });
 });

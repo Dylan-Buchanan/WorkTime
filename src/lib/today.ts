@@ -173,12 +173,16 @@ export function buildTodayPomodoros(input: BuildTodayPomodorosInput): TodayPomod
     }
 
     const sessions: TodayPomodoroSession[] = [];
+    const windowKeys = new Set<string>();
+    let unwindowed = 0;
     for (const log of input.logs) {
         if (log.was_break) continue;
         const finished = new Date(log.finished_at);
         if (Number.isNaN(finished.getTime())) continue;
         if (toLocalDateKey(finished) !== todayKey) continue;
         const duration = Number.isFinite(log.duration_minutes) ? Math.max(0, log.duration_minutes) : 0;
+        if (log.work_window_id) windowKeys.add(log.work_window_id);
+        else unwindowed += 1;
         sessions.push({
             id: log.id,
             taskId: log.task_id,
@@ -191,7 +195,8 @@ export function buildTodayPomodoros(input: BuildTodayPomodorosInput): TodayPomod
     sessions.sort((left, right) => new Date(right.finishedAt).getTime() - new Date(left.finishedAt).getTime());
 
     const minutes = sessions.reduce((total, session) => total + session.durationMinutes, 0);
-    return { count: sessions.length, minutes, sessions };
+    // Count windows, not rows: logs sharing a work_window_id are one pomodoro; logs without one stand alone.
+    return { count: windowKeys.size + unwindowed, minutes, sessions };
 }
 
 export interface TodayOverview {

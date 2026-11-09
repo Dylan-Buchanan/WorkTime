@@ -340,10 +340,10 @@ These corrections supersede the corresponding statements above.
 | R1-#6 | Fixed: derived occupant keys and legacy identity stamped before pause/resume; documented: pre-upgrade resumed identity may be opaque. |
 | R1-#7 | Fixed: ranking eligibility uses normalized `waitingOf`. |
 | R1-#8 | Fixed: Today comparator ends with an id tie-break. |
-| R1-#9 | Deferred (item 9 stopped): D7 is authorized, but `src/lib/today.workWindow.test.ts:23` asserts the superseded row count and is outside the permitted file list. The D7 implementation/regression were reverted pending authorization to update that assertion. |
+| R1-#9 | Fixed in issue/159-d7-window-count: Today pomodoro count is derived from work windows (D7); `today.workWindow.test.ts` row-count assertion updated. |
 | R1-#10 | Fixed: Inspector break preflight reaches the existing AppState error path before create/link. |
 | R2-#1 | Fixed: evict a cached linker id if the current staged app state no longer contains it. |
 | R2-#2 | Fixed: refresh open-sheet candidates with its open-time date and revalidate pending/awaited selections. |
 | R2-#3 | Fixed: catch row-activation rejection while preserving the AppState banner. |
 
-Only R1-#9 is deferred at the file-list boundary; the D7 product decision above remains binding for the follow-up.
+Nothing is deferred; all review items are fixed.
