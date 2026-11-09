@@ -48,7 +48,7 @@ export function skipBreak(state: AppStateData, now: Date, logId: string): Engine
 
     const task = next.tasks[timer.task_id];
     if (task) task.break_skips += 1;
-    appendLog(next, timer.task_id, 0, now, true, logId, true);
+    appendLog(next, timer.task_id, 0, now, true, logId, true, null);
     next.timer = null;
     return { state: next, value: cloneAppState(next) };
 }

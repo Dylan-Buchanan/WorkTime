@@ -1228,3 +1228,35 @@ describe("LocalStagingStore", () => {
         expect(store.read(OWNER_A).initialized).toBe(true);
     });
 });
+
+
+describe("log work-window staging compatibility", () => {
+    it("round-trips string, null and historical absent identities in state and baseline", async () => {
+        const storage = corruptStorage({});
+        const store = new LocalStagingStore(storage);
+        const logs = [
+            { ...BASE_LOG, id: "work", work_window_id: BASE_TASK.created_at },
+            { ...BASE_LOG, id: "break", was_break: true, work_window_id: null },
+            { ...BASE_LOG, id: "legacy" },
+        ];
+        await store.update(OWNER_A, (record) => ({
+            ...record,
+            state: { ...record.state, logs },
+            lastSynced: makeBaseline({ logs: Object.fromEntries(logs.map((log) => [log.id, log])) }),
+        }));
+        const loaded = new LocalStagingStore(storage).read(OWNER_A);
+        expect(loaded.schemaVersion).toBe(10);
+        expect(loaded.state.logs).toEqual(logs);
+        expect(loaded.lastSynced?.logs).toEqual(Object.fromEntries(logs.map((log) => [log.id, log])));
+        expect(loaded.state.logs[2]).not.toHaveProperty("work_window_id");
+    });
+
+    it.each(["state", "baseline"])("rejects a numeric identity in %s logs", (location) => {
+        const record = new LocalStagingStore(corruptStorage({})).read(OWNER_A);
+        const malformed = { ...BASE_LOG, work_window_id: 123 };
+        const raw = location === "state"
+            ? { ...record, state: { ...record.state, logs: [malformed] } }
+            : { ...record, lastSynced: makeBaseline({ logs: { [BASE_LOG.id]: malformed } as unknown as SyncSnapshot["logs"] }) };
+        expect(() => parseStagedOwnerRecord(JSON.stringify(raw), OWNER_A)).toThrow(StagingStorageError);
+    });
+});

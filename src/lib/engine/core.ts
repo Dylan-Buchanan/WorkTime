@@ -108,7 +108,9 @@ export function appendLog(
     wasBreak: boolean,
     logId: string,
     breakSkipped = false,
+    workWindowId: string | null = null,
 ): void {
+    // Work slices share their window's identity; breaks and skips are not window work.
     state.logs.push({
         id: logId,
         task_id: taskId,
@@ -116,6 +118,7 @@ export function appendLog(
         finished_at: finishedAt.toISOString(),
         was_break: wasBreak,
         break_skipped: breakSkipped,
+        work_window_id: workWindowId,
     });
 }
 

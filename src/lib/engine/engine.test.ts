@@ -117,7 +117,7 @@ describe("task lifecycle commands", () => {
         state.timer = timer();
         const result = setActiveTask(state, "t2", at(750), "log-1");
         expect(result.state.tasks.t1.completed_pomodoros).toBe(0.5);
-        expect(result.state.logs).toEqual([{ id: "log-1", task_id: "t1", duration_minutes: 12.5, finished_at: at(750).toISOString(), was_break: false, break_skipped: false }]);
+        expect(result.state.logs).toEqual([{ id: "log-1", task_id: "t1", duration_minutes: 12.5, finished_at: at(750).toISOString(), was_break: false, break_skipped: false, work_window_id: T0.toISOString() }]);
         expect(result.state.timer).toMatchObject({ task_id: "t2", planned_secs: 750, accumulated_secs: 0, started_at: at(750).toISOString(), ends_at: at(1500).toISOString(), window_started_at: T0.toISOString() });
         expect(result.state.active_task).toBe("t2");
     });
@@ -517,4 +517,59 @@ describe("work-window boundaries", () => {
             }
         },
     );
+});
+
+
+describe("work log window attribution", () => {
+    function running(): AppStateData {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        return startWorkTimer(state, T0).state;
+    }
+
+    it.each(["switch", "complete", "stop", "finalize", "expired-switch", "expired-finalize"] as const)(
+        "stamps %s logs with the window identity",
+        (path) => {
+            const state = running();
+            const expected = windowStartedAt(state.timer!);
+            const result = path === "switch" ? setActiveTask(state, "t2", at(300), "log")
+                : path === "complete" ? completeTimer(state, at(1500), "log")
+                : path === "stop" ? stopWorkTimer(state, at(300), "log")
+                : path === "finalize" ? finalizeTask(state, "t1", at(300), "log")
+                : path === "expired-finalize" ? finalizeTask(state, "t1", at(1500), "log")
+                : setActiveTask(state, "t2", at(1500), "log");
+            expect(result.state.logs).toHaveLength(1);
+            expect(result.state.logs[0].work_window_id).toBe(expected);
+        },
+    );
+
+    it("shares one identity across A -> B and completion", () => {
+        const state = running();
+        const expected = windowStartedAt(state.timer!);
+        const switched = setActiveTask(state, "t2", at(300), "slice-a").state;
+        const completed = completeTimer(switched, at(1500), "slice-b").state;
+        expect(completed.logs.map((log) => [log.task_id, log.work_window_id])).toEqual([
+            ["t1", expected], ["t2", expected],
+        ]);
+        expect(completed.logs.reduce((minutes, log) => minutes + log.duration_minutes, 0)).toBe(25);
+    });
+
+    it("derives identity for a legacy timer from started_at minus accumulated_secs", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer({ started_at: at(300).toISOString(), accumulated_secs: 300 });
+        const expected = windowStartedAt(state.timer);
+        expect(expected).toBe(T0.toISOString());
+        const switched = setActiveTask(state, "t2", at(600), "legacy-slice").state;
+        const completed = completeTimer(switched, at(1500), "legacy-complete").state;
+        expect(completed.logs.map((log) => log.work_window_id)).toEqual([expected, expected]);
+        expect(completeTimer(state, at(1500), "legacy-no-switch").state.logs[0].work_window_id).toBe(expected);
+    });
+
+    it.each(["ShortBreak", "LongBreak"] as const)("keeps %s completions and skips outside work windows", (kind) => {
+        const state = stateWithTask();
+        state.timer = timer({ kind });
+        expect(completeTimer(state, at(1500), "break").state.logs[0].work_window_id).toBeNull();
+        expect(skipBreak(state, at(300), "skip").state.logs[0].work_window_id).toBeNull();
+    });
 });

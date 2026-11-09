@@ -448,3 +448,22 @@ describe("to-do description pulls", () => {
         expect((await data.pull(OWNER)).todos.legacy.value.description).toBe(description?.trim() ?? "");
     });
 });
+
+
+describe("pomodoro log window transport", () => {
+    it.each(["2026-01-01T00:00:00.123Z", null, undefined, 123])("maps pulled identity %j", async (identity) => {
+        const row = { id: "log", task_id: "task", duration_minutes: 25, finished_at: "2026-01-01T00:25:00.000Z",
+            was_break: false, break_skipped: false, ...(identity === undefined ? {} : { work_window_id: identity }) };
+        const pulled = await new SupabaseDataAccess(pullClient({ work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4 }, { pomodoro_logs: [row] })).pull(OWNER);
+        expect(pulled.logs.log.work_window_id).toBe(typeof identity === "string" ? identity : null);
+    });
+
+    it("sends the window identity in staged log upserts", async () => {
+        const { client, rpc } = mockClient();
+        const log = { id: "log", task_id: "task", duration_minutes: 25, finished_at: "2026-01-01T00:25:00.000Z",
+            was_break: false, break_skipped: false, work_window_id: "2026-01-01T00:00:00.123Z" };
+        await new SupabaseDataAccess(client).push(OWNER, { ...emptyPlan(), logUpserts: [log] });
+        expect(rpc).toHaveBeenCalledWith("apply_staged_sync", expect.objectContaining({ p_log_upserts: [log] }));
+        expect(rpc.mock.calls[0][1].p_log_upserts[0]).not.toBe(log);
+    });
+});

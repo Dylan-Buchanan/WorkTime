@@ -240,13 +240,17 @@ describe("timerGenerationKey", () => {
 
 describe("completionRpcPayload", () => {
     it("retains the client log id and the exact expected timer JSON", () => {
-        const e = entry();
+        const e = entry({ log: LOG("window-log", { work_window_id: T1 }) });
         const payload = completionRpcPayload(e);
+        expect(payload.p_log?.work_window_id).toBe(T1);
+        expect(payload.p_log).not.toBe(e.log);
         expect(payload.p_log).toEqual(e.log);
         expect(payload.p_log?.id).toBe(e.log.id);
         expect(payload.p_expected_timer).toEqual(e.expectedTimer);
         expect(payload.p_timer_data).toEqual(e.resultTimerState);
         expect(payload.p_task).toEqual(e.taskAfter);
+        payload.p_log!.work_window_id = "changed";
+        expect(e.log.work_window_id).toBe(T1);
     });
 
     it("carries a null task for break completions", () => {
