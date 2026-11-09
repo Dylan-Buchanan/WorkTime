@@ -292,3 +292,58 @@ that order, with output tails reported. F0 changes only the verbatim research
 copy, this contract, and the additive optional shared types. F0 does not run
 Supabase commands, DB resets, a dev server, E2E, integration, platform, Tauri,
 version scripts, or installs.
+
+
+## 5. Post-review corrections (ORCH-authorized)
+
+These corrections supersede the corresponding statements above.
+
+- **D3 correction:** the progress ring stays window-relative:
+  `1 - remaining / max(work_minutes*60, planned_secs)`. The Today/projection
+  active fraction and the active task's per-task "completed" display instead
+  use the segment fraction `elapsedTimerSecs(timer, now) / (work_minutes*60)`,
+  clamped to 0..1. The outgoing task is already credited at a switch. An
+  unswitched window has the same numerical progress as before. This preserves
+  the product decision: a switch neither resets the ring nor changes Today
+  "Np left" (A and B estimated at 1p each: 1.6p before/after switching at 10m).
+- **D7 (product owner decision):** the Today pomodoro summary counts WINDOWS.
+  Group today's non-break logs by `work_window_id`; each null/absent-id log
+  counts as its own pomodoro so history is unchanged. Minutes still sum all
+  today's non-break logs, and session details retain each segment.
+- **T9 refinement:** `workOccupantKey` uses `windowStartedAt(timer)` (the derived
+  fallback), rather than `window_started_at ?? ""`. Work pause/resume stamp
+  `window_started_at = windowStartedAt(timer)` before changing accumulation or
+  timestamps when absent, so legacy identity does not change mid-window.
+  For a legacy timer resumed before upgrade, this derived value is an opaque
+  identity, not necessarily its true window start; this limitation is accepted.
+  Baselines are not backfilled: restoring an unchanged legacy baseline still
+  derives the same key as its backfilled counterpart.
+- **Journal key:** completion-journal generation keys ignore
+  `window_started_at`, so pre/post-v10 shapes of the same timer dedupe.
+  `expectedTimer` is never rewritten; the RPC CAS keeps the stored shape.
+  Existing persisted keys are compared through their normalized expected timer
+  as well, preserving replay protection for keys written before this fix.
+- **Engine-internal completion:** expired switch/finalize transitions journal
+  the natural-completion snapshot atomically with local accounting, using the
+  explicit completion path's CAS payload and mask semantics. The subsequent
+  selection/finalize edits remain local changes for ordinary push after replay.
+
+### Review fix log
+
+| Finding | Resolution |
+| --- | --- |
+| R1-#1 | Fixed: segment fraction for task progress/projections; window ring retained. |
+| R1-#2 | Fixed: shape-stable generation keys and migrated pending-completion regression. |
+| R1-#3 | Fixed: engine-internal completions enter the completion journal and local guard. |
+| R1-#4 | Fixed: finish sound/notification deduped by Work-window identity. |
+| R1-#5 | Fixed: serialized work starts, post-await occupation check, pending Inspector Start guard. |
+| R1-#6 | Fixed: derived occupant keys and legacy identity stamped before pause/resume; documented: pre-upgrade resumed identity may be opaque. |
+| R1-#7 | Fixed: ranking eligibility uses normalized `waitingOf`. |
+| R1-#8 | Fixed: Today comparator ends with an id tie-break. |
+| R1-#9 | Deferred (item 9 stopped): D7 is authorized, but `src/lib/today.workWindow.test.ts:23` asserts the superseded row count and is outside the permitted file list. The D7 implementation/regression were reverted pending authorization to update that assertion. |
+| R1-#10 | Fixed: Inspector break preflight reaches the existing AppState error path before create/link. |
+| R2-#1 | Fixed: evict a cached linker id if the current staged app state no longer contains it. |
+| R2-#2 | Fixed: refresh open-sheet candidates with its open-time date and revalidate pending/awaited selections. |
+| R2-#3 | Fixed: catch row-activation rejection while preserving the AppState banner. |
+
+Only R1-#9 is deferred at the file-list boundary; the D7 product decision above remains binding for the follow-up.

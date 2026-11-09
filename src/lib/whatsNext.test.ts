@@ -472,3 +472,10 @@ describe("determinism", () => {
         expect(rotated).toEqual(forward);
     });
 });
+
+
+it("keeps a malformed waiting object eligible through normalization", () => {
+    const malformed = { type: "robot", since: REFERENCE.toISOString() } as unknown as PMTask["waiting"];
+    const result = rank({ pmTasks: [pmTask({ waiting: malformed, estimatePomos: 1 })] });
+    expect(result.top.map(c => c.task.id)).toEqual(["pm-task"]);
+});

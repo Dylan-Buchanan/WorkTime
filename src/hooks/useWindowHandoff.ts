@@ -1,13 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAppState } from "../state/AppStateContext";
+import { isWhatsNextCandidate } from "../lib/whatsNext";
+import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
 import { usePM } from "../state/ProjectManagerContext";
 
 /** Observe the existing linker; all timer commands use the latest contexts. */
-export function useWindowHandoff(onSuccess: () => void) {
+export function useWindowHandoff(onSuccess: () => void, sheet?: { reference: Date }) {
+    const fallbackReference = useRef(new Date());
+    const reference = sheet?.reference ?? fallbackReference.current;
     const app = useAppState();
     const pm = usePM();
-    const current = useRef({ app, pm, onSuccess });
-    useLayoutEffect(() => { current.current = { app, pm, onSuccess }; });
+    const current = useRef({ app, pm, onSuccess, reference });
+    useLayoutEffect(() => { current.current = { app, pm, onSuccess, reference }; });
     const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
     const [linkErrors, setLinkErrors] = useState<Record<string, string>>({});
     const [error, setError] = useState<string | null>(null);
@@ -27,12 +31,27 @@ export function useWindowHandoff(onSuccess: () => void) {
     };
     useEffect(() => () => { operation.current += 1; }, []);
 
+    const eligibleTask = (id: string) => {
+        const { app: latest, pm: latestPM, reference: at } = current.current;
+        const task = latestPM.state.tasks[id];
+        const occupant = latest.state?.timer?.kind === "Work"
+            ? findPMTaskByAppTaskId(latestPM.state.tasks, latest.state.timer.task_id)?.id ?? null
+            : null;
+        if (!isWhatsNextCandidate(task, {
+            backendTasks: latest.state?.tasks ?? {}, projects: latestPM.state.projects,
+            currentOccupantId: occupant, reference: at,
+        })) throw new Error("This task is no longer eligible. Choose another task.");
+        return task;
+    };
+
     const join = async (id: string, token: number) => {
         const task = current.current.pm.state.tasks[id];
         if (!task?.appTaskId || joining.current) return;
         joining.current = true;
         pendingId.current = null;
         try {
+            const task = eligibleTask(id);
+            if (!task.appTaskId) throw new Error("This task is still being prepared. Try again.");
             const { app: latest } = current.current;
             if (!latest.state) throw new Error("Timer state is still loading. Try again.");
             if (latest.state.timer && latest.state.timer.kind !== "Work") {
@@ -42,7 +61,9 @@ export function useWindowHandoff(onSuccess: () => void) {
                 if (latest.state.timer?.paused) await latest.resumeTimer();
                 // Closing during an awaited resume cancels the pending choice.
                 if (operation.current !== token) return;
-                await current.current.app.startTaskWork(task.appTaskId);
+                const ready = eligibleTask(id);
+                if (!ready.appTaskId) throw new Error("This task is still being prepared. Try again.");
+                await current.current.app.startTaskWork(ready.appTaskId);
                 if (operation.current === token) current.current.onSuccess();
             }
         } catch (err) {
@@ -59,6 +80,10 @@ export function useWindowHandoff(onSuccess: () => void) {
         const token = ++operation.current;
         setError(null);
         setNotice(null);
+        try { eligibleTask(id); } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            return;
+        }
         setBusyTaskId(id);
         if (current.current.pm.state.tasks[id]?.appTaskId) void join(id, token);
         else pendingId.current = id;
@@ -66,6 +91,13 @@ export function useWindowHandoff(onSuccess: () => void) {
     // No polling: linkage and failures arrive through the PM context.
     useEffect(() => {
         if (!busyTaskId || pendingId.current !== busyTaskId) return;
+        try { eligibleTask(busyTaskId); } catch (err) {
+            pendingId.current = null;
+            operation.current += 1;
+            setBusyTaskId(null);
+            setError(err instanceof Error ? err.message : String(err));
+            return;
+        }
         const failure = pm.linkFailures[busyTaskId];
         if (failure !== undefined) {
             pendingId.current = null;

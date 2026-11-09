@@ -4,9 +4,11 @@ import { useSounds } from "../hooks/useSounds";
 import { computeRemainingMs } from "../lib/timer";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
-import { workStartOccupation } from "../lib/engine";
+import { windowStartedAt, workStartOccupation } from "../lib/engine";
 import type { EngineResult } from "../lib/engine";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
+
+type CompletionNotice = ReconciledTimer & { windowId?: string };
 
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
 let notificationSetup: Promise<void> | null = null;
@@ -89,8 +91,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const progressing = useRef(false);
+    const lastNotifiedWindowRef = useRef<string | null>(null);
+    const startTaskWorkQueueRef = useRef<Promise<unknown>>(Promise.resolve());
     const stateRef = useRef<AppStateData | null>(null);
-    const queuedReconciliationRef = useRef<{ timer: ReconciledTimer; state: AppStateData } | null>(null);
+    const queuedReconciliationRef = useRef<{ timer: CompletionNotice; state: AppStateData } | null>(null);
     const taskCompletionListenersRef = useRef(new Set<(taskId: string) => void>());
     const terminalTaskIdsRef = useRef(new Set<string>());
     let soundApi: { play: (k: any) => void } | null = null;
@@ -102,7 +106,15 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // redundant setState (and its extra render) while still returning the fresh
     // clone for progression/reconciliation callers.
     const fetchAndSetState = useCallback(async () => {
-        const result = await data.fetchState();
+        const captured = stateRef.current?.timer;
+        const fetched = await data.fetchState();
+        const reconciled = fetched.reconciledTimer;
+        const windowId = reconciled?.kind === "Work"
+            ? captured?.kind === "Work" && captured.task_id === reconciled.taskId
+                ? windowStartedAt(captured)
+                : [...fetched.state.logs].reverse().find(log => !log.was_break && log.task_id === reconciled.taskId && log.work_window_id)?.work_window_id ?? undefined
+            : undefined;
+        const result = { ...fetched, reconciledTimer: reconciled ? { ...reconciled, windowId } : null };
         stateRef.current = result.state;
         setState((current) => {
             if (current && JSON.stringify(current) === JSON.stringify(result.state)) return current;
@@ -123,7 +135,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } catch { /* notifications are optional */ }
     }, []);
 
-    const runProgression = useCallback(async (finishedTimer?: ActiveTimer, reconciliation?: { timer: ReconciledTimer; state: AppStateData }) => {
+    const runProgression = useCallback(async (finishedTimer?: ActiveTimer, reconciliation?: { timer: CompletionNotice; state: AppStateData }) => {
         if (progressing.current) {
             if (reconciliation) queuedReconciliationRef.current = reconciliation;
             return;
@@ -145,7 +157,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 after = completion.state;
             }
 
-            if (applied) {
+            const windowId = finishedTimer?.kind === "Work" ? windowStartedAt(finishedTimer) : reconciliation?.timer.windowId;
+            const alreadyNotified = windowId !== undefined && lastNotifiedWindowRef.current === windowId;
+            if (applied && !alreadyNotified) {
+                if (windowId !== undefined) lastNotifiedWindowRef.current = windowId;
                 soundApi?.play(finishedTimer?.kind === "Work" || reconciliation?.timer.kind === "Work" ? "pomodoroFinish" : "breakOver");
                 const kind = finishedTimer?.kind ?? reconciliation?.timer.kind;
                 const taskId = finishedTimer?.task_id ?? reconciliation?.timer.taskId;
@@ -274,7 +289,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (before?.timer?.kind === "Work" && !result.state.timer &&
             result.state.current_cycle_pomodoros > before.current_cycle_pomodoros) {
             await runProgression(undefined, {
-                timer: { kind: "Work", taskId: before.timer.task_id, applied: true },
+                timer: { kind: "Work", taskId: before.timer.task_id, applied: true, windowId: windowStartedAt(before.timer) },
                 state: result.state,
             });
         }
@@ -311,21 +326,30 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             throw err;
         }
     };
-    const startTaskWork = async (id: string): Promise<"started" | "joined"> => {
-        try {
-            setError(null);
-            const occupation = workStartOccupation(stateRef.current?.timer ?? null);
-            if (occupation === "blocked") throw new Error("A break is running");
-            await adoptTaskTransition(() => data.setActiveTask(id));
-            if (occupation === "join") return "joined";
-            const started = await data.startWorkTimer();
-            stateRef.current = started.state;
-            setState(started.state);
-            return "started";
-        } catch (err: any) {
-            setError(err?.message || err?.toString?.() || "Unknown error");
-            throw err;
-        }
+    const startTaskWork = (id: string): Promise<"started" | "joined"> => {
+        // Serialize the full free -> select -> start sequence. Rechecking after
+        // an await alone still lets two free callers race before start commits.
+        const pending = startTaskWorkQueueRef.current.then(async (): Promise<"started" | "joined"> => {
+            try {
+                setError(null);
+                const occupation = workStartOccupation(stateRef.current?.timer ?? null);
+                if (occupation === "blocked") throw new Error("A break is running");
+                await adoptTaskTransition(() => data.setActiveTask(id));
+                if (occupation === "join") return "joined";
+                const currentOccupation = workStartOccupation(stateRef.current?.timer ?? null);
+                if (currentOccupation === "blocked") throw new Error("A break is running");
+                if (currentOccupation === "join") return "joined";
+                const started = await data.startWorkTimer();
+                stateRef.current = started.state;
+                setState(started.state);
+                return "started";
+            } catch (err: any) {
+                setError(err?.message || err?.toString?.() || "Unknown error");
+                throw err;
+            }
+        });
+        startTaskWorkQueueRef.current = pending.catch(() => undefined);
+        return pending;
     };
     const subscribeTaskCompletions = useCallback((listener: (taskId: string) => void) => {
         taskCompletionListenersRef.current.add(listener);

@@ -1,4 +1,5 @@
 import type { PMTask, Project, Task, TaskPriority } from "../state/types";
+import { waitingOf } from "./pm/waiting";
 import { isProjectWorkableOnDate } from "./projectSchedule";
 import { EPSILON, classifyDueScope, parseDueDateKey } from "./timer";
 
@@ -58,6 +59,21 @@ function floorRemaining(estimatedRemaining: number): number {
     return estimatedRemaining > EPSILON ? estimatedRemaining : 1;
 }
 
+/** Shared live eligibility for ranking and a pending sheet selection. */
+export function isWhatsNextCandidate(task: PMTask | undefined, input: {
+    backendTasks: Readonly<Record<string, Task>>;
+    projects: Readonly<Record<string, Project>>;
+    currentOccupantId: string | null;
+    reference: Date;
+}): boolean {
+    if (!task || task.isArchived || task.status === "Done" || task.status === "Blocked" || waitingOf(task) !== null) return false;
+    if (input.currentOccupantId !== null && task.id === input.currentOccupantId) return false;
+    const backend = task.appTaskId ? input.backendTasks[task.appTaskId] : undefined;
+    if (backend?.completed_at || backend?.archived) return false;
+    const project = task.projectId ? input.projects[task.projectId] : undefined;
+    return !project || isProjectWorkableOnDate(project, input.reference);
+}
+
 /**
  * Own candidate collector: the shared projection collector stays the scope
  * definition for Today and the projected-finish card, and this one adds
@@ -73,18 +89,9 @@ function collectCandidates(input: {
     const candidates: RankedCandidate[] = [];
 
     for (const pmTask of input.pmTasks) {
-        if (pmTask.isArchived) continue;
-        if (pmTask.status === "Done") continue;
-        if (pmTask.status === "Blocked") continue;
-        if (pmTask.waiting != null) continue;
-        if (input.currentOccupantId != null && pmTask.id === input.currentOccupantId) continue;
-
+        if (!isWhatsNextCandidate(pmTask, input)) continue;
         const backendTask = pmTask.appTaskId ? input.backendTasks[pmTask.appTaskId] : undefined;
-        if (backendTask?.completed_at) continue;
-        if (backendTask?.archived) continue;
-
         const project = pmTask.projectId ? input.projects[pmTask.projectId] : undefined;
-        if (project && !isProjectWorkableOnDate(project, input.reference)) continue;
 
         const estimate = effectiveEstimate(pmTask, backendTask);
         const remainingPomodoros = Number.isFinite(estimate) && estimate > EPSILON

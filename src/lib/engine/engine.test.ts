@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { workOccupantKey } from "../pm/workStart";
 import type { ActiveTimer, AppStateData, PomodoroLogEntry, Settings, Task } from "../../state/types";
 import {
     archiveTask,
@@ -572,4 +573,22 @@ describe("work log window attribution", () => {
         expect(completeTimer(state, at(1500), "break").state.logs[0].work_window_id).toBeNull();
         expect(skipBreak(state, at(300), "skip").state.logs[0].work_window_id).toBeNull();
     });
+});
+
+
+it("stamps legacy Work identity before pause accumulation and resume timestamp changes", () => {
+    const state = stateWithTask();
+    state.timer = timer();
+    const identity = windowStartedAt(state.timer);
+    const occupant = workOccupantKey(state.timer);
+    const paused = pauseTimer(state, at(600)).state;
+    expect(windowStartedAt(paused.timer!)).toBe(identity);
+    expect(paused.timer!.window_started_at).toBe(identity);
+    expect(workOccupantKey(paused.timer)).toBe(occupant);
+    const resumed = resumeTimer(paused, at(3600)).state;
+    expect(windowStartedAt(resumed.timer!)).toBe(identity);
+    expect(workOccupantKey(resumed.timer)).toBe(occupant);
+    const legacyPaused = { ...paused, timer: { ...paused.timer!, window_started_at: undefined } };
+    const derived = windowStartedAt(legacyPaused.timer);
+    expect(windowStartedAt(resumeTimer(legacyPaused, at(3600)).state.timer!)).toBe(derived);
 });

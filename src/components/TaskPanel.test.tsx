@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TASK_SORT_LS_KEY, TaskPanel } from "./TaskPanel";
-import { AppStateProvider } from "../state/AppStateContext";
+import { AppStateProvider, useAppState } from "../state/AppStateContext";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { DataProvider } from "../state/DataContext";
@@ -91,4 +91,16 @@ describe("TaskPanel sort persistence", () => {
         render(wrap(data, <TaskPanel />));
         expect(sortSelect().value).toBe("default");
     });
+});
+
+
+it("handles a rejected row activation while preserving the AppState error banner", async () => {
+    const task = { id: "a", name: "Clickable", target_pomodoros: 1, completed_pomodoros: 0, created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false };
+    const data = new InMemoryDataAccess(makeAppState({ tasks: { a: task } }));
+    vi.spyOn(data, "setActiveTask").mockRejectedValue(new Error("Activation unavailable"));
+    function Banner() { return <span role="alert">{useAppState().error}</span>; }
+    render(wrap(data, <><TaskPanel /><Banner /></>));
+    const row = await screen.findByText("Clickable (0/1)");
+    await act(async () => { fireEvent.click(row); });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Activation unavailable"));
 });

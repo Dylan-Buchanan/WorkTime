@@ -1,3 +1,4 @@
+import { elapsedTimerSecs } from "./engine/core";
 import { ActiveTimer, PMTask, Project, Task } from "../state/types";
 import { isProjectWorkableOnDate, type ProjectSchedule } from "./projectSchedule";
 
@@ -266,8 +267,9 @@ export function computeElapsedSecs(timer: ActiveTimer | null | undefined, nowMs:
 
 export function computeActiveFractionComplete(timer: ActiveTimer | null | undefined, nowMs: number, workMinutesSetting: number): number {
     if (!timer || timer.kind !== "Work") return 0;
-    const planned = Math.max(workMinutesSetting * 60, timer.planned_secs || 0);
-    if (planned <= 0) return 0;
-    const remaining = computeRemainingMs(timer, nowMs) / 1000;
-    return Math.min(1, Math.max(0, 1 - remaining / planned));
+    const workSecs = workMinutesSetting * 60;
+    if (workSecs <= 0) return 0;
+    // Outgoing segments are already banked on a switch. Only this occupant's
+    // elapsed segment belongs in task progress and remaining-work projections.
+    return Math.min(1, Math.max(0, elapsedTimerSecs(timer, new Date(nowMs)) / workSecs));
 }

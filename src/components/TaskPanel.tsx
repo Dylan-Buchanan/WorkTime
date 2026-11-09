@@ -325,7 +325,7 @@ export const TaskPanel: React.FC = () => {
                                                 key={renderKey}
                                                 title={tooltipParts.join("\n") || undefined}
                                                 onClick={() => {
-                                                    setActiveTask(t.id);
+                                                    void setActiveTask(t.id).catch(() => undefined);
                                                     play("pressSide");
                                                 }}
                                                 className={`group flex items-center gap-2 rounded border border-transparent px-2 py-1.5 text-[11px] transition hover:border-neutral-700 hover:bg-neutral-800/50 ${

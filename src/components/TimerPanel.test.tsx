@@ -714,10 +714,60 @@ describe("focus window display", () => {
             fireEvent.click(screen.getByRole("button", { name: "Switch active timer task" }));
             await waitFor(() => expect(data.store.state.timer?.task_id).toBe(second.id));
             expect(data.store.state.timer?.planned_secs).toBe(900);
+            await waitFor(() => expect(screen.getByText(/Focus progress:/).textContent).toContain("0p done"));
             expect(ring().style.background).toBe(before);
             expect(screen.getByText("10m / 25m")).toBeInTheDocument();
             fireEvent.click(screen.getByRole("button", { name: "End focus" }));
             await waitFor(() => expect(data.store.state.timer).toBeNull());
         } finally { clock.mockRestore(); }
     });
+});
+
+
+it.each([
+    { status: "Done" as const }, { status: "Blocked" as const }, { isArchived: true },
+    { waiting: { type: "person" as const, since: "2026-01-01T00:00:00Z" } },
+])("refreshes open sheet candidates when a PM task becomes ineligible: %j", async (patch) => {
+    const view = await setupHandoff();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ })).toBeVisible();
+    await act(async () => { view.current.pm.updateTask("pb", patch); });
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
+});
+
+it("refreshes open sheet candidates when the backend is archived", async () => {
+    const view = await setupHandoff();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    await act(async () => { await view.current.app.archiveTask("b"); });
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
+});
+
+
+it("rechecks project workability using the sheet's open-time date", async () => {
+    const view = await setupHandoff();
+    const opened = new Date();
+    const today = opened.getDay();
+    const tomorrow = (today + 1) % 7 as NonNullable<Project["workableDays"]>[number];
+    const p = { ...makeProject("p"), workableDays: [today as NonNullable<Project["workableDays"]>[number]] };
+    // Introduce the project through the provider's supported creation/update API.
+    let projectId!: string;
+    await act(async () => {
+        const created = view.current.pm.createProject("Scheduled");
+        projectId = created.id;
+    });
+    await act(async () => {
+        view.current.pm.updateProject(projectId, { workableDays: p.workableDays });
+        view.current.pm.updateTask("pb", { projectId });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B/ })).toBeVisible();
+    // Move the wall clock to tomorrow while the sheet retains today's date.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+        vi.setSystemTime(new Date(opened.getTime() + 86_400_000));
+        await act(async () => { view.current.pm.updateTask("pb", { title: "Task B updated" }); });
+        expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Task B updated/ })).toBeVisible();
+    } finally { vi.useRealTimers(); }
+    await act(async () => { view.current.pm.updateProject(projectId, { workableDays: [tomorrow] }); });
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: /Task B/ })).toBeNull();
 });

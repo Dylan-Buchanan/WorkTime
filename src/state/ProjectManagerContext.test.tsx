@@ -674,6 +674,31 @@ describe("StateSyncBridge", () => {
         expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
     });
 
+    it("evicts a cached backend id removed by discard before retrying a failed PM save", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Discard retry" }) } });
+        await data.sync({ reason: "manual" });
+        const originalSave = data.savePMState.bind(data);
+        let rejectLink = true;
+        vi.spyOn(data, "savePMState").mockImplementation(async state => {
+            if (rejectLink && state.tasks.pt1?.appTaskId) throw new Error("Link save unavailable");
+            return originalSave(state);
+        });
+        const create = vi.spyOn(data, "createTask");
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.linkFailures.pt1).toBe("Link save unavailable"));
+        const removedId = Object.keys(data.store.state.tasks)[0];
+        await act(async () => { await data.discardPendingChanges(); await view.current.app.refresh(); });
+        expect(data.store.state.tasks[removedId]).toBeUndefined();
+        rejectLink = false;
+        act(() => view.current.pm.retryLink("pt1"));
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1.appTaskId).toBeTruthy());
+        const linkedId = view.current.pm.state.tasks.pt1.appTaskId!;
+        expect(linkedId).not.toBe(removedId);
+        expect(data.store.state.tasks[linkedId]).toBeDefined();
+        expect(create).toHaveBeenCalledTimes(2);
+    });
+
     it("reuses the created backend id when retrying a failed PM-link save", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.savePMState({ ...serverState([]), tasks: { pt1: makePMTask({ id: "pt1", title: "Save retry" }) } });
