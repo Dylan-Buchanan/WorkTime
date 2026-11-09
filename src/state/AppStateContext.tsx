@@ -16,6 +16,11 @@ type PauseEpisode = {
     pausedRemainingSecs: ActiveTimer["paused_remaining_secs"];
 };
 
+function sameTimerOccupant(left: ActiveTimer | null | undefined, right: ActiveTimer | null | undefined): boolean {
+    if (!left || !right) return !left && !right;
+    return left.task_id === right.task_id && left.kind === right.kind && windowStartedAt(left) === windowStartedAt(right);
+}
+
 let notify: ((opts: { title: string; body?: string }) => void) | null = null;
 let notificationSetup: Promise<void> | null = null;
 export function resetNotifyForTesting(): void {
@@ -105,16 +110,24 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const taskCompletionListenersRef = useRef(new Set<(taskId: string) => void>());
     const timerTransitionListenersRef = useRef(new Set<(event: TimerTransitionEvent) => void>());
     const pauseEpisodeRef = useRef<PauseEpisode | null>(null);
-    const pauseEpisodeGenerationRef = useRef(0);
+    // Only command adoptions supersede an in-flight publisher. A revision read
+    // can expose that command's own committed result before its await resumes.
+    const commandAdoptionSeqRef = useRef(0);
     // Wrappers read their own adoption observation without changing adoptResult's
     // void/error contract or serializing independent commands.
     const commandAdoptionsRef = useRef(new WeakMap<EngineResult<unknown>, {
-        current: boolean; episodeGeneration: number; adoptedEpisodeGeneration: number;
+        current: boolean;
     }>());
     const terminalTaskIdsRef = useRef(new Set<string>());
     let soundApi: { play: (k: any) => void } | null = null;
     try { soundApi = useSounds(); } catch { /* optional sound setup */ }
     stateRef.current = state;
+
+    const commandIsCurrent = useCallback((seq: number, before: ActiveTimer | null | undefined, after: ActiveTimer | null) => {
+        const observed = stateRef.current?.timer;
+        return commandAdoptionSeqRef.current === seq &&
+            (sameTimerOccupant(observed, before) || sameTimerOccupant(observed, after));
+    }, []);
 
     const publishTimerTransition = useCallback((event: TimerTransitionEvent) => {
         for (const listener of [...timerTransitionListenersRef.current]) {
@@ -123,11 +136,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }, []);
     const replacePauseEpisode = useCallback((episode: PauseEpisode | null) => {
         pauseEpisodeRef.current = episode;
-        pauseEpisodeGenerationRef.current += 1;
     }, []);
     const consumePauseHandoff = useCallback(() => {
-        // Even when an ordinary paused episode remains valid, a successful
-        // command invalidates any in-flight attempt to carry that episode.
+        // Other commands consume a carried episode; the command adoption
+        // sequence also invalidates any in-flight attempt to carry one.
         replacePauseEpisode(pauseEpisodeRef.current?.handoff ? null : pauseEpisodeRef.current);
     }, [replacePauseEpisode]);
     const reconcilePauseEpisode = useCallback((timer: ActiveTimer | null) => {
@@ -216,6 +228,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 // A race loser must adopt the winner's state before deciding whether to start a timer.
                 after = (await fetchAndSetState()).state;
             }
+            if (!reconciliation && applied && !alreadyNotified) commandAdoptionSeqRef.current += 1;
             stateRef.current = after;
             setState(after);
             reconcilePauseEpisode(after.timer);
@@ -230,15 +243,18 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                         const taskId = finishedTimer?.task_id ?? reconciliation?.timer.taskId;
                         if (!after.active_task && taskId && after.tasks[taskId]) await data.setActiveTask(taskId);
                         const started = await data.startBreakTimer();
+                        commandAdoptionSeqRef.current += 1;
                         stateRef.current = started.state;
                         setState(started.state);
                     } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start break timer"); }
                 } else if (after.active_task) {
                     try {
-                        const capturedTimer = JSON.stringify(stateRef.current?.timer);
+                        const before = stateRef.current?.timer;
+                        const capturedSeq = commandAdoptionSeqRef.current;
                         const started = await data.startWorkTimer();
                         const at = new Date().toISOString();
-                        const current = JSON.stringify(stateRef.current?.timer) === capturedTimer;
+                        const current = commandIsCurrent(capturedSeq, before, started.state.timer);
+                        commandAdoptionSeqRef.current += 1;
                         stateRef.current = started.state;
                         setState(started.state);
                         if (current) consumePauseHandoff();
@@ -265,7 +281,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             queuedReconciliationRef.current = null;
             if (queued) void runProgression(undefined, queued);
         }
-    }, [data, fetchAndSetState, maybeNotifyTimerEnd, publishTimerTransition, reconcilePauseEpisode, consumePauseHandoff]);
+    }, [data, fetchAndSetState, maybeNotifyTimerEnd, publishTimerTransition, reconcilePauseEpisode, consumePauseHandoff, commandIsCurrent]);
 
     const refresh = useCallback(async (): Promise<AppStateData> => {
         try {
@@ -316,19 +332,20 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Errors leave React state untouched (last persisted state stays visible)
     // and surface in `error`.
     const adoptResult = async (run: () => Promise<EngineResult<unknown>>, rethrow = false) => {
-        const capturedTimer = JSON.stringify(stateRef.current?.timer);
+        const before = stateRef.current?.timer;
+        const capturedSeq = commandAdoptionSeqRef.current;
         try {
             setError(null);
             const result = await run();
-            const current = JSON.stringify(stateRef.current?.timer) === capturedTimer;
-            const episodeGeneration = pauseEpisodeGenerationRef.current;
+            const current = commandIsCurrent(capturedSeq, before, result.state.timer);
+            commandAdoptionSeqRef.current += 1;
             stateRef.current = result.state;
             setState(result.state);
             // Any successful generic command consumes a carried episode. Resume
             // explicitly restores it below only for a matching handoff resume.
             if (current) consumePauseHandoff();
             reconcilePauseEpisode(result.state.timer);
-            commandAdoptionsRef.current.set(result, { current, episodeGeneration, adoptedEpisodeGeneration: pauseEpisodeGenerationRef.current });
+            commandAdoptionsRef.current.set(result, { current });
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
             if (rethrow) throw err;
@@ -339,6 +356,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         try {
             setError(null);
             const result = await data.createTask(name, target);
+            commandAdoptionSeqRef.current += 1;
+            stateRef.current = result.state;
             setState(result.state);
             consumePauseHandoff();
             reconcilePauseEpisode(result.state.timer);
@@ -351,10 +370,11 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const adoptTaskTransition = async (run: () => Promise<EngineResult<unknown>>) => {
         const before = stateRef.current;
-        const capturedTimer = JSON.stringify(before?.timer);
+        const capturedSeq = commandAdoptionSeqRef.current;
         const result = await run();
         const at = new Date().toISOString();
-        const current = JSON.stringify(stateRef.current?.timer) === capturedTimer;
+        const current = commandIsCurrent(capturedSeq, before?.timer, result.state.timer);
+        commandAdoptionSeqRef.current += 1;
         stateRef.current = result.state;
         setState(result.state);
         const outgoing = before?.timer;
@@ -440,6 +460,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         try {
             setError(null);
             const result = await data.archiveTask(id);
+            commandAdoptionSeqRef.current += 1;
+            stateRef.current = result.state;
             setState(result.state);
             consumePauseHandoff();
             reconcilePauseEpisode(result.state.timer);
@@ -461,10 +483,12 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 const currentOccupation = workStartOccupation(stateRef.current?.timer ?? null);
                 if (currentOccupation === "blocked") throw new Error("A break is running");
                 if (currentOccupation === "join") return "joined";
-                const capturedTimer = JSON.stringify(stateRef.current?.timer);
+                const before = stateRef.current?.timer;
+                const capturedSeq = commandAdoptionSeqRef.current;
                 const started = await data.startWorkTimer();
                 const at = new Date().toISOString();
-                const current = JSON.stringify(stateRef.current?.timer) === capturedTimer;
+                const current = commandIsCurrent(capturedSeq, before, started.state.timer);
+                commandAdoptionSeqRef.current += 1;
                 stateRef.current = started.state;
                 setState(started.state);
                 if (current) replacePauseEpisode(null);
@@ -506,7 +530,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const before = stateRef.current;
         if (!before?.timer?.paused) return;
         const episode = pauseEpisodeRef.current;
-        const episodeGeneration = pauseEpisodeGenerationRef.current;
+        const capturedSeq = commandAdoptionSeqRef.current;
         let success: { result: EngineResult<unknown>; at: string } | undefined;
         await adoptResult(async () => {
             const result = await data.resumeTimer();
@@ -516,8 +540,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (!success) return;
         const adoption = commandAdoptionsRef.current.get(success.result);
         if (!adoption?.current) return;
-        const canCarryEpisode = adoption.episodeGeneration === episodeGeneration &&
-            adoption.adoptedEpisodeGeneration === pauseEpisodeGenerationRef.current;
+        // A revision refresh can reconcile away this command's paused episode
+        // after seeing its running result. Only another command invalidates the
+        // captured carry; the matching task/window check below still applies.
+        const canCarryEpisode = commandAdoptionSeqRef.current === capturedSeq + 1;
         replacePauseEpisode(null);
         const timer = success.result.state.timer;
         if (before.timer.kind === "Work" && timer?.kind === "Work" && !timer.paused &&
@@ -532,6 +558,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         try {
             setError(null);
             const result = await data.resetAppState();
+            commandAdoptionSeqRef.current += 1;
+            stateRef.current = result.state;
             setState(result.state);
             replacePauseEpisode(null);
         } catch (err: any) {
