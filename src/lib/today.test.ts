@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { defaultAppState, startWorkTimer, setActiveTask } from "./engine";
 import type { Habit, HabitCompletion, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
 import {
+    computeActiveFractionComplete,
     buildProjectionBacklogs,
     collectEligibleProjectionTasks,
     getLocalWeekWindow,
@@ -384,4 +386,27 @@ describe("buildTodayOverview", () => {
         expect(overview.habitsCompleted).toBe(1);
         expect(overview.pomodoros.count).toBe(1);
     });
+});
+
+
+describe("post-review Today accounting", () => {
+    it("preserves 1.6p remaining when A switches to B at ten minutes", () => {
+        const state = defaultAppState();
+        state.tasks = { a: backendTask({ id: "a" }), b: backendTask({ id: "b" }) };
+        state.active_task = "a";
+        const running = startWorkTimer(state, REFERENCE).state;
+        const now = new Date(REFERENCE.getTime() + 600_000);
+        const switched = setActiveTask(running, "b", now, "switch").state;
+        const tasks = [pmTask({ id: "a", appTaskId: "a", estimatePomos: 1 }), pmTask({ id: "b", appTaskId: "b", estimatePomos: 1 })];
+        const remaining = (s: typeof state) => buildTodayTasks({ reference: REFERENCE, pmTasks: tasks, backendTasks: s.tasks, projects: {}, activeWorkTaskId: s.timer!.task_id, activeWorkFraction: computeActiveFractionComplete(s.timer, now.getTime(), 25) }).remainingPomodoros;
+        expect(remaining(running)).toBeCloseTo(1.6);
+        expect(remaining(switched)).toBeCloseTo(remaining(running));
+    });
+    it("orders equal titles and due dates by id independently of insertion order", () => {
+        const tasks = [pmTask({ id: "b", estimatePomos: 1 }), pmTask({ id: "a", estimatePomos: 1 })];
+        for (const pmTasks of [tasks, [...tasks].reverse()]) {
+            expect(buildTodayTasks({ reference: REFERENCE, pmTasks, backendTasks: {}, projects: {} }).tasks.map(t => t.id)).toEqual(["a", "b"]);
+        }
+    });
+
 });

@@ -8,6 +8,7 @@ import {
     buildProjectionBacklogs,
     collectEligibleProjectionTasks,
     computeElapsedSecs,
+    computeActiveFractionComplete,
     formatDurationMinutes,
     formatMs,
     formatPomodoroCount,
@@ -24,7 +25,7 @@ import { WaitingBadge } from "./WaitingIndicator";
 import { waitingOf } from "../lib/pm/waiting";
 import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
 import { isWorkWindowLive } from "../lib/engine";
-import { rankWhatsNext, type WhatsNextResult } from "../lib/whatsNext";
+import { rankWhatsNext } from "../lib/whatsNext";
 import { SwitchSheet } from "./SwitchSheet";
 import { useWindowHandoff } from "../hooks/useWindowHandoff";
 
@@ -240,8 +241,8 @@ export const TimerPanel: React.FC = () => {
     const timer = state?.timer;
     const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
     const waiting = waitingTask ? waitingOf(waitingTask) : null;
-    const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; result: WhatsNextResult; occupantId: string | null } | null>(null);
-    const handoff = useWindowHandoff(() => setSheet(null));
+    const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; reference: Date; occupantId: string | null } | null>(null);
+    const handoff = useWindowHandoff(() => setSheet(null), sheet ?? undefined);
     const openSheet = (mode: "switch" | "waiting", invoker: HTMLButtonElement) => {
         const reference = new Date();
         invoker.focus();
@@ -249,10 +250,7 @@ export const TimerPanel: React.FC = () => {
         if (mode === "waiting" && waitingTask) {
             updateTask(waitingTask.id, { waiting: { type: "agent", since: reference.toISOString() } });
         }
-        setSheet({ mode, occupantId: waitingTask?.id ?? null, result: rankWhatsNext({
-            pmTasks: Object.values(pmState.tasks), backendTasks: state?.tasks ?? {}, projects: pmState.projects,
-            currentOccupantId: waitingTask?.id ?? null, reference,
-        }) });
+        setSheet({ mode, occupantId: waitingTask?.id ?? null, reference });
     };
     const closeSheet = () => { handoff.cancel(); setSheet(null); };
     const sheetOccupant = sheet?.occupantId ? pmState.tasks[sheet.occupantId] : undefined;
@@ -262,7 +260,7 @@ export const TimerPanel: React.FC = () => {
     const workMinutesSetting = state?.settings?.work_minutes ?? 0;
     const activeWorkPlannedSecs = timer?.kind === "Work" ? Math.max(workMinutesSetting * 60, timer.planned_secs || 0) : 0;
     const activeRemainingSecs = timer?.kind === "Work" ? ms / 1000 : 0;
-    const activeFractionComplete = timer?.kind === "Work" && activeWorkPlannedSecs > 0 ? Math.min(1, Math.max(0, 1 - activeRemainingSecs / activeWorkPlannedSecs)) : 0;
+    const activeFractionComplete = computeActiveFractionComplete(timer, Date.now(), workMinutesSetting);
 
     // Planned total (stable) from backend; fallback to computed if missing
     const plannedSecs = timer?.planned_secs || (timer ? (new Date(timer.ends_at).getTime() - new Date(timer.started_at).getTime()) / 1000 : 0);
@@ -744,7 +742,10 @@ export const TimerPanel: React.FC = () => {
                 )}
             </aside>
             {sheet && <SwitchSheet
-                mode={sheet.mode} result={sheet.result} projects={pmState.projects}
+                mode={sheet.mode} result={rankWhatsNext({
+                    pmTasks: Object.values(pmState.tasks), backendTasks: state?.tasks ?? {}, projects: pmState.projects,
+                    currentOccupantId: waitingTask?.id ?? null, reference: sheet.reference,
+                })} projects={pmState.projects}
                 linkStateOf={handoff.linkStateOf} linkErrorOf={handoff.linkErrorOf}
                 waitingType={sheetWaiting?.type}
                 onSetWaitingType={(type) => {

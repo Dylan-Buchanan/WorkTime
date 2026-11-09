@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PMTask } from "../../state/types";
 import { AppStateProvider } from "../../state/AppStateContext";
 import { DataProvider } from "../../state/DataContext";
@@ -123,4 +123,37 @@ describe("TaskInspector waiting control", () => {
         expect(screen.queryByRole("button", { name: "Agent" })).toBeNull();
         expect(screen.queryByRole("button", { name: "Clear waiting" })).toBeNull();
     });
+});
+
+
+it("disables Inspector Start while pending and creates only once on a double click", async () => {
+    const data = await seededData();
+    const original = data.createTask.bind(data);
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const create = vi.spyOn(data, "createTask").mockImplementation(async (...args) => { await gate; return original(...args); });
+    await renderInspector(data);
+    const start = screen.getByRole("button", { name: "Start" });
+    act(() => { start.click(); start.click(); });
+    expect(start).toBeDisabled();
+    expect(create).toHaveBeenCalledOnce();
+    await act(async () => { release(); });
+    await waitFor(() => expect(data.store.state.timer?.kind).toBe("Work"));
+    expect(Object.keys(data.store.state.tasks)).toHaveLength(1);
+});
+
+it("refuses Inspector Start during a break before creating or linking anything", async () => {
+    const data = await seededData();
+    const active = (await data.createTask("Existing", 1)).value;
+    await data.setActiveTask(active.id);
+    await data.startBreakTimer();
+    const create = vi.spyOn(data, "createTask");
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+        await renderInspector(data);
+        await act(async () => screen.getByRole("button", { name: "Start" }).click());
+        expect(create).not.toHaveBeenCalled();
+        expect((await data.loadPMState())!.tasks.pt1.appTaskId).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith("Failed to create timer task", expect.objectContaining({ message: "A break is running" }));
+    } finally { warn.mockRestore(); }
 });

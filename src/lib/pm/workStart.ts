@@ -1,3 +1,4 @@
+import { windowStartedAt } from "../engine/core";
 import type { ActiveTimer, PMTask } from "../../state/types";
 
 export function applyWorkStart(task: PMTask, nowIso: string): PMTask {
@@ -14,5 +15,5 @@ export function findPMTaskByAppTaskId(tasks: Readonly<Record<string, PMTask>>, a
 }
 
 export function workOccupantKey(timer: ActiveTimer | null): string | null {
-    return timer?.kind === "Work" ? `${timer.task_id}|${timer.window_started_at ?? ""}` : null;
+    return timer?.kind === "Work" ? `${timer.task_id}|${windowStartedAt(timer)}` : null;
 }

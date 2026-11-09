@@ -2,6 +2,7 @@ import React from "react";
 import { usePM } from "../../state/ProjectManagerContext";
 import { PMTask, TaskPriority, TaskStatus } from "../../state/types";
 import { useAppState } from "../../state/AppStateContext";
+import { workStartOccupation } from "../../lib/engine";
 import { waitingOf } from "../../lib/pm/waiting";
 import { useNavigate } from "react-router-dom";
 import type { GoogleCalendarDataAccess } from "../../lib/data/GoogleCalendarDataAccess";
@@ -26,6 +27,8 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
     const id = state.ui.selectedTaskId;
     const task = id ? state.tasks[id] : null;
     const minEstimate = 1;
+    const [starting, setStarting] = React.useState(false);
+    const startingRef = React.useRef(false);
 
     const [estimateDraft, setEstimateDraft] = React.useState<string>("");
     const committingRef = React.useRef(false);
@@ -242,8 +245,18 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
                         <div className="text-neutral-400">Spent {task.timeSpentMinutes}m</div>
                         <button
                             className="text-[10px] px-2.5 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                            disabled={starting}
                             onClick={async () => {
+                                if (startingRef.current) return;
+                                startingRef.current = true;
+                                setStarting(true);
                                 try {
+                                    // Use AppState's existing refusal/error path before
+                                    // creating or linking a task during a break.
+                                    if (workStartOccupation(app.state?.timer ?? null) === "blocked") {
+                                        await app.startTaskWork(task.appTaskId ?? "");
+                                        return;
+                                    }
                                     let appId = task.appTaskId;
                                     if (!appId) {
                                         const est = task.estimatePomos || 1;
@@ -257,6 +270,9 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
                                 } catch (err) {
                                     console.error("Failed to create timer task", err);
                                     return;
+                                } finally {
+                                    startingRef.current = false;
+                                    setStarting(false);
                                 }
                                 navigate("/");
                             }}

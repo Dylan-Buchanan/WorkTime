@@ -93,7 +93,7 @@ export function buildTodayTasks(input: BuildTodayTasksInput): TodayTaskList {
             const leftKey = left.dueKey ?? "9999-12-31";
             const rightKey = right.dueKey ?? "9999-12-31";
             if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
-            return left.title.localeCompare(right.title);
+            return left.title.localeCompare(right.title) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
         });
 
     const remainingPomodoros = tasks.reduce((total, task) => total + task.remainingPomodoros, 0);

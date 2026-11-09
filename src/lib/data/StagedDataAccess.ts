@@ -124,6 +124,12 @@ function changedTaskOf(before: AppStateData, after: AppStateData): { before: Tas
     return null;
 }
 
+/** Compare normalized timer shapes without mutating persisted journal/CAS data. */
+function hasCompletedGeneration(record: StagedOwnerRecord, timer: ActiveTimer): boolean {
+    const key = timerGenerationKey(timer);
+    return record.pendingCompletions.some(entry => entry.generationKey === key || timerGenerationKey(entry.expectedTimer) === key);
+}
+
 /** Monotonic per-owner journal sequence so replay order is stable. */
 function nextCompletionSequence(entries: PendingTimerCompletion[]): number {
     return entries.reduce((max, entry) => Math.max(max, entry.sequence), 0) + 1;
@@ -193,7 +199,32 @@ export class StagedDataAccess implements DataAccess {
                 ...current,
                 state: result.state,
             };
-            next = stampStagedChanges(next, before, result.state, this.now());
+            const now = this.now();
+            next = stampStagedChanges(next, before, result.state, now);
+            if (before.timer?.kind === "Work" && !result.state.timer &&
+                result.state.current_cycle_pomodoros > before.current_cycle_pomodoros) {
+                // The engine's expired switch/finalize branches completed this
+                // generation. Journal the *completion* slice, before the later
+                // selection/archive edit, exactly as completeTimer does. The
+                // latter edits remain ordinary staged work after CAS resolves.
+                const log = result.state.logs.find(log => !before.logs.some(old => old.id === log.id));
+                if (!log) throw new EngineError("Timer completion must produce exactly one journaled log");
+                const completion = engineCompleteTimer(before, new Date(log.finished_at), log.id);
+                const changed = changedTaskOf(before, completion.state);
+                const entry: PendingTimerCompletion = {
+                    generationKey: timerGenerationKey(before.timer),
+                    sequence: nextCompletionSequence(current.pendingCompletions),
+                    expectedTimer: clone(before.timer),
+                    expectedTimerState: timerSliceOf(before),
+                    resultTimerState: timerSliceOf(completion.state),
+                    taskBefore: changed ? clone(changed.before) : null,
+                    taskAfter: changed ? clone(changed.after) : null,
+                    log: clone(log),
+                    localOnlyGeneration: !sameAsLastSyncedTimer(current, before.timer),
+                    completedAt: log.finished_at,
+                };
+                next = { ...next, timerCompleted: true, pendingCompletions: [...current.pendingCompletions, entry] };
+            }
             if (extra) next = extra(next);
             return next;
         });
@@ -219,17 +250,16 @@ export class StagedDataAccess implements DataAccess {
 
         const timer = record.state.timer;
         if (timer && !timer.paused && new Date(timer.ends_at).getTime() <= this.now().getTime()) {
-            const generationKey = timerGenerationKey(timer);
             // A completed generation may be restored by a stale sync snapshot.
             // Its guard or journal proves that replaying the engine would count
             // the same pomodoro twice. Clear only that stale timer, under the
             // store lock, so the caller can advance to the next timer.
-            if (record.timerCompleted || record.pendingCompletions.some((entry) => entry.generationKey === generationKey)) {
+            if (record.timerCompleted || hasCompletedGeneration(record, timer)) {
                 let repaired = false;
                 record = await this.store.update(this.ownerId, (current) => {
                     const currentTimer = current.state.timer;
                     if (!currentTimer || !equal(currentTimer, timer) ||
-                        (!current.timerCompleted && !current.pendingCompletions.some((entry) => entry.generationKey === generationKey))) return current;
+                        (!current.timerCompleted && !hasCompletedGeneration(current, currentTimer))) return current;
                     repaired = true;
                     const state = { ...current.state, timer: null };
                     return stampStagedChanges({ ...current, state, timerCompleted: true }, current.state, state, this.now());
@@ -282,7 +312,7 @@ export class StagedDataAccess implements DataAccess {
         if (record.timerCompleted) {
             return { state: cloneAppState(record.state), value: cloneAppState(record.state), applied: false };
         }
-        if (captured && record.pendingCompletions.some((c) => c.generationKey === timerGenerationKey(captured))) {
+        if (captured && hasCompletedGeneration(record, captured)) {
             return { state: cloneAppState(record.state), value: cloneAppState(record.state), applied: false };
         }
 
@@ -295,7 +325,7 @@ export class StagedDataAccess implements DataAccess {
             if (current.timerCompleted) return current;
             if (
                 latestTimer &&
-                current.pendingCompletions.some((c) => c.generationKey === timerGenerationKey(latestTimer))
+                hasCompletedGeneration(current, latestTimer)
             ) {
                 return current;
             }

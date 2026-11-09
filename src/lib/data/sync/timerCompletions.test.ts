@@ -537,11 +537,18 @@ describe("window timer replay compatibility", () => {
         const pending = parsed.pendingCompletions[0];
         expect(pending).toEqual(original);
         expect(completionRpcPayload(pending).p_expected_timer).toEqual(timer);
-        expect(timerGenerationKey(timer)).not.toBe(timerGenerationKey({ ...timer, window_started_at: "other-window" }));
+        expect(timerGenerationKey(timer)).toBe(timerGenerationKey({ ...timer, window_started_at: "other-window" }));
         const resolved = applyCompletionWinner(parsed, pending);
         expect(resolved.pendingCompletions).toEqual([]);
         const twice = applyCompletionWinner(resolved, pending);
         expect(twice.state.logs).toHaveLength(1);
         expect(twice.state.tasks.t1.completed_pomodoros).toBe(1);
     });
+});
+
+
+it("deduplicates pre-v10 and backfilled timer shapes without rewriting CAS payloads", () => {
+    const legacy = TIMER();
+    const backfilled = { ...legacy, window_started_at: legacy.started_at };
+    expect(timerGenerationKey(backfilled)).toBe(timerGenerationKey(legacy));
 });

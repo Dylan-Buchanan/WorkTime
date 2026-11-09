@@ -57,6 +57,8 @@ export const StateSyncBridge: React.FC = () => {
     const { state: pmState, updateTask, recordWorkStart, ensureMetadataForAppTask, linkFailures, reportLink } = usePM();
     const { sync } = useSync();
     const data = useData();
+    const appStateRef = useRef(appState);
+    appStateRef.current = appState;
 
     // Keep a stable reference to updateTask for effects that should only react to app state changes.
     const updateTaskRef = useRef(updateTask);
@@ -261,6 +263,10 @@ export const StateSyncBridge: React.FC = () => {
                     // Retry a failed PM save with the already-created backend
                     // id rather than creating another task.
                     let appTaskId = [...pendingAppTaskLinksRef.current].find(([, id]) => id === pmTask.id)?.[0];
+                    if (appTaskId && !appStateRef.current?.tasks[appTaskId]) {
+                        pendingAppTaskLinksRef.current.delete(appTaskId);
+                        appTaskId = undefined;
+                    }
                     if (!appTaskId) {
                         const result = await data.createTask(pmTask.title || "Untitled", Math.max(1, pmTask.estimatePomos || 1));
                         appTaskId = result.value.id;

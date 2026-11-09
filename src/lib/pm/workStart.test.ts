@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PMTask, TaskStatus } from "../../state/types";
 import { makeActiveTimer } from "../../test/mockTauri";
+import { windowStartedAt } from "../engine";
 import { applyWorkStart, findPMTaskByAppTaskId, workOccupantKey } from "./workStart";
 
 const before = "2026-01-01T00:00:00.000Z";
@@ -75,9 +76,15 @@ describe("workOccupantKey", () => {
 
     it.each([undefined, before])("identifies Work with window_started_at %s", (window_started_at) => {
         const timer = makeActiveTimer({ task_id: "backend", window_started_at });
-        expect(workOccupantKey(timer)).toBe(`backend|${window_started_at ?? ""}`);
-        expect(workOccupantKey({ ...timer, paused: true, started_at: now, ends_at: now })).toBe(workOccupantKey(timer));
+        expect(workOccupantKey(timer)).toBe(`backend|${windowStartedAt(timer)}`);
+        expect(workOccupantKey({ ...timer, window_started_at: windowStartedAt(timer), paused: true, started_at: now, ends_at: now })).toBe(workOccupantKey(timer));
         expect(workOccupantKey({ ...timer, task_id: "other" })).not.toBe(workOccupantKey(timer));
         expect(workOccupantKey({ ...timer, window_started_at: now })).not.toBe(workOccupantKey(timer));
     });
+});
+
+
+it("matches a discarded legacy baseline to its backfilled occupant", () => {
+    const legacy = makeActiveTimer({ accumulated_secs: 600, window_started_at: undefined });
+    expect(workOccupantKey(legacy)).toBe(workOccupantKey({ ...legacy, window_started_at: windowStartedAt(legacy) }));
 });

@@ -12,6 +12,8 @@ vi.mock("@tauri-apps/plugin-notification", () => {
     throw new Error("native notifications are unavailable in the browser test");
 });
 
+const sound = vi.hoisted(() => ({ play: vi.fn() }));
+vi.mock("../hooks/useSounds", () => ({ useSounds: () => sound }));
 const OWNER = "owner-1";
 
 /**
@@ -326,6 +328,55 @@ describe("task work window joins", () => {
         await waitFor(() => expect(app.state).not.toBeNull());
         return { data, first, second, app: () => app, advance: (seconds: number) => { clock = new Date(clock.getTime() + seconds * 1000); } };
     }
+
+    it("serializes simultaneous free starts so the second call joins without an error", async () => {
+        const context = await setupWindow(null);
+        const start = vi.spyOn(context.data, "startWorkTimer");
+        let outcomes: PromiseSettledResult<string>[] = [];
+        await act(async () => {
+            const startTaskWork = context.app().startTaskWork;
+            outcomes = await Promise.allSettled([startTaskWork(context.second.id), startTaskWork(context.second.id)]);
+        });
+        expect(outcomes).toEqual([{ status: "fulfilled", value: "started" }, { status: "fulfilled", value: "joined" }]);
+        expect(start).toHaveBeenCalledOnce();
+        expect(context.app().error).toBeNull();
+    });
+
+    it("notifies once when a tick completion and handoff close the same window", async () => {
+        const context = await setupWindow("Work");
+        context.advance(1500);
+        const notifications: string[] = [];
+        class MockNotification {
+            static permission = "granted";
+            constructor(title: string) { notifications.push(title); }
+        }
+        resetNotifyForTesting();
+        vi.stubGlobal("Notification", MockNotification);
+        Object.defineProperty(document, "hidden", { configurable: true, value: true });
+        sound.play.mockClear();
+        const original = context.data.completeTimer.bind(context.data);
+        let release!: () => void;
+        let committed!: () => void;
+        const committedGate = new Promise<void>(r => { committed = r; });
+        const gate = new Promise<void>(r => { release = r; });
+        vi.spyOn(context.data, "completeTimer").mockImplementation(async (...args) => {
+            const result = await original(...args);
+            committed();
+            await gate;
+            return result;
+        });
+        let completion!: Promise<void>;
+        await act(async () => {
+            completion = context.app().completeTimer();
+            await committedGate;
+            await context.app().setActiveTask(context.second.id);
+            release();
+            await completion;
+        });
+        await waitFor(() => expect(context.app().state?.timer?.kind).toBe("ShortBreak"));
+        expect(sound.play.mock.calls.filter(([kind]) => kind === "pomodoroFinish")).toHaveLength(1);
+        expect(notifications.filter(t => t === "Pomodoro Complete")).toHaveLength(1);
+    });
 
     it("starts when free and reports started", async () => {
         const context = await setupWindow(null);

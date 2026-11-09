@@ -97,13 +97,15 @@ function canonicalize(value: unknown): string {
 }
 
 /**
- * The identity of one timer generation, derived from the complete `ActiveTimer`
- * payload. Two timers that differ in any field (started_at, ends_at, kind,
- * paused, ...) are different generations; a re-serialized identical timer maps
- * to the same key.
+ * The identity of one timer generation, ignoring the v10 additive window id.
+ * Migration may backfill the live timer while an older journal entry persists.
+ * All other generation fields remain significant. The raw expectedTimer is
+ * never rewritten: server CAS still compares the stored timer shape.
  */
 export function timerGenerationKey(timer: ActiveTimer): string {
-    return canonicalize(timer);
+    const generation = { ...timer };
+    delete generation.window_started_at;
+    return canonicalize(generation);
 }
 
 /** Maps one journal entry to the exact `complete_timer` RPC arguments. */

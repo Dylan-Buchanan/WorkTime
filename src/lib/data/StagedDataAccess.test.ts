@@ -5,6 +5,8 @@ import type { SyncSnapshot } from "./staging/types";
 import { StagedDataAccess } from "./StagedDataAccess";
 import type { SyncExecutor, SyncOptions, SyncResult } from "./DataAccess";
 import { makeActiveTimer, makeAppState, defaultSettings } from "../../test/mockTauri";
+import { applyCompletionWinner, completionRpcPayload } from "./sync/timerCompletions";
+import { buildPushPlan } from "./sync/merge";
 import { timerGenerationKey } from "./sync/timerCompletions";
 import type {
     ActiveTimer,
@@ -1126,4 +1128,59 @@ describe("window completion races and upgrade", () => {
         expect(record.pendingCompletions[0]).toMatchObject({ localOnlyGeneration: true, expectedTimer: upgraded });
         expect(record.lastSynced).toEqual(legacy.lastSynced);
     });
+});
+
+
+it("does not replay a pending v9 completion after the live timer migrates to v10", async () => {
+    const { executor } = makeSyncExecutor();
+    const store = new LocalStagingStore(window.localStorage);
+    const timer = await seedExpiredTimer(store, OWNER_A);
+    const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-01T00:26:00Z") });
+    await data.completeTimer(timer);
+    const key = "worktime:staging:v1:" + OWNER_A;
+    const legacy = JSON.parse(window.localStorage.getItem(key)!);
+    legacy.schemaVersion = 9;
+    legacy.timerCompleted = false;
+    legacy.state.timer = timer;
+    // v9 persisted the canonical full timer shape, which had no window field.
+    legacy.pendingCompletions[0].generationKey = JSON.stringify(Object.fromEntries(Object.entries(timer).sort(([a], [b]) => a.localeCompare(b))));
+    window.localStorage.setItem(key, JSON.stringify(legacy));
+    expect(store.read(OWNER_A).state.timer!.window_started_at).toBeTruthy();
+    expect((await data.fetchState()).reconciledTimer?.applied).toBe(false);
+    expect((await data.completeTimer()).applied).toBe(false);
+    const record = store.read(OWNER_A);
+    expect(record.state.logs).toHaveLength(1);
+    expect(record.state.tasks.t1.completed_pomodoros).toBe(1);
+    expect(record.pendingCompletions).toEqual(legacy.pendingCompletions);
+});
+
+it.each(["switch", "finalize"])("journals an engine-internal expired %s so a stale pull cannot credit it twice", async (command) => {
+    const { executor } = makeSyncExecutor();
+    const store = new LocalStagingStore(window.localStorage);
+    const timer = await seedExpiredTimer(store, OWNER_A);
+    await store.update(OWNER_A, r => ({ ...r, initialized: true, lastSynced: makeBaseline(timer), taskUpdatedAt: { t2: "2026-01-01T00:00:00.000Z" }, state: { ...r.state, tasks: { ...r.state.tasks, t2: { ...TASK_T1, id: "t2" } } } }));
+    const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => new Date("2026-01-01T00:26:00Z") });
+    if (command === "switch") await data.setActiveTask("t2"); else await data.finalizeTask("t1");
+    const completed = store.read(OWNER_A);
+    expect(completed.pendingCompletions).toHaveLength(1);
+    expect(completed.timerCompleted).toBe(true);
+    const entry = completed.pendingCompletions[0];
+    expect(entry.expectedTimer).toEqual(timer);
+    expect(completionRpcPayload(entry).p_expected_timer).toEqual(timer);
+    expect(entry.resultTimerState).toMatchObject({ active_task: "t1", timer: null, current_cycle_pomodoros: 1 });
+    expect(buildPushPlan(completed).logUpserts).toEqual([]);
+    expect(buildPushPlan(completed).taskUpserts.some(row => row.value.id === "t1")).toBe(false);
+    const resolved = applyCompletionWinner(completed, entry);
+    expect(resolved.state).toEqual(completed.state);
+    if (command === "finalize") {
+        expect(entry.taskAfter!.archived).toBe(false);
+        expect(resolved.state.tasks.t1.archived).toBe(true);
+    } else expect(resolved.state.active_task).toBe("t2");
+    // A newer stale remote row can also reset the singleton completion flag.
+    await store.update(OWNER_A, r => ({ ...r, timerCompleted: false, state: { ...r.state, timer } }));
+    expect((await data.fetchState()).reconciledTimer?.applied).toBe(false);
+    const repaired = store.read(OWNER_A);
+    expect(repaired.state.logs).toHaveLength(1);
+    expect(repaired.state.tasks.t1.completed_pomodoros).toBe(1);
+    expect(repaired.state.current_cycle_pomodoros).toBe(1);
 });
