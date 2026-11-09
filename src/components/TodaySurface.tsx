@@ -13,6 +13,7 @@ import {
     type TodayHabitEntry,
     type TodayTaskEntry,
 } from "../lib/today";
+import { workStartOccupation } from "../lib/engine";
 import { useSounds } from "../hooks/useSounds";
 
 const CONTENT_ID = "today-surface-content";
@@ -139,8 +140,8 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
     };
 
     const handleStartFocus = async (task: TodayTaskEntry) => {
-        if (timer) {
-            setNotice(`A timer is already running. Finish or stop it before starting focus on “${task.title}”.`);
+        if (workStartOccupation(timer) === "blocked") {
+            setNotice(`A break is running. Finish or skip it before starting focus on “${task.title}”.`);
             return;
         }
         setNotice(null);

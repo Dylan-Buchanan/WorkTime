@@ -7,15 +7,12 @@ export {
     elapsedTimerSecs,
     fullCycleDurationSecs,
     plannedTimerSecs,
+    workStartOccupation,
+    windowStartedAt,
+    windowRemainingSecs,
+    isWorkWindowLive,
 } from "./core";
-export type { EngineResult } from "./core";
-export {
-    cloneInProgressPomodoros,
-    pruneInProgressPomodoros,
-    resumablePomodoroElapsedSecs,
-    withoutInProgressPomodoro,
-} from "./pomodoroProgress";
-export type { InProgressPomodoroMap } from "./pomodoroProgress";
+export type { EngineResult, WorkStartOccupation } from "./core";
 
 export { buildPlannerContext, calculatePomodoroBudget } from "./plannerContext";
 export type {

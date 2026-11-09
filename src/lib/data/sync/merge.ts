@@ -4,7 +4,7 @@ import type {
     PetWeightEntry, PomodoroLogEntry, Settings, Task,
 } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
-import { defaultAppState, pruneInProgressPomodoros } from "../../engine";
+import { defaultAppState } from "../../engine";
 import { deepValuesEqual } from "../staging/serialization";
 import type { StagedOwnerRecord, SyncSnapshot, TimerStateSlice, VersionedValue, HabitCompletionTombstone, TodoCompletionTombstone } from "../staging/types";
 import type { AcknowledgedChanges, MergeResult, PushPlan } from "./types";
@@ -1094,7 +1094,6 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
             initialized: true,
             lastSynced: remote,
             state: defaultAppState(),
-            inProgressPomodoros: {},
             taskUpdatedAt: {},
             taskTombstones: {},
             logTombstones: {},
@@ -1170,7 +1169,6 @@ export function mergePulledSnapshot(record: StagedOwnerRecord, remote: SyncSnaps
         initialized: true,
         lastSynced: remote,
         state: mergedState,
-        inProgressPomodoros: pruneInProgressPomodoros(record.inProgressPomodoros, mergedState.tasks),
         taskUpdatedAt: tasks.stamps,
         taskTombstones: tasks.tombstones,
         logTombstones: logs.tombstones,

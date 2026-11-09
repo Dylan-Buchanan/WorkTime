@@ -303,7 +303,7 @@ describe("TodaySurface", () => {
         await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(linkedId!));
     });
 
-    it("communicates that a timer is already running instead of starting another", async () => {
+    it("communicates that a break is running instead of starting focus", async () => {
         const user = userEvent.setup();
         const running = appTask("app-running", "Running app task");
         await renderSurface({
@@ -314,14 +314,14 @@ describe("TodaySurface", () => {
             appState: {
                 tasks: { [running.id]: running },
                 active_task: running.id,
-                timer: makeActiveTimer({ task_id: running.id }),
+                timer: makeActiveTimer({ task_id: running.id, kind: "ShortBreak" }),
             },
         });
         expandSurface();
         await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent("app-running"));
 
         await user.click(await screen.findByRole("button", { name: "Start focus on Other task" }));
-        expect(await screen.findByRole("status")).toHaveTextContent("A timer is already running.");
+        expect(await screen.findByRole("status")).toHaveTextContent("A break is running.");
         expect(screen.getByTestId("timer-task")).toHaveTextContent("app-running");
     });
 
@@ -336,5 +336,24 @@ describe("TodaySurface", () => {
         expect(screen.getByText("No tasks")).toBeInTheDocument();
         expect(screen.getByText("No habits")).toBeInTheDocument();
         expect(screen.getByText("No pomodoros")).toBeInTheDocument();
+    });
+});
+
+
+describe("Today work-window handoff", () => {
+    it("joins an existing Work window from another task's Start focus action", async () => {
+        const running = appTask("running", "Running");
+        const incoming = appTask("incoming", "Incoming");
+        const data = await renderSurface({ tasks: {
+            other: pmTask({ id: "other", title: "Incoming", appTaskId: incoming.id, estimatePomos: 2 }),
+        }, appState: { tasks: { running, incoming }, active_task: running.id,
+            timer: makeActiveTimer({ task_id: running.id, window_started_at: new Date().toISOString() }) } });
+        const original = data.store.state.timer!;
+        expandSurface();
+        fireEvent.click(await screen.findByRole("button", { name: "Start focus on Incoming" }));
+        await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(incoming.id));
+        expect(data.store.state.timer?.ends_at).toBe(original.ends_at);
+        expect(data.store.state.timer?.window_started_at).toBe(original.window_started_at);
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
 });

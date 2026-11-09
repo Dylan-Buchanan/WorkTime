@@ -19,7 +19,6 @@ import type {
     Task,
 } from "../../../state/types";
 import type { SyncedPMState } from "../DataAccess";
-import type { InProgressPomodoroMap } from "../../engine";
 import { isValidRule } from "../../todos";
 import type { Todo, TodoCompletion, TodoRule } from "../../todos";
 import { isCompleteSettings, parsePersistedSettings } from "../../settings";
@@ -130,14 +129,12 @@ export interface StagedOwnerRecord {
     goalCheckIns: Record<string, GoalCheckIn>;
     goalCheckInUpdatedAt: Record<string, string>;
     goalCheckInTombstones: Record<string, { id: string; deletedAt: string }>;
-    schemaVersion: 9;
+    schemaVersion: 10;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
     initialized: boolean;
     state: AppStateData;
-    /** Owner-local only; excluded from snapshots, sync payloads, and pending counts. */
-    inProgressPomodoros: InProgressPomodoroMap;
     pmState: SyncedPMState | null;
     /** `updated_at` stamps per locally-changed task, keyed by task id. */
     taskUpdatedAt: Record<string, string>;
@@ -212,7 +209,7 @@ export interface StagedOwnerRecord {
     petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 9 as const;
+export const STAGING_SCHEMA_VERSION = 10 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -231,15 +228,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
-}
-
-function isInProgressPomodoroMap(value: unknown): boolean {
-    return (
-        isObject(value) &&
-        Object.values(value).every(
-            (elapsed) => isFiniteNumber(elapsed) && Number.isInteger(elapsed) && elapsed >= 0,
-        )
-    );
 }
 
 function isTask(value: unknown): boolean {
@@ -275,7 +263,8 @@ function isTimer(value: unknown): boolean {
         typeof value.started_at === "string" &&
         typeof value.ends_at === "string" &&
         (value.kind === "Work" || value.kind === "ShortBreak" || value.kind === "LongBreak") &&
-        (value.paused === undefined || typeof value.paused === "boolean")
+        (value.paused === undefined || typeof value.paused === "boolean") &&
+        (value.window_started_at === undefined || typeof value.window_started_at === "string")
     );
 }
 
@@ -623,7 +612,6 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["revision", (v): boolean => typeof v === "number"],
     ["initialized", (v): boolean => typeof v === "boolean"],
     ["state", isObject],
-    ["inProgressPomodoros", isInProgressPomodoroMap],
     ["pmState", (v): boolean => v === null || isObject(v)],
     ["taskUpdatedAt", isObject],
     ["settingsUpdatedAt", (v): boolean => v === null || typeof v === "string"],
@@ -677,7 +665,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `9` are accepted; records at the unchanged v1 key migrate in memory
+ * through `10` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -687,6 +675,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * installs the pet domain and its remote mirrors atomically. The v7 -> v8
  * migration backfills start_of_day in both local state and the sync baseline.
  * The v8 -> v9 migration installs all nine goal fields in both shapes.
+ * The v9 -> v10 migration retires the partial-progress map and identifies the live Work window.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -707,7 +696,8 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         parsed.schemaVersion !== 6 &&
         parsed.schemaVersion !== 7 &&
         parsed.schemaVersion !== 8 &&
-        parsed.schemaVersion !== 9
+        parsed.schemaVersion !== 9 &&
+        parsed.schemaVersion !== 10
     ) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
@@ -780,7 +770,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         record = { ...record, schemaVersion: 5, state, lastSynced };
     }
     if (record.schemaVersion === 5) {
-        record = { ...record, schemaVersion: 6, inProgressPomodoros: {} };
+        record = { ...record, schemaVersion: 6 };
     }
     if (record.schemaVersion === 6) {
         if (record.lastSynced !== null && !isObject(record.lastSynced)) {
@@ -857,6 +847,23 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             ...record, ...goals, schemaVersion: 9,
             lastSynced: record.lastSynced === null ? null : { ...(record.lastSynced as Record<string, unknown>), ...goals },
         };
+    }
+    if (record.schemaVersion === 9) {
+        // Retire the old owner-local progress field; journal and baselines retain
+        // their original timer shape so pending CAS replay stays compatible.
+        const rest = { ...record };
+        delete rest["inProgress" + "Pomodoros"];
+        let state = rest.state;
+        const timer = isObject(state) ? state.timer : null;
+        if (isObject(timer) && timer.kind === "Work" && timer.window_started_at === undefined &&
+            typeof timer.started_at === "string" && Number.isFinite(Date.parse(timer.started_at))) {
+            const accumulated = isFiniteNumber(timer.accumulated_secs) ? timer.accumulated_secs : 0;
+            state = { ...state as Record<string, unknown>, timer: {
+                ...timer,
+                window_started_at: new Date(Date.parse(timer.started_at) - accumulated * 1000).toISOString(),
+            } };
+        }
+        record = { ...rest, schemaVersion: 10, state };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

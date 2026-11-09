@@ -5,7 +5,6 @@ import {
     EngineResult,
     normalizePositiveInteger,
 } from "./core";
-import type { InProgressPomodoroMap } from "./pomodoroProgress";
 
 /** Rust: get_state */
 export function getState(state: AppStateData): EngineResult<boolean> {
@@ -60,8 +59,7 @@ export function updateSettings(state: AppStateData, settings: Settings): EngineR
 /** Rust: reset_app_state */
 export function resetAppState(
     _state: AppStateData,
-    _inProgressPomodoros: InProgressPomodoroMap = {},
 ): EngineResult<AppStateData> {
     const next = defaultAppState();
-    return { state: next, value: cloneAppState(next), inProgressPomodoros: {} };
+    return { state: next, value: cloneAppState(next) };
 }

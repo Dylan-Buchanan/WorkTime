@@ -50,7 +50,7 @@ describe("goals staged sync foundation", () => {
         const snapshot = { ...legacySnapshot, tasks: { task: { value: state.tasks.task, updatedAt: T0 } }, logs: { log: state.logs[0] },
             habits: { habit: { value: habit, updatedAt: T0 } }, todos: { todo: { value: todo, updatedAt: T0 } }, petProfile: { value: profile, updatedAt: T0 } };
         // Literal v8 disk shape: no v9 freshRecord or parse/conversion helper constructs this fixture.
-        const v8 = { schemaVersion: 8, ownerId: OWNER, revision: 17, initialized: true, state, inProgressPomodoros: { task: 600 },
+        const v8 = { schemaVersion: 8, ownerId: OWNER, revision: 17, initialized: true, state,
             pmState: snapshot.pmState.value, taskUpdatedAt: { task: T1 }, settingsUpdatedAt: T1, timerUpdatedAt: null, pmUpdatedAt: T1, timerCompleted: false,
             taskTombstones: { old: { id: "old", deletedAt: T1 } }, logTombstones: { oldlog: { id: "oldlog", deletedAt: T1 } }, fullWipe: null, pendingCompletions: [], unbootstrapped: false,
             lastSynced: snapshot, habits: { habit }, habitCompletions: { hc: { id: "hc", habitId: "habit", bucket: "2026-10-01", createdAt: T0, updatedAt: T0 } },
@@ -69,12 +69,12 @@ describe("goals staged sync foundation", () => {
         }
         render(<DataProvider dataAccess={data}><Consumer /></DataProvider>);
         await waitFor(() => expect(loaded).toHaveBeenCalledWith({ trackers: [], goals: [], checkIns: [] }));
-        const expected = { ...v8, ...emptyGoals, schemaVersion: 9, lastSynced: { ...snapshot, ...emptyGoals } };
+        const expected = { ...v8, ...emptyGoals, schemaVersion: 10, lastSynced: { ...snapshot, ...emptyGoals } };
         expect(store.read(OWNER)).toEqual(expected);
         // Persist by the ordinary full-set writer, then load from a new store instance.
         await data.saveGoals([], [], []);
         expect(new LocalStagingStore(window.localStorage).read(OWNER)).toEqual({ ...expected, revision: 18 });
-        expect(JSON.parse(window.localStorage.getItem(stagingKey(OWNER))!).schemaVersion).toBe(9);
+        expect(JSON.parse(window.localStorage.getItem(stagingKey(OWNER))!).schemaVersion).toBe(10);
     });
 
     it("stamps changed rows only, clones inputs, isolates owners and rejects backwards built keys atomically", async () => {
