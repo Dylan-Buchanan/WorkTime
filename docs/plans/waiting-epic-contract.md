@@ -231,10 +231,13 @@ open choices and refine the issue wording where the research found conflicts.
   occupant, and tasks whose project is not workable, using
   `isProjectWorkableOnDate` from `src/lib/projectSchedule.ts`. Effective estimate
   is PM `estimatePomos` if numeric, else backend `target_pomodoros`, else 0.
-  Estimate ≤ 0 means the un-estimated tail; estimated tasks use
-  `remaining = max(1, estimate - worked)`. Reuse `parseDueDateKey` and
+  Estimate ≤ 0 means the un-estimated tail; estimated tasks use the existing
+  collector floor: `remaining = estimate - worked > EPSILON ? estimate - worked
+  : 1` (a fractional remainder is kept; only a non-positive remainder becomes
+  1). Reuse `parseDueDateKey` and
   `classifyDueScope` from `src/lib/timer.ts`. Do not modify
   `collectEligibleProjectionTasks`. Evidence: research A18, A19, B5, B8.
+  Corrected by ORCH after #177 merge to match the existing collector floor.
 
 - **T13 — Waiting presentation (#176).** Agent pill:
   `text-violet-300 bg-violet-400/15`; person pill:
