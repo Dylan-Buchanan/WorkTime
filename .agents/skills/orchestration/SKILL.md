@@ -22,15 +22,15 @@ authorized child. Children never push (the supervisor blocks it).
 
 **ORCH's only write exceptions:**
 
-| Allowed git write                                                 | Purpose                                         |
-| ----------------------------------------------------------------- | ----------------------------------------------- |
+| Allowed git write                                                 | Purpose                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------- |
 | `switch`, `fetch`, `branch`, `worktree add/remove/prune`          | organize lanes via `New-Lane.ps1`/`Remove-Lane.ps1` |
-| `Commit-Lane.ps1`                                                 | commit a sandboxed child's verified work (§3)   |
-| `merge --no-ff`, `merge --abort`                                  | integrate verified branches                     |
-| push **only through** `Invoke-Gate.ps1 -PushRef`                  | publish `epic/*` and `main` after a green gate  |
-| `revert -m 1`                                                     | undo a bad merge                                |
-| `rerere` config, lockfile/version-only `checkout --ours/--theirs` | resolve mechanical conflicts                    |
-| `add -A && commit --no-edit`                                      | only to conclude an agent-resolved merge        |
+| `Commit-Lane.ps1`                                                 | commit a sandboxed child's verified work (§3)       |
+| `merge --no-ff`, `merge --abort`                                  | integrate verified branches                         |
+| push **only through** `Invoke-Gate.ps1 -PushRef`                  | publish `epic/*` and `main` after a green gate      |
+| `revert -m 1`                                                     | undo a bad merge                                    |
+| `rerere` config, lockfile/version-only `checkout --ours/--theirs` | resolve mechanical conflicts                        |
+| `add -A && commit --no-edit`                                      | only to conclude an agent-resolved merge            |
 
 Non-git writes you may do: run builds/tests, start/stop local services, create
 run directories **outside** the repo, inspect artifacts. Never use file-edit
@@ -50,11 +50,11 @@ progressing on independent, already-decided work.
 
 ## 2. Roles and tool facts
 
-| Code     | Role                        | Launch (always through `Invoke-Child.ps1`, §3)                                |
-| -------- | --------------------------- | ----------------------------------------------------------------------------- |
-| IMPL     | routine implementation      | `-Agent opencode` (default model `opencode-go/deepseek-v4.1-flash#high`)      |
-| IMPL+    | complex/native/high-risk    | `-Agent codex` (default `gpt-6.1-sol`, `-CodexEffort high`, workspace-write)  |
-| RESEARCH | independent review/research | `-Agent opencode -OpencodeAgent codebase-research`, or `-Agent codex` (§11)   |
+| Code     | Role                                         | Launch (always through `Invoke-Child.ps1`, §3)                               |
+| -------- | -------------------------------------------- | ---------------------------------------------------------------------------- |
+| IMPL     | routine implementation (T1/T2 Recommended)   | `-Agent opencode` (default model `opencode-go/deepseek-v4.1-flash#high`)     |
+| IMPL+    | complex/native/high-risk (T3/T4 Recommended) | `-Agent codex` (default `gpt-6.1-sol`, `-CodexEffort high`, workspace-write) |
+| RESEARCH | independent review/research                  | `-Agent opencode -OpencodeAgent codebase-research`                           |
 
 Rules:
 
@@ -66,7 +66,7 @@ Rules:
   or platform/native diagnosis.
 
 **Tool facts (epic #159 retrospective plus tests on 2026-11-09 with codex-cli
-0.160.0 and the opencode 2.0.22 CLI):**
+0.167.0 and the opencode 2.2.26 CLI):**
 
 - **Codex `workspace-write` can never write `.git`**, whether it's a worktree or a
   full clone, even with `--add-dir`. Codex lanes therefore do not run
@@ -104,13 +104,13 @@ All scripts live in `.claude/skills/orchestration/scripts/`. Run them as
 directories go to `%TEMP%\orch-runs` (outside the repo). Each script's header
 documents its parameters.
 
-| Script             | Use it to                                                                 | Replaces the failure                                   |
-| ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `New-Lane.ps1`     | create worktree + branch (or `-Detach` for reviewers), copy gitignored `.env*` files, `pnpm install --frozen-lockfile`, verify clean | copying `node_modules`; missing `supabase/.env.local` |
-| `Invoke-Child.ps1` | run one child: brief on stdin, log to file, watchdog, tree kill, push blocked, report extracted | silent hangs, `tail` hiding output, bogus exit 0, buried reports |
-| `Commit-Lane.ps1`  | commit a Codex lane after checking branch, base, and that changed files equal the allowed list | the extra commit-only child round trip |
-| `Invoke-Gate.ps1`  | run gate steps (`;;`-separated), stop at first red, record counts and failing test names, flag side effects, push only when green | pushing after a red gate; unrecorded flakes; hidden build side effects |
-| `Remove-Lane.ps1`  | delete a lane (`-MergedInto <ref>` or `-Discard`), prune, optionally `-DeleteBranch`; refuses while a child holds it | `git worktree remove` failing on pnpm `node_modules` ("Filename too long") |
+| Script             | Use it to                                                                                                                            | Replaces the failure                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `New-Lane.ps1`     | create worktree + branch (or `-Detach` for reviewers), copy gitignored `.env*` files, `pnpm install --frozen-lockfile`, verify clean | copying `node_modules`; missing `supabase/.env.local`                      |
+| `Invoke-Child.ps1` | run one child: brief on stdin, log to file, watchdog, tree kill, push blocked, report extracted                                      | silent hangs, `tail` hiding output, bogus exit 0, buried reports           |
+| `Commit-Lane.ps1`  | commit a Codex lane after checking branch, base, and that changed files equal the allowed list                                       | the extra commit-only child round trip                                     |
+| `Invoke-Gate.ps1`  | run gate steps (`;;`-separated), stop at first red, record counts and failing test names, flag side effects, push only when green    | pushing after a red gate; unrecorded flakes; hidden build side effects     |
+| `Remove-Lane.ps1`  | delete a lane (`-MergedInto <ref>` or `-Discard`), prune, optionally `-DeleteBranch`; refuses while a child holds it                 | `git worktree remove` failing on pnpm `node_modules` ("Filename too long") |
 
 **Launching a child.** Run `Invoke-Child.ps1` with the harness's background mode
 (`run_in_background`) in the same step as the dispatch, so the watchdog is
@@ -122,14 +122,14 @@ poll. Never pipe it through `tail`/`Select-Object`. Its run directory holds
 
 **Watchdog outcomes and what to do:**
 
-| Outcome               | Meaning                                                    | ORCH action                                                                                   |
-| --------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `finished`            | exited and printed a report                                | verify (§7)                                                                                   |
-| `killed-after-report` | reported, then failed to exit within 3 min; tree killed     | treat as finished; verify (§7)                                                                |
-| `exited-no-report`    | exited without the report block                            | read `report.md` (log tail), verify git; rerun the gate yourself if the work looks complete    |
-| `startup-stall`       | no activity within 4 min                                   | relaunch once (the lane is untouched); on a second stall switch agent family and tell the user |
-| `stalled`             | no log growth, file change, or HEAD move for 15 min         | inspect log + git; `Remove-Lane.ps1 -Discard -DeleteBranch`, then a fresh lane and child      |
-| `timeout`             | 60 min wall clock                                          | same as `stalled`; split the issue if it is simply too big                                    |
+| Outcome               | Meaning                                                 | ORCH action                                                                                    |
+| --------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `finished`            | exited and printed a report                             | verify (§7)                                                                                    |
+| `killed-after-report` | reported, then failed to exit within 3 min; tree killed | treat as finished; verify (§7)                                                                 |
+| `exited-no-report`    | exited without the report block                         | read `report.md` (log tail), verify git; rerun the gate yourself if the work looks complete    |
+| `startup-stall`       | no activity within 4 min                                | relaunch once (the lane is untouched); on a second stall switch agent family and tell the user |
+| `stalled`             | no log growth, file change, or HEAD move for 15 min     | inspect log + git; `Remove-Lane.ps1 -Discard -DeleteBranch`, then a fresh lane and child       |
+| `timeout`             | 60 min wall clock                                       | same as `stalled`; split the issue if it is simply too big                                     |
 
 Tune with `-TimeoutMin`, `-StartupStallMin`, `-StallMin`, `-ExitGraceMin`. The
 supervisor also kills orphaned descendants (vitest workers, private servers) and
