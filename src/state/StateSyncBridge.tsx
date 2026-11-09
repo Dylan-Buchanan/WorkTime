@@ -4,6 +4,7 @@ import { usePM } from "./ProjectManagerContext";
 import { TaskStatus, PMTask } from "./types";
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
+import { findPMTaskByAppTaskId, workOccupantKey } from "../lib/pm/workStart";
 
 /** One backend task whose estimate diverges from its PM metadata estimate. */
 interface PropagationTarget {
@@ -53,7 +54,7 @@ function collectPropagationTargets(
 
 export const StateSyncBridge: React.FC = () => {
     const { state: appState, refresh } = useAppState();
-    const { state: pmState, updateTask, ensureMetadataForAppTask } = usePM();
+    const { state: pmState, updateTask, recordWorkStart, ensureMetadataForAppTask } = usePM();
     const { sync } = useSync();
     const data = useData();
 
@@ -87,6 +88,37 @@ export const StateSyncBridge: React.FC = () => {
             mountedRef.current = false;
         };
     }, []);
+
+    const lastObservedOccupantRef = useRef<string | null | undefined>(undefined);
+    const pendingWorkStartRef = useRef(false);
+    const timer = appState?.timer ?? null;
+    useEffect(() => {
+        if (!appState) {
+            lastObservedOccupantRef.current = undefined;
+            pendingWorkStartRef.current = false;
+            return;
+        }
+        const key = workOccupantKey(timer);
+        if (lastObservedOccupantRef.current === undefined) {
+            // The first loaded snapshot is a baseline, not a new occupancy.
+            // Reloading must preserve manual status changes and waiting flags.
+            lastObservedOccupantRef.current = key;
+            return;
+        }
+        if (key !== lastObservedOccupantRef.current) {
+            // Observe null too: stop -> start of the same task is a new
+            // occupancy even for historical timers without a window id.
+            lastObservedOccupantRef.current = key;
+            pendingWorkStartRef.current = key !== null;
+        }
+        if (!pendingWorkStartRef.current || timer?.kind !== "Work") return;
+        const task = findPMTaskByAppTaskId(pmState.tasks, timer.task_id);
+        // To-do promotion can start the timer before its metadata row exists.
+        // Retry on PM changes until this occupancy has been applied once.
+        if (!task) return;
+        pendingWorkStartRef.current = false;
+        recordWorkStart(task.id);
+    }, [appState, timer, pmState.tasks, recordWorkStart]);
 
     // Propagate estimate changes from PM -> backend targets. Runs before the
     // metadata/progress effects so its pending targets are pre-seeded before

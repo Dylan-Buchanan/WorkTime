@@ -8,6 +8,7 @@ import { clearAgentProjectSnapshot, getAgentProjectSnapshot, planAgentSnapshotRe
 import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/snapshotStore";
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { normalizeTaskDueDate } from "../lib/taskDueDate";
+import { applyWorkStart } from "../lib/pm/workStart";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -85,6 +86,7 @@ interface PMContextShape {
     createTask: (title: string, opts?: Partial<PMTask>) => Promise<PMTask>;
     ensureMetadataForAppTask: (appTaskId: string, meta: { title: string; estimatePomos?: number }) => PMTask;
     updateTask: (id: string, patch: Partial<PMTask>) => void;
+    recordWorkStart: (taskId: string, at?: string) => void;
     archiveTask: (id: string, archive?: boolean) => void;
     setSelectedTask: (id: string | null) => void;
     reorderTasks: (idsInOrder: string[], withinStatus?: TaskStatus) => void;
@@ -645,15 +647,21 @@ export const ProjectManagerProvider: React.FC<{
         });
     };
     const updateTask = (id: string, patch: Partial<PMTask>) => {
-        const t = state.tasks[id];
-        if (!t) return;
         const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "dueDate") ? { ...patch, dueDate: normalizeTaskDueDate(patch.dueDate) } : patch;
-        const upd: PMTask = { ...t, ...normalizedPatch, updatedAt: now() };
-        persist((prev) => ({
-            ...prev,
-            tasks: { ...prev.tasks, [id]: upd },
-        }));
+        persist((prev) => {
+            const task = prev.tasks[id];
+            if (!task) return prev;
+            return { ...prev, tasks: { ...prev.tasks, [id]: { ...task, ...normalizedPatch, updatedAt: now() } } };
+        });
     };
+    const recordWorkStart = useCallback((taskId: string, at: string = now()) => {
+        persist((prev) => {
+            const task = prev.tasks[taskId];
+            if (!task) return prev;
+            const next = applyWorkStart(task, at);
+            return next === task ? prev : { ...prev, tasks: { ...prev.tasks, [taskId]: next } };
+        });
+    }, [persist]);
     const ensureMetadataForAppTask = (appTaskId: string, meta: { title: string; estimatePomos?: number }): PMTask => {
         let existing = Object.values(state.tasks).find((t) => t.appTaskId === appTaskId);
         if (!existing) {
@@ -766,6 +774,7 @@ export const ProjectManagerProvider: React.FC<{
                 createTask,
                 ensureMetadataForAppTask,
                 updateTask,
+                recordWorkStart,
                 archiveTask,
                 setSelectedTask,
                 reorderTasks,
