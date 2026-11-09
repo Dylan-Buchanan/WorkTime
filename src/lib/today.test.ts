@@ -348,6 +348,51 @@ describe("buildTodayPomodoros", () => {
         expect(result.sessions.map((session) => session.id)).toEqual(["afternoon", "morning"]);
     });
 
+    describe("window counting (D7)", () => {
+        const at = (id: string, duration: number, extra: Partial<PomodoroLogEntry> = {}) =>
+            log({ id, duration_minutes: duration, finished_at: "2026-08-12T10:00:00", ...extra });
+
+        it("counts a switched window as one pomodoro", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [at("a", 10, { work_window_id: "w1" }), at("b", 15, { work_window_id: "w1" })],
+            });
+            expect(result.count).toBe(1);
+            expect(result.minutes).toBe(25);
+        });
+
+        it("counts logs with null or absent window ids individually", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [at("a", 10, { work_window_id: null }), at("b", 15)],
+            });
+            expect(result.count).toBe(2);
+            expect(result.minutes).toBe(25);
+        });
+
+        it("treats an empty-string window id like null", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [at("a", 10, { work_window_id: "" }), at("b", 15, { work_window_id: "" })],
+            });
+            expect(result.count).toBe(2);
+        });
+
+        it("handles a mixed day with a window, a legacy log and a break", () => {
+            const result = buildTodayPomodoros({
+                reference: REFERENCE,
+                logs: [
+                    at("a", 10, { work_window_id: "w1" }),
+                    at("b", 15, { work_window_id: "w1" }),
+                    at("legacy", 20),
+                    at("break", 5, { was_break: true, work_window_id: "w1" }),
+                ],
+            });
+            expect(result.count).toBe(2);
+            expect(result.minutes).toBe(45);
+        });
+    });
+
     it("labels sessions with the project task title, backend name, or a fallback", () => {
         const result = buildTodayPomodoros({
             reference: REFERENCE,

@@ -342,6 +342,20 @@ describe("TodaySurface", () => {
         expect(screen.getByTestId("timer-task")).toHaveTextContent("app-running");
     });
 
+    it("renders the window count for a switched window", async () => {
+        await renderSurface({
+            appState: {
+                logs: [
+                    log({ id: "w-1", duration_minutes: 10, work_window_id: "window-1" }),
+                    log({ id: "w-2", duration_minutes: 15, work_window_id: "window-1" }),
+                ],
+            },
+        });
+
+        expect(await screen.findByText("1p · 25m")).toBeInTheDocument();
+        expect(screen.queryByText("2p · 25m")).not.toBeInTheDocument();
+    });
+
     it("shows an empty state for each group", async () => {
         await renderSurface();
 
