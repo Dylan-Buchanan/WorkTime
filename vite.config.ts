@@ -56,7 +56,12 @@ export default defineConfig(({ mode, command }) => {
         server: {
             port: 3000,
             strictPort: true,
-            host: host || false,
+            // Bind IPv4 loopback explicitly. On Windows `localhost` resolves to
+            // ::1 first, so the default host listens only on [::1]:3000 and
+            // http://127.0.0.1:3000 (used by the local Supabase auth config)
+            // refuses connections. Browsers still reach the server through
+            // localhost via their IPv4 fallback.
+            host: host || "127.0.0.1",
             hmr: host
                 ? {
                       protocol: "ws",

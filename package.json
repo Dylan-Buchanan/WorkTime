@@ -5,6 +5,7 @@
     "type": "module",
     "scripts": {
         "dev": "vite",
+        "dev:stop": "node scripts/free-dev-port.mjs",
         "app": "npm run tauri dev",
         "build": "tsc && vite build",
         "lint": "npm run lint:app && npm run lint:supabase",

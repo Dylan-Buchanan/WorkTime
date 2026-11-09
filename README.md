@@ -1,5 +1,19 @@
 # Tauri + React + Typescript
 
+## Local development
+
+```powershell
+pnpm dev
+```
+
+The app is served at <http://127.0.0.1:3000> and <http://localhost:3000>. The server binds IPv4 loopback explicitly because `localhost` resolves to `::1` first on Windows; the same origin is used by the local Supabase auth configuration and the Playwright setup.
+
+Stop the server with Ctrl+C in a real Windows console (PowerShell, Windows Terminal or VS Code's PowerShell terminal). Git Bash/mintty can return the shell to its prompt while the `cmd.exe -> node` child tree keeps running, so port 3000 stays bound and the next `pnpm dev` fails with `Port 3000 is already in use`. When that happens, run:
+
+```powershell
+pnpm dev:stop
+```
+
 ## Updating
 
 Run `pnpm install` to make sure dependencies are up to date, then use the commands below. The explicit `run` is required: pnpm 9 forwards bare `pnpm version` to npm's built-in version command instead of this project script.

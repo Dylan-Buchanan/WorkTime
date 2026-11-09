@@ -1,5 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { Check, Loader2 } from "lucide-react";
 import type { ResumeNote } from "../lib/resume";
+
+/** Solid action: keeps white text in both themes because the indigo fill is absolute. */
+const PRIMARY_BUTTON = "inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm ring-1 ring-inset ring-white/10 transition-colors hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60";
+const SECONDARY_BUTTON = "inline-flex items-center justify-center rounded-lg border border-neutral-600 bg-neutral-900 px-4 py-2 text-sm font-medium text-neutral-200 transition-colors hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300";
 
 export interface ResumeMemoSheetProps {
     mode: "leave" | "switch";
@@ -82,14 +87,17 @@ export function ResumeMemoSheet({ mode, outgoing, incoming, onSave, onDismiss, e
                 </label>)}
                 {error && <p className="text-sm text-red-300">{error}</p>}
                 <div className="flex flex-wrap gap-2">
-                    <button type="submit" disabled={pending} className="rounded bg-indigo-600 px-3 py-2 disabled:opacity-50">{pending ? "Saving…" : "Save note"}</button>
-                    <button type="button" onClick={onDismiss} className="rounded border border-neutral-600 px-3 py-2">Skip</button>
+                    <button type="submit" disabled={pending} className={PRIMARY_BUTTON}>
+                        {pending ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
+                        {pending ? "Saving…" : "Save note"}
+                    </button>
+                    <button type="button" onClick={onDismiss} className={SECONDARY_BUTTON}>Skip</button>
                 </div>
             </form> : <section aria-label={`${outgoing.taskName} saved note`}>
                 {outgoing.memo && memoText(outgoing.memo)}
                 <div className="mt-3 flex gap-2">
-                    <button type="button" onClick={() => setEditing(true)} className="rounded border border-neutral-600 px-3 py-2">Edit</button>
-                    <button type="button" onClick={onDismiss} className="rounded bg-indigo-600 px-3 py-2">Continue</button>
+                    <button type="button" onClick={() => setEditing(true)} className={SECONDARY_BUTTON}>Edit</button>
+                    <button type="button" onClick={onDismiss} className={PRIMARY_BUTTON}>Continue</button>
                 </div>
             </section>}
             {mode === "switch" && incoming && <section aria-label={`${incoming.taskName} incoming note`} className="mt-5 min-w-0 border-t border-neutral-700 pt-4">

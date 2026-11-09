@@ -10,6 +10,18 @@ function props(overrides: Partial<ResumeCardProps> = {}): ResumeCardProps {
 }
 
 describe("ResumeCard presentation of T12 props", () => {
+    it("leads with the next action before the other note fields", () => {
+        render(<ResumeCard {...props()} />);
+        const card = screen.getByRole("region", { name: "Resume Task A" });
+        const collapsed = card.textContent ?? "";
+        expect(collapsed.indexOf("Next action")).toBeLessThan(collapsed.indexOf("Where I am"));
+        expect(collapsed.indexOf("Where I am")).toBeLessThan(collapsed.indexOf("Blocker"));
+        fireEvent.click(screen.getByRole("button", { name: "Expand note" }));
+        const expanded = card.textContent ?? "";
+        expect(expanded.indexOf("Next action")).toBeLessThan(expanded.indexOf("Where I am"));
+        expect(expanded.indexOf("Where I am")).toBeLessThan(expanded.indexOf("Blocker"));
+    });
+
     it.each([
         { whereIAm: "", nextAction: "Cover errors", present: "Next action", absent: "Where I am" },
         { whereIAm: "Parser drafted", nextAction: "", present: "Where I am", absent: "Next action" },
