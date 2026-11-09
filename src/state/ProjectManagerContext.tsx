@@ -9,6 +9,7 @@ import type { AgentProjectSnapshot, AgentSnapshotConflict } from "../lib/agent/s
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { normalizeTaskDueDate } from "../lib/taskDueDate";
 import { applyWorkStart } from "../lib/pm/workStart";
+import { normalizeWaiting, withWaitingInvariant } from "../lib/pm/waiting";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -409,11 +410,11 @@ export const ProjectManagerProvider: React.FC<{
                 persist((prev) => {
                     const tasks = { ...prev.tasks };
                     for (const task of plan.restoreTasks) {
-                        tasks[task.id] = { ...task, updatedAt: revertedAt };
+                        tasks[task.id] = withWaitingInvariant({ ...task, updatedAt: revertedAt });
                     }
                     for (const taskId of plan.archiveTaskIds) {
                         const task = tasks[taskId];
-                        if (task) tasks[taskId] = { ...task, isArchived: true, updatedAt: revertedAt };
+                        if (task) tasks[taskId] = withWaitingInvariant({ ...task, isArchived: true, updatedAt: revertedAt });
                     }
                     return { ...prev, tasks };
                 });
@@ -540,12 +541,16 @@ export const ProjectManagerProvider: React.FC<{
                     title,
                     projectId,
                     dueDate,
+                    waiting: Object.prototype.hasOwnProperty.call(opts, "waiting")
+                        ? normalizeWaiting((opts as any).waiting)
+                        : normalizeWaiting(linked.waiting),
                     updatedAt: now(),
                 };
-                created = task;
+                const normalizedTask = withWaitingInvariant(task);
+                created = normalizedTask;
                 return {
                     ...prev,
-                    tasks: { ...prev.tasks, [linked.id]: task },
+                    tasks: { ...prev.tasks, [linked.id]: normalizedTask },
                 };
             }
             const sortOrder = Object.values(prev.tasks).filter((t) => t.status === status).length;
@@ -570,11 +575,13 @@ export const ProjectManagerProvider: React.FC<{
                 updatedAt: now(),
                 appTaskId: (opts as any).appTaskId,
                 relatedTo: (opts as any).relatedTo || [],
+                waiting: normalizeWaiting((opts as any).waiting),
             };
-            created = task;
+            const normalizedTask = withWaitingInvariant(task);
+            created = normalizedTask;
             const next = {
                 ...prev,
-                tasks: { ...prev.tasks, [id]: task },
+                tasks: { ...prev.tasks, [id]: normalizedTask },
             };
             return next;
         });
@@ -651,7 +658,8 @@ export const ProjectManagerProvider: React.FC<{
         persist((prev) => {
             const task = prev.tasks[id];
             if (!task) return prev;
-            return { ...prev, tasks: { ...prev.tasks, [id]: { ...task, ...normalizedPatch, updatedAt: now() } } };
+            const merged = { ...task, ...normalizedPatch, updatedAt: now() };
+            return { ...prev, tasks: { ...prev.tasks, [id]: withWaitingInvariant(merged) } };
         });
     };
     const recordWorkStart = useCallback((taskId: string, at: string = now()) => {
@@ -723,7 +731,7 @@ export const ProjectManagerProvider: React.FC<{
             const updatedAt = now();
             orderedIds.forEach((tid, i) => {
                 const task = tasks[tid];
-                tasks[tid] = { ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt };
+                tasks[tid] = withWaitingInvariant({ ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt });
             });
             return { ...prev, tasks };
         });
@@ -875,6 +883,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
             const sortOrder = Number.isFinite(Number((task as any).sortOrder)) ? Number((task as any).sortOrder) : 0;
             const timeSpentMinutes = Number.isFinite(Number((task as any).timeSpentMinutes)) ? Number((task as any).timeSpentMinutes) : 0;
             const workedPomos = Number.isFinite(Number((task as any).workedPomos)) ? Number((task as any).workedPomos) : 0;
+            const waiting = normalizeWaiting(task.waiting);
             const estimatePomos = ((): number | undefined => {
                 const raw = (task as any).estimatePomos;
                 const n = Number(raw);
@@ -902,6 +911,7 @@ export function normalizeState(input?: unknown): ProjectManagerState {
                 createdAt,
                 updatedAt,
                 relatedTo: Array.isArray(task.relatedTo) ? task.relatedTo.filter((value: unknown): value is string => typeof value === "string") : [],
+                waiting: status === "Done" || Boolean(task.isArchived) ? null : waiting,
             };
         });
     }

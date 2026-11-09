@@ -150,4 +150,39 @@ describe("normalizeState", () => {
         } as any);
         expect(s.tasks.t1.estimatePomos).toBe(1);
     });
+
+    it("normalizes waiting and enforces the Done/archived invariant on load", () => {
+        const since = "2026-11-08T09:00:00.000Z";
+        const s = normalizeState({
+            projects: { p1: { id: "p1", name: "P", color: "#fff", isArchived: false, sortOrder: 0, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } },
+            tasks: {
+                missing: { id: "missing", title: "Missing", projectId: "p1" },
+                explicitNull: { id: "explicitNull", title: "Null", projectId: "p1", waiting: null },
+                agent: { id: "agent", title: "Agent", projectId: "p1", waiting: { type: "agent", since } },
+                person: { id: "person", title: "Person", projectId: "p1", status: "Blocked", waiting: { type: "person", since } },
+                extra: { id: "extra", title: "Extra", projectId: "p1", waiting: { type: "agent", since, reason: "why" } },
+                unknownType: { id: "unknownType", title: "Unknown", projectId: "p1", waiting: { type: "robot", since } },
+                nonObject: { id: "nonObject", title: "Non object", projectId: "p1", waiting: "agent" },
+                missingSince: { id: "missingSince", title: "Missing since", projectId: "p1", waiting: { type: "agent" } },
+                badSince: { id: "badSince", title: "Bad since", projectId: "p1", waiting: { type: "agent", since: "not-a-date" } },
+                done: { id: "done", title: "Done", projectId: "p1", status: "Done", waiting: { type: "agent", since } },
+                archived: { id: "archived", title: "Archived", projectId: "p1", status: "In Progress", isArchived: true, waiting: { type: "person", since } },
+            },
+        } as any);
+
+        Object.values(s.tasks).forEach((task) => expect(task.waiting).not.toBeUndefined());
+        expect(s.tasks.missing.waiting).toBeNull();
+        expect(s.tasks.explicitNull.waiting).toBeNull();
+        expect(s.tasks.agent.waiting).toEqual({ type: "agent", since });
+        expect(s.tasks.person.waiting).toEqual({ type: "person", since });
+        expect(s.tasks.person.status).toBe("Blocked");
+        expect(s.tasks.extra.waiting).toEqual({ type: "agent", since });
+        expect(Object.keys(s.tasks.extra.waiting!)).toEqual(["type", "since"]);
+        expect(s.tasks.unknownType.waiting).toBeNull();
+        expect(s.tasks.nonObject.waiting).toBeNull();
+        expect(s.tasks.missingSince.waiting).toBeNull();
+        expect(s.tasks.badSince.waiting).toBeNull();
+        expect(s.tasks.done.waiting).toBeNull();
+        expect(s.tasks.archived.waiting).toBeNull();
+    });
 });
