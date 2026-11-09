@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PMTask, ProjectManagerState } from "../../state/types";
+import { saveResumeNote, type ResumeNoteState } from "../resume";
 import type { AgentStartOfDayPlan } from "./startOfDayPlanStore";
 import { runEndOfDayWorkflow } from "./endOfDayWorkflow";
 
@@ -27,7 +28,40 @@ function plan(projectId = "p1"): AgentStartOfDayPlan {
     };
 }
 
+const CONTEXT_MARKER = "End-of-Day context:\n";
+
+interface SerializedResumeNote {
+    nextAction?: string;
+    blocker?: string;
+    savedAt?: string;
+}
+
+interface SerializedRemainingTask {
+    id: string;
+    resumeNote?: SerializedResumeNote;
+}
+
+function userMessage(complete: ReturnType<typeof vi.fn>, callIndex = 0): string {
+    return complete.mock.calls[callIndex][0].messages[1].content as string;
+}
+
+function serializedContext(complete: ReturnType<typeof vi.fn>, callIndex = 0): { remainingTasks: SerializedRemainingTask[] } {
+    const content = userMessage(complete, callIndex);
+    const markerIndex = content.indexOf(CONTEXT_MARKER);
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    return JSON.parse(content.slice(markerIndex + CONTEXT_MARKER.length));
+}
+
+function entryFor(context: { remainingTasks: SerializedRemainingTask[] }, id: string): SerializedRemainingTask {
+    const entry = context.remainingTasks.find((item) => item.id === id);
+    expect(entry).toBeDefined();
+    return entry as SerializedRemainingTask;
+}
+
 describe("End-of-Day workflow", () => {
+    beforeEach(() => localStorage.clear());
+    afterEach(() => localStorage.clear());
+
     it("uses completed state and produces only a reorder of every remaining task", async () => {
         const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Start with B tomorrow, then return to A.", orderedTaskIds: ["b", "a"] }));
         const result = await runEndOfDayWorkflow({
@@ -68,5 +102,117 @@ describe("End-of-Day workflow", () => {
         expect(result.tomorrowTasks).toEqual([]);
         expect(result.summary).toContain("Tomorrow starts clear");
         expect(complete).not.toHaveBeenCalled();
+    });
+
+    it("quotes a full resume note on its remaining task", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Quote the note.", orderedTaskIds: ["a"] }));
+        const savedAt = "2026-08-10T20:00:00.000Z";
+        const resumeNotes: ResumeNoteState = { version: 1, notes: { "app-a": { whereIAm: "x", nextAction: "Write tests", blocker: "Need API key", savedAt } } };
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete }, resumeNotes,
+            pmState: state([task("a", 0, { appTaskId: "app-a" }), task("done", 1, { status: "Done" })]),
+        });
+        expect(entryFor(serializedContext(complete), "a").resumeNote).toEqual({ nextAction: "Write tests", blocker: "Need API key", savedAt });
+    });
+
+    it("omits resumeNote for a task without a note and for one without an app task id", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "No notes.", orderedTaskIds: ["a", "b"] }));
+        const resumeNotes: ResumeNoteState = { version: 1, notes: { "app-other": { whereIAm: "x", nextAction: "Elsewhere", savedAt: "2026-08-10T20:00:00.000Z" } } };
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete }, resumeNotes,
+            pmState: state([task("a", 0, { appTaskId: "app-a" }), task("b", 1), task("done", 2, { status: "Done" })]),
+        });
+        const context = serializedContext(complete);
+        const noted = entryFor(context, "a");
+        const unlinked = entryFor(context, "b");
+        expect("resumeNote" in noted).toBe(false);
+        expect("resumeNote" in unlinked).toBe(false);
+    });
+
+    it("includes a blocker-only note without a nextAction key", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Blocker only.", orderedTaskIds: ["a"] }));
+        const savedAt = "2026-08-10T20:00:00.000Z";
+        const resumeNotes: ResumeNoteState = { version: 1, notes: { "app-a": { whereIAm: "x", nextAction: "", blocker: "Waiting on Sam", savedAt } } };
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete }, resumeNotes,
+            pmState: state([task("a", 0, { appTaskId: "app-a" }), task("done", 1, { status: "Done" })]),
+        });
+        const resumeNote = entryFor(serializedContext(complete), "a").resumeNote;
+        expect(resumeNote).toEqual({ blocker: "Waiting on Sam", savedAt });
+        expect(resumeNote).not.toHaveProperty("nextAction");
+    });
+
+    it("omits resumeNote when nextAction is whitespace and there is no blocker", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Nothing to quote.", orderedTaskIds: ["a"] }));
+        const resumeNotes: ResumeNoteState = { version: 1, notes: { "app-a": { whereIAm: "x", nextAction: "   ", savedAt: "2026-08-10T20:00:00.000Z" } } };
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete }, resumeNotes,
+            pmState: state([task("a", 0, { appTaskId: "app-a" }), task("done", 1, { status: "Done" })]),
+        });
+        expect("resumeNote" in entryFor(serializedContext(complete), "a")).toBe(false);
+    });
+
+    it("still sends a dismissed note without its dismissal or whereIAm fields", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Dismissed note.", orderedTaskIds: ["a"] }));
+        const savedAt = "2026-08-10T20:00:00.000Z";
+        const resumeNotes: ResumeNoteState = { version: 1, notes: { "app-a": { whereIAm: "Private context", nextAction: "Write tests", blocker: "Need API key", savedAt, dismissedAt: "2026-08-10T21:00:00.000Z" } } };
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete }, resumeNotes,
+            pmState: state([task("a", 0, { appTaskId: "app-a" }), task("done", 1, { status: "Done" })]),
+        });
+        const context = serializedContext(complete);
+        expect(entryFor(context, "a").resumeNote).toEqual({ nextAction: "Write tests", blocker: "Need API key", savedAt });
+        const content = userMessage(complete);
+        expect(content).not.toContain("dismissedAt");
+        expect(content).not.toContain("whereIAm");
+        expect(content).not.toContain("Private context");
+    });
+
+    it("never quotes notes belonging to Done or archived tasks", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Only active work.", orderedTaskIds: ["c"] }));
+        const savedAt = "2026-08-10T20:00:00.000Z";
+        const resumeNotes: ResumeNoteState = {
+            version: 1,
+            notes: {
+                "app-c": { whereIAm: "x", nextAction: "Active next", savedAt },
+                "app-done": { whereIAm: "x", nextAction: "Hidden done note", savedAt },
+                "app-arch": { whereIAm: "x", nextAction: "Hidden archived note", savedAt },
+            },
+        };
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete }, resumeNotes,
+            pmState: state([
+                task("c", 0, { appTaskId: "app-c" }),
+                task("done", 1, { appTaskId: "app-done", status: "Done" }),
+                task("arch", 2, { appTaskId: "app-arch", isArchived: true }),
+            ]),
+        });
+        const context = serializedContext(complete);
+        expect(context.remainingTasks.map((item) => item.id)).toEqual(["c"]);
+        const content = userMessage(complete);
+        expect(content).not.toContain("Hidden done note");
+        expect(content).not.toContain("Hidden archived note");
+    });
+
+    it("instructs the model to quote resume notes and ignore notes from before the day started", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Quote verbatim.", orderedTaskIds: ["a"] }));
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete },
+            pmState: state([task("a", 0), task("done", 1, { status: "Done" })]),
+        });
+        const system = complete.mock.calls[0][0].messages[0].content as string;
+        expect(system).toContain("A remainingTask may include resumeNote: the user's own words, saved when they last left that task. Quote its nextAction and blocker verbatim in the summary; never paraphrase, reword, or extrapolate from them.");
+        expect(system).toContain("resumeNote.savedAt is when that note was written. Ignore any resumeNote saved before startOfDay.createdAt; never present it as current.");
+    });
+
+    it("reads resume notes from the store when the input omits them", async () => {
+        const complete = vi.fn().mockResolvedValue(JSON.stringify({ summary: "Stored note.", orderedTaskIds: ["a"] }));
+        const savedAt = "2026-08-10T20:00:00.000Z";
+        saveResumeNote("app-a", { whereIAm: "Store", nextAction: "Stored next action", blocker: "Stored blocker", savedAt });
+        await runEndOfDayWorkflow({
+            projectId: "p1", plan: plan(), now: new Date("2026-08-10T22:00:00.000Z"), client: { complete },
+            pmState: state([task("a", 0, { appTaskId: "app-a" }), task("done", 1, { status: "Done" })]),
+        });
+        expect(entryFor(serializedContext(complete), "a").resumeNote).toEqual({ nextAction: "Stored next action", blocker: "Stored blocker", savedAt });
     });
 });
