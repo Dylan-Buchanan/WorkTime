@@ -150,6 +150,34 @@ describe("ResumeMemoProvider", () => {
         expect(store.getResumeNote("A")?.dismissedAt).toBeTruthy();
     });
 
+    it("records empty-card dismissal at the current enter without storage or version changes", async () => {
+        const write = vi.spyOn(store, "saveResumeNote");
+        const dismiss = vi.spyOn(store, "dismissResumeNote");
+        const storageWrite = vi.spyOn(Storage.prototype, "setItem");
+        const view = render(tree());
+        expect(context.emptyCardDismissal).toBeNull();
+        const retainedDismiss = context.dismissEmptyCard;
+        emit({ type: "enter", taskId: "A", reason: "resume", at: P, windowId: W });
+        await waitFor(() => expect(context.lastEnter?.at).toBe(P));
+        act(() => retainedDismiss("A"));
+        expect(context.emptyCardDismissal).toEqual({ taskId: "A", at: P });
+        view.rerender(tree());
+        expect(context.emptyCardDismissal).toEqual({ taskId: "A", at: P });
+        const nextAt = "2026-11-09T14:05:00.000Z";
+        emit({ type: "enter", taskId: "A", reason: "resume", at: nextAt, windowId: W });
+        await waitFor(() => expect(context.lastEnter?.at).toBe(nextAt));
+        expect(context.emptyCardDismissal?.at).not.toBe(context.lastEnter?.at);
+        act(() => retainedDismiss("A"));
+        expect(context.emptyCardDismissal).toEqual({ taskId: "A", at: nextAt });
+        expect(write).not.toHaveBeenCalled();
+        expect(dismiss).not.toHaveBeenCalled();
+        expect(storageWrite).not.toHaveBeenCalled();
+        expect(context.notesVersion).toBe(0);
+        view.unmount();
+        render(tree());
+        expect(context.emptyCardDismissal).toBeNull();
+    });
+
     it.each([
         { name: "saved after pause", savedAt: memo.savedAt, pausedAt: P, captured: true },
         { name: "timestamp equality", savedAt: P, pausedAt: P, captured: true },

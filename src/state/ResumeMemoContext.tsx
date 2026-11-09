@@ -11,6 +11,8 @@ export interface ResumeMemoContextValue {
     openMemo: (taskId: string) => void;
     notesVersion: number;
     dismissNote: (taskId: string) => void;
+    emptyCardDismissal: { taskId: string; at: string } | null;
+    dismissEmptyCard: (taskId: string) => void;
     /** Internal overlay coordination. Returns an idempotent release function. */
     holdMemoPresentation: () => () => void;
 }
@@ -29,6 +31,7 @@ export function ResumeMemoProvider({ children }: { children: ReactNode }) {
     useLayoutEffect(() => { latest.current = { app, pm }; });
     const [lastEnter, setLastEnter] = useState<ResumeMemoContextValue["lastEnter"]>(null);
     const recordedEnter = useRef<ResumeMemoContextValue["lastEnter"]>(null);
+    const [emptyCardDismissal, setEmptyCardDismissal] = useState<ResumeMemoContextValue["emptyCardDismissal"]>(null);
     const [notesVersion, setNotesVersion] = useState(0);
     const [active, setActive] = useState<Capture | null>(null);
     const activeRef = useRef<Capture | null>(null);
@@ -126,6 +129,10 @@ export function ResumeMemoProvider({ children }: { children: ReactNode }) {
     const dismissNote = useCallback((taskId: string) => {
         if (dismissResumeNote(taskId, new Date().toISOString())) setNotesVersion((value) => value + 1);
     }, []);
+    const dismissEmptyCard = useCallback((taskId: string) => {
+        const enter = recordedEnter.current;
+        if (enter?.taskId === taskId) setEmptyCardDismissal({ taskId, at: enter.at });
+    }, []);
     const close = () => {
         activeRef.current = null;
         setActive(null);
@@ -149,7 +156,7 @@ export function ResumeMemoProvider({ children }: { children: ReactNode }) {
         close();
     };
 
-    return <ResumeMemoContext.Provider value={{ lastEnter, openMemo, notesVersion, dismissNote, holdMemoPresentation }}>
+    return <ResumeMemoContext.Provider value={{ lastEnter, openMemo, notesVersion, dismissNote, emptyCardDismissal, dismissEmptyCard, holdMemoPresentation }}>
         {children}
         {active && <ResumeMemoSheet key={active.id} {...active} onSave={save} onDismiss={close} error={error} />}
     </ResumeMemoContext.Provider>;

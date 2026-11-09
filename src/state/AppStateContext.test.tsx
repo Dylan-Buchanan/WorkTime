@@ -84,6 +84,45 @@ describe("timer transition events", () => {
         expect(events).toEqual([{ type: "leave", taskId: "A", reason: "pause", at: at(3), windowId: W }]);
     });
 
+    it("publishes a pause scheduled by a switch-enter listener between command continuations", async () => {
+        const c = await setup();
+        const retainedPause = c.app().pauseTimer;
+        let pendingPause: Promise<void> | undefined;
+        c.app().subscribeTimerTransitions(event => {
+            if (event.type === "enter" && event.reason === "switch") {
+                queueMicrotask(() => { pendingPause = retainedPause(); });
+            }
+        });
+        time(3);
+        await act(async () => {
+            await c.app().setActiveTask("B");
+            await pendingPause;
+        });
+        expect(c.events).toEqual([
+            { type: "leave", taskId: "A", reason: "switch", at: at(3), windowId: W },
+            { type: "enter", taskId: "B", reason: "switch", at: at(3), windowId: W, fromTaskId: "A" },
+            { type: "leave", taskId: "B", reason: "pause", at: at(3), windowId: W },
+        ]);
+        expect(c.app().state?.timer?.paused).toBe(true);
+    });
+
+    it.each(["started_at", "ends_at"] as const)("discards a pause episode when a sub-second remote re-pause changes %s", async field => {
+        const c = await setup();
+        time(3);
+        await act(async () => { await c.app().pauseTimer(); });
+        const paused = { ...c.data.store.state.timer! };
+        c.data.store.state.timer![field] = new Date(Date.parse(paused[field]) + 100).toISOString();
+        await act(async () => { await c.app().refresh(); });
+        expect(c.app().state?.timer).toMatchObject({
+            window_started_at: W, paused: true,
+            accumulated_secs: paused.accumulated_secs,
+            paused_remaining_secs: paused.paused_remaining_secs,
+        });
+        c.events.length = 0;
+        await act(async () => { await c.app().stopWork(); });
+        expect(c.events).toEqual([{ type: "leave", taskId: "A", reason: "stop", at: at(3), windowId: W }]);
+    });
+
     it("silences a stale stop captured before an unawaited switch", async () => {
         const c = await setup();
         time(3);

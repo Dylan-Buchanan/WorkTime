@@ -174,6 +174,8 @@ export interface ResumeMemoContextValue {
     openMemo: (taskId: string) => void;
     notesVersion: number;
     dismissNote: (taskId: string) => void;
+    emptyCardDismissal: { taskId: string; at: string } | null;
+    dismissEmptyCard: (taskId: string) => void;
     /** Internal overlay coordination. Returns an idempotent release function. */
     holdMemoPresentation: () => () => void;
 }
@@ -318,6 +320,13 @@ Insert these two exact lines after the “Prioritize blockers...” line and bef
 > resumeNote.savedAt is when that note was written. Ignore any resumeNote saved before dayStartedAt (local midnight today); never present it as current.
 
 These lines are frozen. Treating user-authored text as data also prevents the quotation rule from becoming an instruction override. Current system prompt location: `src/lib/agent/endOfDayWorkflow.ts:59-69` (R21). #184b supplies `dayStartedAt` in the serialized context (T14), so the boundary is deterministic local midnight of the run; tests can verify serialization and these instructions, but cannot prove model behavior. Do not substitute plan.createdAt/completedAt or any other boundary definition.
+
+### Final-review corrections (R1–R4, ORCH-authorized)
+
+- **R1 — Single command adoption.** Results already adopted by adoptTaskTransition are marked in the command-adoption WeakMap. The outer adoptResult must not adopt them or bump the sequence again: a switch-enter listener may queueMicrotask a pause, and that pause must publish normally. setActiveTask/finalizeTask retain their error/rethrow behavior.
+- **R2 — Pause fingerprint.** The paused episode includes started_at and ends_at alongside accumulated_secs and paused_remaining_secs. A refreshed paused timer with changed segment timestamps invalidates the episode even when the same window and whole-second counters survive a sub-second remote resume/re-pause; later stop/switch has no obsolete pausedAt.
+- **R3 — Empty-card dismissal lifetime (Q2/T6).** ResumeMemoProvider owns emptyCardDismissal, initially null. dismissEmptyCard(taskId) records `{ taskId, at: lastEnter.at }` for the current task enter, makes no store call, and leaves notesVersion unchanged. TimerPanel compares taskId and at, so dismissal survives its route remounts under the same provider and becomes irrelevant on the next enter with a different at. It remains in memory only and resets on provider unmount.
+- **R4 — Mobile drawer presentation hold.** While MainLayout's mobile Tasks and settings drawer is open, acquire the optional holdMemoPresentation and release it on effect cleanup when the drawer closes or unmounts, as with SwitchSheet. Leaves still queue, but their memo sheet presents only after the drawer closes; never mount both modal dialogs for a drawer task switch.
 
 ## 3. Per-issue lane specifications
 

@@ -14,6 +14,8 @@ type PauseEpisode = {
     taskId: string; windowId: string; at: string; handoff: boolean;
     accumulatedSecs: ActiveTimer["accumulated_secs"];
     pausedRemainingSecs: ActiveTimer["paused_remaining_secs"];
+    startedAt: ActiveTimer["started_at"];
+    endsAt: ActiveTimer["ends_at"];
 };
 
 function sameTimerOccupant(left: ActiveTimer | null | undefined, right: ActiveTimer | null | undefined): boolean {
@@ -149,7 +151,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (episode && (timer?.kind !== "Work" || timer.task_id !== episode.taskId ||
             windowStartedAt(timer) !== episode.windowId || (!timer.paused && !episode.handoff) ||
             (timer.paused && (timer.accumulated_secs !== episode.accumulatedSecs ||
-                timer.paused_remaining_secs !== episode.pausedRemainingSecs)))) {
+                timer.paused_remaining_secs !== episode.pausedRemainingSecs ||
+                timer.started_at !== episode.startedAt || timer.ends_at !== episode.endsAt)))) {
             replacePauseEpisode(null);
         }
     }, [replacePauseEpisode]);
@@ -337,6 +340,9 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         try {
             setError(null);
             const result = await run();
+            // Task transitions already adopted and published before returning.
+            // Re-adoption here would supersede a listener's deferred command.
+            if (commandAdoptionsRef.current.has(result)) return;
             const current = commandIsCurrent(capturedSeq, before, result.state.timer);
             commandAdoptionSeqRef.current += 1;
             stateRef.current = result.state;
@@ -403,7 +409,9 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 state: result.state,
             });
         }
-        return { ...result, state: stateRef.current ?? result.state };
+        const adopted = { ...result, state: stateRef.current ?? result.state };
+        commandAdoptionsRef.current.set(adopted, { current });
+        return adopted;
     };
     const setActiveTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.setActiveTask(id)), true);
     const ensureActiveTask = async () => {
@@ -522,7 +530,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             timer.task_id === before.timer.task_id && windowStartedAt(timer) === windowStartedAt(before.timer)) {
             const windowId = windowStartedAt(timer);
             replacePauseEpisode({ taskId: timer.task_id, windowId, at: success.at, handoff: false,
-                accumulatedSecs: timer.accumulated_secs, pausedRemainingSecs: timer.paused_remaining_secs });
+                accumulatedSecs: timer.accumulated_secs, pausedRemainingSecs: timer.paused_remaining_secs,
+                startedAt: timer.started_at, endsAt: timer.ends_at });
             publishTimerTransition({ type: "leave", taskId: timer.task_id, reason: "pause", at: success.at, windowId });
         }
     };

@@ -255,7 +255,7 @@ export const TimerPanel: React.FC = () => {
     const cardTask = cardTaskId ? state?.tasks[cardTaskId] : undefined;
     const cardMemo = useMemo(() => lastEnter && cardTaskId ? getResumeNote(cardTaskId) : null,
         [lastEnter, cardTaskId, notesVersion]);
-    const [dismissedEmptyCards, setDismissedEmptyCards] = useState<Record<string, string>>({});
+    const emptyCardDismissal = resumeMemo?.emptyCardDismissal;
     const cardWeight = lastEnter?.reason === "break-end" || (cardMemo && lastEnter &&
         Date.parse(lastEnter.at) - Date.parse(cardMemo.savedAt) > 2 * 60 * 60 * 1000) ? "dimmed-line" : "full";
     const showResumeCard = resumeMemo && lastEnter && cardTask && lastEnter.taskId === cardTask.id &&
@@ -263,7 +263,7 @@ export const TimerPanel: React.FC = () => {
         !findPMTaskByAppTaskId(pmState.tasks, cardTask.id)?.isArchived &&
         (cardMemo ? !cardMemo.dismissedAt : cardWeight === "full" &&
             state?.logs.some(log => log.task_id === cardTaskId && !log.was_break) &&
-            dismissedEmptyCards[cardTask.id] !== lastEnter.at);
+            !(emptyCardDismissal?.taskId === cardTask.id && emptyCardDismissal.at === lastEnter.at));
     const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
     const waiting = waitingTask ? waitingOf(waitingTask) : null;
     const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; reference: Date; occupantId: string | null } | null>(null);
@@ -633,7 +633,7 @@ export const TimerPanel: React.FC = () => {
                         onAdd={() => resumeMemo.openMemo(cardTask.id)}
                         onDismiss={() => {
                             if (cardMemo) resumeMemo.dismissNote(cardTask.id);
-                            else setDismissedEmptyCards(previous => ({ ...previous, [cardTask.id]: lastEnter.at }));
+                            else resumeMemo.dismissEmptyCard(cardTask.id);
                         }} />}
                     <div className="flex flex-col items-center gap-2 text-xs">
                         {isWorkWindowLive(timer ?? null, new Date()) && (

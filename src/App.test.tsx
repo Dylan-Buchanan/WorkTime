@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "./App";
 import { InMemoryDataAccess } from "./lib/data/InMemoryDataAccess";
 import { makeActiveTimer, makeAppState } from "./test/mockTauri";
@@ -41,6 +41,78 @@ beforeEach(() => { auth.session = { user: { id: "pet-route-owner" } }; vi.mocked
 
 describe("App resume memo lifecycle", () => {
     beforeEach(() => { memoLifecycle.mount.mockClear(); memoLifecycle.unmount.mockClear(); });
+
+    it("keeps an empty card dismissed across TimerPanel route remounts until a different enter at", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            const at = "2026-11-09T14:00:00.000Z";
+            vi.setSystemTime(new Date(at));
+            const data = new InMemoryDataAccess(makeAppState({ active_task: "A", tasks: { A: {
+                id: "A", name: "Route task", target_pomodoros: 2, completed_pomodoros: 0, completed_at: null,
+                archived: false, break_skips: 0, created_at: at,
+            } }, logs: [{ id: "history-A", task_id: "A", was_break: false, break_skipped: false,
+                duration_minutes: 1, finished_at: at }],
+            timer: makeActiveTimer({ task_id: "A", started_at: at, window_started_at: at,
+                ends_at: "2026-11-09T14:25:00.000Z", paused: true, paused_remaining_secs: 1500 }) }));
+            vi.mocked(createDefaultDataAccess).mockReturnValueOnce(data);
+            window.history.pushState({}, "", "/");
+            render(<App />);
+            fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+            const card = await screen.findByRole("region", { name: "Resume Route task" });
+            fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
+            expect(screen.queryByRole("region", { name: "Resume Route task" })).toBeNull();
+            fireEvent.click(screen.getByRole("link", { name: "Goals" }));
+            await screen.findByRole("heading", { name: "Goals" });
+            fireEvent.click(screen.getByRole("link", { name: "Timer" }));
+            await screen.findByRole("button", { name: "Pause" });
+            expect(screen.queryByRole("region", { name: "Resume Route task" })).toBeNull();
+            expect(memoLifecycle.mount).toHaveBeenCalledOnce();
+            fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+            fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
+            vi.setSystemTime(new Date("2026-11-09T14:00:01.000Z"));
+            fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+            expect(await screen.findByRole("region", { name: "Resume Route task" })).toHaveTextContent("No note from your last exit");
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("holds a TaskPanel switch memo until the mobile Tasks and settings drawer closes", async () => {
+        const media = vi.spyOn(window, "matchMedia").mockImplementation(query => ({
+            matches: false, media: query, onchange: null, addListener() {}, removeListener() {},
+            addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false,
+        }));
+        const oldWidth = window.innerWidth;
+        window.innerWidth = 375;
+        const now = Date.now();
+        const started = new Date(now - 60_000).toISOString();
+        const data = new InMemoryDataAccess(makeAppState({ active_task: "A", tasks: Object.fromEntries(
+            ["A", "B"].map(id => [id, { id, name: `Drawer task ${id}`, target_pomodoros: 2,
+                completed_pomodoros: 0, completed_at: null, archived: false, break_skips: 0, created_at: started }]),
+        ), timer: makeActiveTimer({ task_id: "A", started_at: started, window_started_at: started,
+            ends_at: new Date(now + 1_440_000).toISOString() }) }));
+        vi.mocked(createDefaultDataAccess).mockReturnValueOnce(data);
+        window.history.pushState({}, "", "/");
+        const observed: number[] = [];
+        const observer = new MutationObserver(() => observed.push(document.querySelectorAll('[role="dialog"][aria-modal="true"]').length));
+        try {
+            const view = render(<App />);
+            observer.observe(view.container, { childList: true, subtree: true });
+            await screen.findByRole("button", { name: "Pause" });
+            fireEvent.click(screen.getByRole("button", { name: "Tasks & Settings" }));
+            const drawer = screen.getByRole("dialog", { name: "Tasks and settings" });
+            fireEvent.click(await within(drawer).findByText("Drawer task B (0/2)"));
+            await waitFor(() => expect(data.store.state.timer?.task_id).toBe("B"));
+            // Flush the provider's scheduled presentation while the drawer holds it.
+            await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+            expect(screen.getAllByRole("dialog")).toEqual([drawer]);
+            fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
+            const memo = await screen.findByRole("dialog", { name: "What were you doing in Drawer task A?" });
+            expect(screen.getAllByRole("dialog")).toEqual([memo]);
+            expect(observed.length).toBeGreaterThan(0);
+            expect(observed.every(count => count <= 1)).toBe(true);
+        } finally {
+            observer.disconnect(); media.mockRestore(); window.innerWidth = oldWidth;
+        }
+    });
 
     it("keeps the authenticated memo provider and its draft mounted across route changes", async () => {
         const data = new InMemoryDataAccess(makeAppState({ active_task: "A", tasks: { A: {
