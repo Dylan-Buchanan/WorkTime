@@ -1245,6 +1245,79 @@ describe("deferred finalize", () => {
         ]);
     });
 
+    it("drains a late owner requeue when an external-stop refresh reaches flush teardown", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        let releaseOwner!: () => void;
+        let enteredOwner!: () => void;
+        const ownerGate = new Promise<void>(resolve => { releaseOwner = resolve; });
+        const ownerEnteredGate = new Promise<void>(resolve => { enteredOwner = resolve; });
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementationOnce(async id => {
+            await c.data.setActiveTask(id);
+            const result = await finalize(id);
+            expect(result.value).toBe("owner");
+            enteredOwner();
+            await ownerGate;
+            return result;
+        });
+        let switching!: Promise<void>;
+        time(3);
+        await act(async () => { switching = c.app().setActiveTask("B"); await ownerEnteredGate; });
+        await c.data.stopWorkTimer();
+        const fetch = c.data.fetchState.bind(c.data);
+        let releaseFetch!: () => void;
+        let enteredFetch!: () => void;
+        const fetchGate = new Promise<void>(resolve => { releaseFetch = resolve; });
+        const fetchEnteredGate = new Promise<void>(resolve => { enteredFetch = resolve; });
+        vi.spyOn(c.data, "fetchState").mockImplementationOnce(async () => {
+            const result = await fetch();
+            expect(result.state.timer).toBeNull();
+            enteredFetch();
+            await fetchGate;
+            return result;
+        });
+        let refresh!: Promise<unknown>;
+        await act(async () => { refresh = c.app().refresh(); await fetchEnteredGate; });
+        await act(async () => {
+            // Consecutive releases place refresh's flush call at the old teardown gap.
+            releaseFetch();
+            releaseOwner();
+            await Promise.all([switching, refresh]);
+        });
+        expect(deferred.mock.calls).toEqual([["A"], ["A"]]);
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([
+            { type: "leave", taskId: "A", reason: "switch", at: at(3), windowId: W },
+            { type: "enter", taskId: "B", reason: "switch", at: at(3), windowId: W, fromTaskId: "A" },
+        ]);
+    });
+
+    it("clears consecutive empty flush runs so a later stop still drains deferred finalizes", async () => {
+        const c = await setup();
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask");
+        await act(async () => {
+            // Each successful selection reaches flush with no queued or in-flight ids.
+            await c.app().setActiveTask("A");
+            await c.app().setActiveTask("A");
+        });
+        expect(deferred).not.toHaveBeenCalled();
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        time(3);
+        await act(async () => {
+            expect(await c.app().requestFinalize("B")).toBe("finalized");
+            expect(await c.app().requestFinalize("A")).toBe("deferred");
+        });
+        await act(async () => { await c.app().stopWork(); });
+        expect(deferred).toHaveBeenCalledExactlyOnceWith("A");
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().state?.tasks.B).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.timer).toBeNull();
+        expect(c.app().error).toBeNull();
+    });
+
     it("shares one flush across concurrent refresh triggers and awaits its completion", async () => {
         const c = await setup();
         await act(async () => { await c.app().requestFinalize("A"); });

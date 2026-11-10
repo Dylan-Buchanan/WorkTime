@@ -214,42 +214,54 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             reflushRef.current = true;
             return finalizeRunRef.current;
         }
-        const run = async () => {
-            do {
-                reflushRef.current = false;
-                const queued = pendingFinalizeRef.current;
-                const { flush, keep } = partitionPendingFinalizes(
-                    queued.map(entry => entry.id), stateRef.current?.timer ?? null, stateRef.current?.tasks ?? {},
-                );
-                const claimed = flush.map(id => queued.find(entry => entry.id === id)!);
-                // Claim the whole pass synchronously, preserving each entry's mode.
-                pendingFinalizeRef.current = queued.filter(entry => keep.includes(entry.id));
-                setPendingFinalizeTaskIds(keep);
-                for (const { id } of claimed) inFlightFinalizeRef.current.add(id);
-                for (const entry of claimed) {
-                    const { id, mode } = entry;
-                    try {
-                        const result = await (mode === "archive" ? data.archiveDeferredTask(id) : data.finalizeDeferredTask(id));
-                        if (result.value === "finalized") {
-                            commandAdoptionSeqRef.current += 1;
-                            stateRef.current = result.state;
-                            setState(result.state);
-                            reconcilePauseEpisode(result.state.timer);
-                        } else if (result.value === "owner" && !pendingFinalizeRef.current.some(pending => pending.id === id)) {
-                            const pending = [...pendingFinalizeRef.current, entry];
-                            pendingFinalizeRef.current = pending;
-                            setPendingFinalizeTaskIds(pending.map(item => item.id));
-                        }
-                    } catch (err: any) {
-                        setError(err?.message || err?.toString?.() || "Unknown error");
-                    } finally {
-                        inFlightFinalizeRef.current.delete(id);
-                    }
-                }
-            } while (reflushRef.current);
-        };
-        const active = run().finally(() => { finalizeRunRef.current = null; });
+        let resolveRun!: () => void;
+        let rejectRun!: (error: unknown) => void;
+        const active = new Promise<void>((resolve, reject) => {
+            resolveRun = resolve;
+            rejectRun = reject;
+        });
+        // Install the promise before even an empty pass can reach teardown.
         finalizeRunRef.current = active;
+        const run = async () => {
+            try {
+                do {
+                    reflushRef.current = false;
+                    const queued = pendingFinalizeRef.current;
+                    const { flush, keep } = partitionPendingFinalizes(
+                        queued.map(entry => entry.id), stateRef.current?.timer ?? null, stateRef.current?.tasks ?? {},
+                    );
+                    const claimed = flush.map(id => queued.find(entry => entry.id === id)!);
+                    // Claim the whole pass synchronously, preserving each entry's mode.
+                    pendingFinalizeRef.current = queued.filter(entry => keep.includes(entry.id));
+                    setPendingFinalizeTaskIds(keep);
+                    for (const { id } of claimed) inFlightFinalizeRef.current.add(id);
+                    for (const entry of claimed) {
+                        const { id, mode } = entry;
+                        try {
+                            const result = await (mode === "archive" ? data.archiveDeferredTask(id) : data.finalizeDeferredTask(id));
+                            if (result.value === "finalized") {
+                                commandAdoptionSeqRef.current += 1;
+                                stateRef.current = result.state;
+                                setState(result.state);
+                                reconcilePauseEpisode(result.state.timer);
+                            } else if (result.value === "owner" && !pendingFinalizeRef.current.some(pending => pending.id === id)) {
+                                const pending = [...pendingFinalizeRef.current, entry];
+                                pendingFinalizeRef.current = pending;
+                                setPendingFinalizeTaskIds(pending.map(item => item.id));
+                            }
+                        } catch (err: any) {
+                            setError(err?.message || err?.toString?.() || "Unknown error");
+                        } finally {
+                            inFlightFinalizeRef.current.delete(id);
+                        }
+                    }
+                } while (reflushRef.current);
+            } finally {
+                // Exit and clear in one synchronous segment, leaving no lost-reflush gap.
+                if (finalizeRunRef.current === active) finalizeRunRef.current = null;
+            }
+        };
+        void run().then(resolveRun, rejectRun);
         return active;
     }, [data, reconcilePauseEpisode]);
 
