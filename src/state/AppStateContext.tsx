@@ -6,6 +6,7 @@ import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
 import { windowStartedAt, workStartOccupation } from "../lib/engine";
 import type { EngineResult } from "../lib/engine";
+import { ownsWorkWindow, partitionPendingFinalizes } from "../lib/engine/pendingFinalize";
 import type { ReconciledTimer } from "../lib/data/DataAccess";
 import type { TimerTransitionEvent } from "./timerTransitions";
 
@@ -82,6 +83,10 @@ interface AppContextShape {
     remainingMs: () => number;
     error: string | null;
     finalizeTask: (id: string) => Promise<void>;
+    /** Finalize now, or queue it when `taskId` owns the current Work window. Memory-only. */
+    requestFinalize: (taskId: string) => Promise<"finalized" | "deferred">;
+    /** Backend task ids awaiting a deferred finalize, in enqueue order. Memory-only. */
+    pendingFinalizeTaskIds: readonly string[];
     archiveTask: (id: string) => Promise<void>;
     startTaskWork: (id: string) => Promise<"started" | "joined">;
     subscribeTaskCompletions: (listener: (taskId: string) => void) => () => void;
@@ -104,6 +109,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const [state, setState] = useState<AppStateData | null>(null);
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    const pendingFinalizeRef = useRef<string[]>([]);
+    const [pendingFinalizeTaskIds, setPendingFinalizeTaskIds] = useState<readonly string[]>([]);
     const progressing = useRef(false);
     const lastNotifiedWindowRef = useRef<string | null>(null);
     const startTaskWorkQueueRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -197,6 +204,27 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } catch { /* notifications are optional */ }
     }, []);
 
+    const flushPendingFinalizes = useCallback(async () => {
+        const { flush, keep } = partitionPendingFinalizes(
+            pendingFinalizeRef.current, stateRef.current?.timer ?? null, stateRef.current?.tasks ?? {},
+        );
+        // Claim every flushed/dropped id before awaiting any command, so another
+        // flush cannot apply it again while the first command is in flight.
+        pendingFinalizeRef.current = keep;
+        setPendingFinalizeTaskIds(keep);
+        for (const id of flush) {
+            try {
+                const result = await data.finalizeTask(id);
+                commandAdoptionSeqRef.current += 1;
+                stateRef.current = result.state;
+                setState(result.state);
+                reconcilePauseEpisode(result.state.timer);
+            } catch (err: any) {
+                setError(err?.message || err?.toString?.() || "Unknown error");
+            }
+        }
+    }, [data, reconcilePauseEpisode]);
+
     const runProgression = useCallback(async (finishedTimer?: ActiveTimer, reconciliation?: { timer: CompletionNotice; state: AppStateData }) => {
         if (progressing.current) {
             if (reconciliation) queuedReconciliationRef.current = reconciliation;
@@ -270,6 +298,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                     } catch (err: any) { setError(err?.message || err?.toString?.() || "Failed to start work timer"); }
                 }
             }
+            await flushPendingFinalizes();
             // A storage/sync revision arriving mid-progression may have left
             // another expired timer to reconcile. Capture it from the local
             // store so the guard below replays it instead of starting a second
@@ -284,7 +313,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             queuedReconciliationRef.current = null;
             if (queued) void runProgression(undefined, queued);
         }
-    }, [data, fetchAndSetState, maybeNotifyTimerEnd, publishTimerTransition, reconcilePauseEpisode, consumePauseHandoff, commandIsCurrent]);
+    }, [data, fetchAndSetState, maybeNotifyTimerEnd, publishTimerTransition, reconcilePauseEpisode, consumePauseHandoff, commandIsCurrent, flushPendingFinalizes]);
 
     const refresh = useCallback(async (): Promise<AppStateData> => {
         try {
@@ -413,7 +442,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         commandAdoptionsRef.current.set(adopted, { current });
         return adopted;
     };
-    const setActiveTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.setActiveTask(id)), true);
+    const setActiveTask = async (id: string) => {
+        await adoptResult(() => adoptTaskTransition(() => data.setActiveTask(id)), true);
+        await flushPendingFinalizes();
+    };
     const ensureActiveTask = async () => {
         if (!state?.active_task) {
             const tasks = Object.values(state?.tasks || {}).filter((task) => !task.archived);
@@ -460,10 +492,22 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             replacePauseEpisode(null);
             publishTimerTransition({ type: "leave", taskId: timer.task_id, reason: "stop", at: success.at, windowId, ...(pausedAt ? { pausedAt } : {}) });
         }
+        await flushPendingFinalizes();
     };
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
     const finalizeTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
+    const requestFinalize = async (taskId: string): Promise<"finalized" | "deferred"> => {
+        if (pendingFinalizeRef.current.includes(taskId)) return "deferred";
+        if (ownsWorkWindow(stateRef.current?.timer, taskId)) {
+            const pending = [...pendingFinalizeRef.current, taskId];
+            pendingFinalizeRef.current = pending;
+            setPendingFinalizeTaskIds(pending);
+            return "deferred";
+        }
+        await adoptResult(() => adoptTaskTransition(() => data.finalizeTask(taskId)), true);
+        return "finalized";
+    };
     const archiveTask = async (id: string) => {
         try {
             setError(null);
@@ -487,10 +531,16 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 const occupation = workStartOccupation(stateRef.current?.timer ?? null);
                 if (occupation === "blocked") throw new Error("A break is running");
                 await adoptTaskTransition(() => data.setActiveTask(id));
-                if (occupation === "join") return "joined";
+                if (occupation === "join") {
+                    await flushPendingFinalizes();
+                    return "joined";
+                }
                 const currentOccupation = workStartOccupation(stateRef.current?.timer ?? null);
                 if (currentOccupation === "blocked") throw new Error("A break is running");
-                if (currentOccupation === "join") return "joined";
+                if (currentOccupation === "join") {
+                    await flushPendingFinalizes();
+                    return "joined";
+                }
                 const before = stateRef.current?.timer;
                 const capturedSeq = commandAdoptionSeqRef.current;
                 const started = await data.startWorkTimer();
@@ -503,6 +553,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 reconcilePauseEpisode(started.state.timer);
                 const timer = started.state.timer;
                 if (current && timer?.kind === "Work") publishTimerTransition({ type: "enter", taskId: timer.task_id, reason: "start", at, windowId: windowStartedAt(timer) });
+                await flushPendingFinalizes();
                 return "started";
             } catch (err: any) {
                 setError(err?.message || err?.toString?.() || "Unknown error");
@@ -564,6 +615,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     };
     const resetAll = async () => {
+        pendingFinalizeRef.current = [];
+        setPendingFinalizeTaskIds([]);
         try {
             setError(null);
             const result = await data.resetAppState();
@@ -576,7 +629,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     };
 
-    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, archiveTask, startTaskWork, subscribeTaskCompletions, subscribeTimerTransitions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
+    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, requestFinalize, pendingFinalizeTaskIds, archiveTask, startTaskWork, subscribeTaskCompletions, subscribeTimerTransitions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
 };
 
 export const useAppState = () => {
