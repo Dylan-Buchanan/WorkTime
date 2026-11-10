@@ -24,10 +24,6 @@ interface TodaySurfaceProps {
     onSelectTask: (taskId: string) => void;
 }
 
-function taskCountLabel(count: number): string {
-    return `${count} ${count === 1 ? "task" : "tasks"}`;
-}
-
 const GroupHeading: React.FC<{ children: React.ReactNode; count?: string }> = ({ children, count }) => (
     <div className="flex items-center justify-between gap-2">
         <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400">{children}</h3>
@@ -44,8 +40,18 @@ const TaskRow: React.FC<{
     starting: boolean;
     onSelectTask: (taskId: string) => void;
     onStartFocus: (task: TodayTaskEntry) => void;
-}> = ({ task, starting, onSelectTask, onStartFocus }) => (
+    onCompleteTask: (task: TodayTaskEntry) => void;
+}> = ({ task, starting, onSelectTask, onStartFocus, onCompleteTask }) => (
     <li className="flex items-start gap-2 rounded-lg border border-neutral-800 bg-neutral-900/60 p-2">
+        <button
+            type="button"
+            aria-pressed={false}
+            aria-label={`Complete ${task.title}`}
+            onClick={() => onCompleteTask(task)}
+            className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border border-neutral-600 text-transparent transition-colors hover:border-emerald-400/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+        >
+            <Check size={12} aria-hidden />
+        </button>
         <button
             type="button"
             onClick={() => onSelectTask(task.id)}
@@ -57,6 +63,7 @@ const TaskRow: React.FC<{
                 {task.waiting && <WaitingDot waiting={task.waiting} />}
                 {task.isActive && <span className="rounded-full bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium text-indigo-300">Running</span>}
                 {task.bucket === "overdue" && <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-300">Overdue</span>}
+                {task.bucket === "thisWeek" && <span className="rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300">This week</span>}
             </span>
             <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-neutral-500">
                 <span className="inline-flex min-w-0 items-center gap-1">
@@ -141,6 +148,11 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
         else habitContext.checkCompletion(habit.id, habit.bucket);
     };
 
+    const handleCompleteTask = (task: TodayTaskEntry) => {
+        updateTask(task.id, { status: "Done" });
+        play("completeTask");
+    };
+
     const handleStartFocus = async (task: TodayTaskEntry) => {
         if (workStartOccupation(timer) === "blocked") {
             setNotice(`A break is running. Finish or skip it before starting focus on “${task.title}”.`);
@@ -186,7 +198,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                     <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Today</span>
                     <span className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-neutral-400">
                         <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
-                            {tasks.length === 0 ? "No tasks" : `${taskCountLabel(tasks.length)} · ${formatPomodoroCount(remainingPomodoros)} left`}
+                            {tasks.length === 0 ? "No tasks" : `${formatPomodoroCount(remainingPomodoros)} this week`}
                         </span>
                         <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
                             {habits.length === 0 ? "No habits" : `${habitsCompleted}/${habits.length} habits`}
@@ -209,7 +221,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                     <div className="mt-3 space-y-2">
                         <GroupHeading count={tasks.length > 0 ? `${formatPomodoroCount(remainingPomodoros)} left` : undefined}>Tasks</GroupHeading>
                         {tasks.length === 0 ? (
-                            <EmptyGroup>No tasks are due today.</EmptyGroup>
+                            <EmptyGroup>Nothing left for today!</EmptyGroup>
                         ) : (
                             <ul className="space-y-1.5">
                                 {tasks.map((task) => (
@@ -219,6 +231,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                                         starting={startingTaskId === task.id}
                                         onSelectTask={onSelectTask}
                                         onStartFocus={(entry) => void handleStartFocus(entry)}
+                                        onCompleteTask={handleCompleteTask}
                                     />
                                 ))}
                             </ul>

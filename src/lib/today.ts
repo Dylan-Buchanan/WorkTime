@@ -1,15 +1,16 @@
 import type { Habit, HabitCompletion, HabitFrequency, PMTask, PMTaskWaiting, PomodoroLogEntry, Project, Task } from "../state/types";
 import { waitingOf } from "./pm/waiting";
 import { getBucketKey, isHabitCompleted } from "./habits";
+import { isProjectWorkableOnDate, type ProjectSchedule } from "./projectSchedule";
 import {
-    classifyDueScope,
     collectEligibleProjectionTasks,
-    getDailyProjectionScope,
+    getLocalWeekWindow,
+    parseDueDateKey,
     toLocalDateKey,
     type ProjectionEligibilityInput,
 } from "./timer";
 
-export type TodayTaskBucket = "overdue" | "today" | "flexible";
+export type TodayTaskBucket = "overdue" | "today" | "thisWeek";
 
 export interface TodayTaskEntry {
     id: string;
@@ -40,20 +41,39 @@ export interface BuildTodayTasksInput extends ProjectionEligibilityInput {
 const BUCKET_ORDER: Record<TodayTaskBucket, number> = {
     overdue: 0,
     today: 1,
-    flexible: 2,
+    thisWeek: 2,
 };
+
+/**
+ * The Today agenda scope: overdue, due today, and due later this week.
+ * Unscheduled and future work are excluded. Project workability gates only
+ * overdue and today rows; this-week rows stay visible regardless of schedule.
+ */
+export function getTodayDueScope(
+    dueDate: string | null | undefined,
+    project: Partial<ProjectSchedule> | undefined,
+    reference: Date,
+): TodayTaskBucket | null {
+    const dueKey = parseDueDateKey(dueDate);
+    if (!dueKey) return null;
+    const todayKey = toLocalDateKey(reference);
+    const weekEndKey = getLocalWeekWindow(reference).endKey;
+    if (dueKey < todayKey) {
+        return project === undefined || isProjectWorkableOnDate(project, reference) ? "overdue" : null;
+    }
+    if (dueKey === todayKey) {
+        return project === undefined || isProjectWorkableOnDate(project, reference) ? "today" : null;
+    }
+    if (dueKey <= weekEndKey) return "thisWeek";
+    return null;
+}
 
 function toTodayTask(
     entry: ReturnType<typeof collectEligibleProjectionTasks>[number],
     projects: Readonly<Record<string, Project>>,
-    todayKey: string,
+    bucket: TodayTaskBucket,
 ): TodayTaskEntry {
     const project = entry.projectId ? projects[entry.projectId] : undefined;
-    const bucket: TodayTaskBucket = !entry.dueKey
-        ? "flexible"
-        : entry.dueKey < todayKey
-            ? "overdue"
-            : "today";
 
     return {
         id: entry.task.id,
@@ -74,27 +94,26 @@ function toTodayTask(
 }
 
 /**
- * The tasks the daily projected-finish card counts as workable today.
+ * The tasks the Today agenda lists: overdue, due today, and due later this week.
  */
 export function buildTodayTasks(input: BuildTodayTasksInput): TodayTaskList {
-    const todayKey = toLocalDateKey(input.reference);
-    const tasks = collectEligibleProjectionTasks(input)
-        .filter((entry) => {
-            const scope = classifyDueScope(entry.dueDate, input.reference);
-            const project = entry.projectId ? input.projects[entry.projectId] : undefined;
-            return getDailyProjectionScope(scope, project, input.reference) !== null;
-        })
-        .map((entry) => toTodayTask(entry, input.projects, todayKey))
-        .sort((left, right) => {
-            const waitingDelta = Number(right.waiting !== null) - Number(left.waiting !== null);
-            if (waitingDelta !== 0) return waitingDelta;
-            const bucketDelta = BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket];
-            if (bucketDelta !== 0) return bucketDelta;
-            const leftKey = left.dueKey ?? "9999-12-31";
-            const rightKey = right.dueKey ?? "9999-12-31";
-            if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
-            return left.title.localeCompare(right.title) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
-        });
+    const tasks: TodayTaskEntry[] = [];
+    for (const entry of collectEligibleProjectionTasks(input)) {
+        const project = entry.projectId ? input.projects[entry.projectId] : undefined;
+        const bucket = getTodayDueScope(entry.dueDate, project, input.reference);
+        if (bucket !== null) tasks.push(toTodayTask(entry, input.projects, bucket));
+    }
+
+    tasks.sort((left, right) => {
+        const waitingDelta = Number(right.waiting !== null) - Number(left.waiting !== null);
+        if (waitingDelta !== 0) return waitingDelta;
+        const bucketDelta = BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket];
+        if (bucketDelta !== 0) return bucketDelta;
+        const leftKey = left.dueKey ?? "9999-12-31";
+        const rightKey = right.dueKey ?? "9999-12-31";
+        if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
+        return left.title.localeCompare(right.title) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+    });
 
     const remainingPomodoros = tasks.reduce((total, task) => total + task.remainingPomodoros, 0);
     return { tasks, remainingPomodoros };

@@ -622,7 +622,7 @@ describe("TimerPanel projected finish", () => {
 
             fireEvent.click(screen.getByRole("button", { name: /^Today/, pressed: false }));
             expect(screen.getByText(message)).toBeInTheDocument();
-            expect(screen.getByText("No tasks")).toBeInTheDocument();
+            expect(screen.getByText(futureTask ? "2p this week" : "No tasks")).toBeInTheDocument();
             expect(screen.queryByText("Finish by")).not.toBeInTheDocument();
         } finally {
             vi.useRealTimers();
@@ -747,6 +747,7 @@ describe("TimerPanel today surface", () => {
         ["archived", "Archive selected PM task"],
     ])("clears a waiting Today selection and closes details when it becomes %s", async (_state, action) => {
         await renderWithTasks({ today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2,
+            dueDate: toLocalDateKey(new Date()),
             waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }) });
         const todayRegion = screen.getByRole("region", { name: "Today" });
         fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
@@ -766,7 +767,7 @@ describe("TimerPanel today surface", () => {
         const task = makeAppTask("running", "Running work");
         await renderWithTasks({
             running: makePMTask({ id: "running", appTaskId: task.id, title: "Running PM task", estimatePomos: 2 }),
-            today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2, waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }),
+            today: makePMTask({ id: "today", title: "Waiting Today task", estimatePomos: 2, dueDate: toLocalDateKey(new Date()), waiting: { type: "agent", since: "2026-01-01T00:00:00Z" } }),
         }, {}, { tasks: { [task.id]: task }, active_task: task.id, timer: makeActiveTimer({ task_id: task.id }) });
         const todayRegion = screen.getByRole("region", { name: "Today" });
         fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
@@ -789,7 +790,7 @@ describe("TimerPanel today surface", () => {
         const projectionLabel = screen.getByText("Daily projected finish");
         const todayRegion = screen.getByRole("region", { name: "Today" });
         expect(projectionLabel.compareDocumentPosition(todayRegion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-        expect(screen.getByText("1 task · 1p left")).toBeInTheDocument();
+        expect(screen.getByText("1p this week")).toBeInTheDocument();
     });
 
     it("selects a today task in the project manager and opens its details panel", async () => {
@@ -797,7 +798,7 @@ describe("TimerPanel today surface", () => {
             today: makePMTask({ id: "today", title: "Due today task", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
         });
 
-        await waitFor(() => expect(screen.getByText("1 task · 1p left")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("1p this week")).toBeInTheDocument());
         const todayRegion = screen.getByRole("region", { name: "Today" });
         fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
         fireEvent.click(await screen.findByRole("button", { name: "Select Due today task" }));
@@ -818,14 +819,14 @@ describe("TimerPanel today surface", () => {
         await data.savePMState({
             projects: {},
             tasks: {
-                running: makePMTask({ id: "running", title: "Running project task", appTaskId: runningAppTask.id, estimatePomos: 1 }),
+                running: makePMTask({ id: "running", title: "Running project task", appTaskId: runningAppTask.id, estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
                 today: makePMTask({ id: "today", title: "Due today task", estimatePomos: 1, dueDate: toLocalDateKey(new Date()) }),
             },
             meta: { initializedAt: "2026-01-01T00:00:00.000Z" },
         });
         render(wrap(data));
 
-        await waitFor(() => expect(screen.getByText("2 tasks · 2p left")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText("2p this week")).toBeInTheDocument());
         const todayRegion = screen.getByRole("region", { name: "Today" });
         fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
         fireEvent.click(await screen.findByRole("button", { name: "Select Due today task" }));
