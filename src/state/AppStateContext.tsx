@@ -110,6 +110,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const pendingFinalizeRef = useRef<string[]>([]);
+    const inFlightFinalizeRef = useRef(new Set<string>());
     const [pendingFinalizeTaskIds, setPendingFinalizeTaskIds] = useState<readonly string[]>([]);
     const progressing = useRef(false);
     const lastNotifiedWindowRef = useRef<string | null>(null);
@@ -212,15 +213,24 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         // flush cannot apply it again while the first command is in flight.
         pendingFinalizeRef.current = keep;
         setPendingFinalizeTaskIds(keep);
+        for (const id of flush) inFlightFinalizeRef.current.add(id);
         for (const id of flush) {
             try {
-                const result = await data.finalizeTask(id);
-                commandAdoptionSeqRef.current += 1;
-                stateRef.current = result.state;
-                setState(result.state);
-                reconcilePauseEpisode(result.state.timer);
+                const result = await data.finalizeDeferredTask(id);
+                if (result.value === "finalized") {
+                    commandAdoptionSeqRef.current += 1;
+                    stateRef.current = result.state;
+                    setState(result.state);
+                    reconcilePauseEpisode(result.state.timer);
+                } else if (result.value === "owner" && !pendingFinalizeRef.current.includes(id)) {
+                    const pending = [...pendingFinalizeRef.current, id];
+                    pendingFinalizeRef.current = pending;
+                    setPendingFinalizeTaskIds(pending);
+                }
             } catch (err: any) {
                 setError(err?.message || err?.toString?.() || "Unknown error");
+            } finally {
+                inFlightFinalizeRef.current.delete(id);
             }
         }
     }, [data, reconcilePauseEpisode]);
@@ -496,9 +506,14 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
-    const finalizeTask = (id: string) => adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
+    const finalizeTask = (id: string) => {
+        const pending = pendingFinalizeRef.current.filter(taskId => taskId !== id);
+        pendingFinalizeRef.current = pending;
+        setPendingFinalizeTaskIds(pending);
+        return adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
+    };
     const requestFinalize = async (taskId: string): Promise<"finalized" | "deferred"> => {
-        if (pendingFinalizeRef.current.includes(taskId)) return "deferred";
+        if (pendingFinalizeRef.current.includes(taskId) || inFlightFinalizeRef.current.has(taskId)) return "deferred";
         if (ownsWorkWindow(stateRef.current?.timer, taskId)) {
             const pending = [...pendingFinalizeRef.current, taskId];
             pendingFinalizeRef.current = pending;
