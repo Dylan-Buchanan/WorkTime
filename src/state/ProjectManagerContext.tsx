@@ -10,6 +10,7 @@ import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { normalizeTaskDueDate } from "../lib/taskDueDate";
 import { applyWorkStart } from "../lib/pm/workStart";
 import { normalizeWaiting, withWaitingInvariant } from "../lib/pm/waiting";
+import { withCompletionStamp } from "../lib/pm/completion";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -573,7 +574,7 @@ export const ProjectManagerProvider: React.FC<{
                         : normalizeWaiting(linked.waiting),
                     updatedAt: now(),
                 };
-                const normalizedTask = withWaitingInvariant(task);
+                const normalizedTask = withWaitingInvariant(withCompletionStamp(linked, task, task.updatedAt));
                 created = normalizedTask;
                 return {
                     ...prev,
@@ -592,6 +593,7 @@ export const ProjectManagerProvider: React.FC<{
                 timeSpentMinutes: opts.timeSpentMinutes || 0,
                 workedPomos: opts.workedPomos || 0,
                 lastWorkedAt: opts.lastWorkedAt,
+                completedAt: opts.completedAt,
                 description: opts.description || "",
                 tags: opts.tags || [],
                 links: opts.links || [],
@@ -604,7 +606,7 @@ export const ProjectManagerProvider: React.FC<{
                 relatedTo: (opts as any).relatedTo || [],
                 waiting: normalizeWaiting((opts as any).waiting),
             };
-            const normalizedTask = withWaitingInvariant(task);
+            const normalizedTask = withWaitingInvariant(withCompletionStamp(undefined, task, task.updatedAt));
             created = normalizedTask;
             const next = {
                 ...prev,
@@ -686,7 +688,7 @@ export const ProjectManagerProvider: React.FC<{
             const task = prev.tasks[id];
             if (!task) return prev;
             const merged = { ...task, ...normalizedPatch, updatedAt: now() };
-            return { ...prev, tasks: { ...prev.tasks, [id]: withWaitingInvariant(merged) } };
+            return { ...prev, tasks: { ...prev.tasks, [id]: withWaitingInvariant(withCompletionStamp(task, merged, merged.updatedAt)) } };
         });
     };
     const recordWorkStart = useCallback((taskId: string, at: string = now()) => {
@@ -758,7 +760,8 @@ export const ProjectManagerProvider: React.FC<{
             const updatedAt = now();
             orderedIds.forEach((tid, i) => {
                 const task = tasks[tid];
-                tasks[tid] = withWaitingInvariant({ ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt });
+                const next = { ...task, status: tid === id ? status : task.status, sortOrder: i, updatedAt };
+                tasks[tid] = withWaitingInvariant(tid === id ? withCompletionStamp(task, next, updatedAt) : next);
             });
             return { ...prev, tasks };
         });

@@ -152,6 +152,60 @@ function expandSurface() {
 beforeEach(() => localStorage.clear());
 
 describe("TodaySurface", () => {
+    it("hides Done today when no tasks were completed today", async () => {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        await renderSurface({ tasks: {
+            legacy: pmTask({ id: "legacy", status: "Done" }),
+            old: pmTask({ id: "old", status: "Done", completedAt: yesterday.toISOString() }),
+        } });
+        expandSurface();
+        await screen.findByText("Nothing left for today!");
+        expect(screen.queryByRole("button", { name: /^Done today/ })).not.toBeInTheDocument();
+    });
+
+    it("renders Done today collapsed and expands selectable completed rows without focus or checkbox controls", async () => {
+        const onSelectTask = vi.fn();
+        await renderSurface({ tasks: {
+            done: pmTask({ id: "done", title: "Finished report", status: "Done", completedAt: new Date().toISOString() }),
+        }, onSelectTask });
+        expandSurface();
+        const toggle = await screen.findByRole("button", { name: "Done today (1)" });
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+        expect(screen.queryByRole("button", { name: "Select Finished report" })).not.toBeInTheDocument();
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute("aria-expanded", "true");
+        const select = screen.getByRole("button", { name: "Select Finished report" });
+        const row = select.closest("li")!;
+        expect(within(row).getAllByRole("button")).toEqual([select]);
+        expect(within(row).queryByRole("button", { name: /focus/i })).not.toBeInTheDocument();
+        expect(within(row).queryByRole("button", { name: /^Complete / })).not.toBeInTheDocument();
+        expect(select).toHaveClass("line-through");
+        fireEvent.click(select);
+        expect(onSelectTask).toHaveBeenCalledWith("done");
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("moves a checked active row into Done today and persists its completedAt", async () => {
+        const data = await renderSurface({ tasks: {
+            done: pmTask({ id: "done", title: "Already finished", status: "Done", completedAt: new Date().toISOString() }),
+            active: pmTask({ id: "active", title: "Finish next", dueDate: todayKey(), estimatePomos: 2 }),
+        } });
+        expandSurface();
+        expect(await screen.findByRole("button", { name: "Done today (1)" })).toHaveAttribute("aria-expanded", "false");
+        fireEvent.click(screen.getByRole("button", { name: "Complete Finish next" }));
+        const toggle = await screen.findByRole("button", { name: "Done today (2)" });
+        expect(screen.queryByRole("button", { name: "Complete Finish next" })).not.toBeInTheDocument();
+        await waitFor(async () => {
+            const stored = (await data.loadPMState())?.tasks.active;
+            expect(stored).toMatchObject({ status: "Done", completedAt: expect.any(String) });
+            expect(toLocalDateKey(new Date(stored!.completedAt!))).toBe(todayKey());
+        });
+        fireEvent.click(toggle);
+        expect(screen.getByRole("button", { name: "Select Finish next" })).toBeInTheDocument();
+    });
+
     it("pins waiting entries with accessible dots and includes their work in the summary", async () => {
         await renderSurface({ tasks: {
             due: pmTask({ id: "due", title: "Due now", estimatePomos: 2, dueDate: todayKey() }),

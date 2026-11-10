@@ -373,7 +373,7 @@ export const StateSyncBridge: React.FC = () => {
             const backend = appState.tasks[pmTask.appTaskId];
             if (!backend) return;
             if (backend.completed_at && pmTask.status !== "Done") {
-                updateTaskRef.current(pmTask.id, { status: "Done" as TaskStatus });
+                updateTaskRef.current(pmTask.id, { status: "Done" as TaskStatus, completedAt: backend.completed_at });
             }
         });
     }, [pmState?.tasks, appState?.tasks, updateTask]);

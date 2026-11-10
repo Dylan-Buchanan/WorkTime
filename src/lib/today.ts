@@ -1,4 +1,5 @@
 import type { Habit, HabitCompletion, HabitFrequency, PMTask, PMTaskWaiting, PomodoroLogEntry, Project, Task } from "../state/types";
+import type { Todo, TodoCompletion } from "./todos/types";
 import { waitingOf } from "./pm/waiting";
 import { getBucketKey, isHabitCompleted } from "./habits";
 import { isProjectWorkableOnDate, type ProjectSchedule } from "./projectSchedule";
@@ -119,6 +120,48 @@ export function buildTodayTasks(input: BuildTodayTasksInput): TodayTaskList {
     return { tasks, remainingPomodoros };
 }
 
+export interface TodayDoneEntry {
+    kind: "task" | "todo";
+    key: string;
+    id: string;
+    title: string;
+    completedAt: string;
+    appTaskId: string | null;
+}
+
+export interface BuildTodayDoneInput {
+    pmTasks: readonly PMTask[];
+    backendTasks: Readonly<Record<string, Task>>;
+    reference: Date;
+    todos?: readonly Todo[];
+    todoCompletions?: readonly TodoCompletion[];
+}
+
+/** Completed PM tasks on the reference local date, including archived work. */
+export function buildTodayDone(input: BuildTodayDoneInput): TodayDoneEntry[] {
+    const todayKey = toLocalDateKey(input.reference);
+    const seen = new Set<string>();
+    const done: TodayDoneEntry[] = [];
+    for (const task of input.pmTasks) {
+        if (task.status !== "Done" || seen.has(task.id)) continue;
+        const completedAt = (task.appTaskId && input.backendTasks[task.appTaskId]?.completed_at) || task.completedAt;
+        if (!completedAt) continue;
+        const completed = new Date(completedAt);
+        if (Number.isNaN(completed.getTime()) || toLocalDateKey(completed) !== todayKey) continue;
+        seen.add(task.id);
+        done.push({
+            kind: "task",
+            key: `task:${task.id}`,
+            id: task.id,
+            title: task.title || "Untitled task",
+            completedAt,
+            appTaskId: task.appTaskId ?? null,
+        });
+    }
+    return done.sort((left, right) => Date.parse(right.completedAt) - Date.parse(left.completedAt)
+        || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+}
+
 export interface TodayHabitEntry {
     id: string;
     name: string;
@@ -220,6 +263,7 @@ export function buildTodayPomodoros(input: BuildTodayPomodorosInput): TodayPomod
 
 export interface TodayOverview {
     tasks: TodayTaskEntry[];
+    done: TodayDoneEntry[];
     remainingPomodoros: number;
     habits: TodayHabitEntry[];
     habitsCompleted: number;
@@ -239,6 +283,7 @@ export function buildTodayOverview(input: BuildTodayOverviewInput): TodayOvervie
     const pomodoros = buildTodayPomodoros(input);
     return {
         tasks: taskList.tasks,
+        done: buildTodayDone(input),
         remainingPomodoros: taskList.remainingPomodoros,
         habits,
         habitsCompleted: habits.filter((habit) => habit.completed).length,
