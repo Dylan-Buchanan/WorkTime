@@ -3,6 +3,7 @@ import { CalendarDays, Check, ChevronDown, ChevronRight, Play } from "lucide-rea
 import { useAppState } from "../state/AppStateContext";
 import { usePM } from "../state/ProjectManagerContext";
 import { useHabits } from "../state/HabitContext";
+import { useOptionalTodos } from "../state/TodoContext";
 import {
     formatDurationMinutes,
     formatPomodoroCount,
@@ -12,6 +13,7 @@ import {
     buildTodayOverview,
     type TodayHabitEntry,
     type TodayTaskEntry,
+    type TodayTodoEntry,
 } from "../lib/today";
 import { workStartOccupation } from "../lib/engine";
 import { useSounds } from "../hooks/useSounds";
@@ -87,6 +89,46 @@ const TaskRow: React.FC<{
     </li>
 );
 
+const TodoRow: React.FC<{
+    todo: TodayTodoEntry;
+    starting: boolean;
+    onComplete: (todo: TodayTodoEntry) => Promise<void>;
+    onStartFocus: (todo: TodayTodoEntry) => Promise<void>;
+}> = ({ todo, starting, onComplete, onStartFocus }) => (
+    <li className="flex items-start gap-2 rounded-lg border border-neutral-800 bg-neutral-900/60 p-2">
+        <button
+            type="button"
+            aria-pressed={false}
+            aria-label={`Complete ${todo.title}`}
+            onClick={() => void onComplete(todo)}
+            className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border border-neutral-600 text-transparent transition-colors hover:border-emerald-400/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+        >
+            <Check size={12} aria-hidden />
+        </button>
+        <div className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-center gap-1.5">
+                <span className="truncate text-[11px] font-medium text-neutral-100">{todo.title}</span>
+                {todo.isActive && <span className="rounded-full bg-indigo-500/15 px-1.5 py-0.5 text-[9px] font-medium text-indigo-300">Running</span>}
+                {todo.bucket === "overdue" && <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-300">Overdue</span>}
+                {todo.bucket === "thisWeek" && <span className="rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300">This week</span>}
+            </span>
+            <span className="mt-1 block text-[10px] text-neutral-500">
+                {formatPomodoroCount(todo.remainingPomodoros)} left of {formatPomodoroCount(todo.estimatePomos)}
+            </span>
+        </div>
+        <button
+            type="button"
+            aria-label={`Start focus on ${todo.title}`}
+            onClick={() => void onStartFocus(todo)}
+            disabled={starting}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-wait disabled:opacity-60"
+        >
+            <Play size={10} aria-hidden />
+            {starting ? "Starting…" : "Focus"}
+        </button>
+    </li>
+);
+
 const HabitRow: React.FC<{ habit: TodayHabitEntry; onToggle: (habit: TodayHabitEntry) => void }> = ({ habit, onToggle }) => (
     <li>
         <button
@@ -117,11 +159,13 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
     const { state, startTaskWork, createTask, requestFinalize, pendingFinalizeTaskIds } = useAppState();
     const { state: pmState, updateTask } = usePM();
     const habitContext = useHabits();
+    const todoContext = useOptionalTodos();
     const { play } = useSounds();
     const [expanded, setExpanded] = useState(false);
     const [doneOpen, setDoneOpen] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
     const [startingTaskId, setStartingTaskId] = useState<string | null>(null);
+    const [startingTodoId, setStartingTodoId] = useState<string | null>(null);
 
     const timer = state?.timer ?? null;
     const activeFraction = computeActiveFractionComplete(timer, Date.now(), state?.settings?.work_minutes ?? 0);
@@ -135,6 +179,8 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
         habits: Object.values(habitContext.state.habits),
         completions: Object.values(habitContext.state.completions),
         logs: state?.logs ?? [],
+        todos: Object.values(todoContext?.state.todos ?? {}),
+        todoCompletions: Object.values(todoContext?.state.completions ?? {}),
     });
 
     const toggleExpanded = () => {
@@ -184,7 +230,40 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
         }
     };
 
-    const { tasks, done, remainingPomodoros, habits, habitsCompleted, pomodoros } = overview;
+    const handleCompleteTodo = async (todo: TodayTodoEntry) => {
+        play("completeTask");
+        setNotice(null);
+        try { await todoContext?.completeTodoFromAgenda(todo.id); }
+        catch (error) {
+            setNotice(error instanceof Error && error.message ? error.message : "Unable to complete the to-do.");
+        }
+    };
+
+    const handleStartTodoFocus = async (todo: TodayTodoEntry) => {
+        if (workStartOccupation(timer) === "blocked") {
+            setNotice(`A break is running. Finish or skip it before starting focus on “${todo.title}”.`);
+            return;
+        }
+        setNotice(null);
+        setStartingTodoId(todo.id);
+        try {
+            await todoContext?.startPomodoro(todo.id);
+            play("startPomodoro");
+        } catch (error) {
+            setNotice(error instanceof Error && error.message ? error.message : "Unable to start focus.");
+        } finally { setStartingTodoId(null); }
+    };
+
+    const { tasks, todos, done, remainingPomodoros, todosRemainingPomodoros, habits, habitsCompleted, pomodoros } = overview;
+    // Done is newest first; only that occurrence receives a deferred hint.
+    const latestTodoDone = new Map<string, string>();
+    for (const entry of done) {
+        if (entry.kind === "todo" && !latestTodoDone.has(entry.id)) latestTodoDone.set(entry.id, entry.key);
+    }
+    const isPendingTodo = (id: string, key: string) => {
+        const linked = todoContext?.deferredTodoTasks[id];
+        return latestTodoDone.get(id) === key && !!linked && pendingFinalizeTaskIds.includes(linked);
+    };
 
     return (
         <section className="relative w-full overflow-hidden rounded-xl border border-emerald-400/20 bg-neutral-900/75 text-left shadow-lg shadow-black/10" aria-label="Today">
@@ -206,7 +285,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                     <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Today</span>
                     <span className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-neutral-400">
                         <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
-                            {tasks.length === 0 ? "No tasks" : `${formatPomodoroCount(remainingPomodoros)} this week`}
+                            {tasks.length === 0 && todos.length === 0 ? "No tasks" : `${formatPomodoroCount(remainingPomodoros + todosRemainingPomodoros)} this week`}
                         </span>
                         <span className="rounded-full border border-neutral-500/15 bg-neutral-500/[0.08] px-2 py-0.5">
                             {habits.length === 0 ? "No habits" : `${habitsCompleted}/${habits.length} habits`}
@@ -246,6 +325,17 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                         )}
                     </div>
 
+                    <div className="mt-4 space-y-2">
+                        <GroupHeading count={todos.length > 0 ? `${formatPomodoroCount(todosRemainingPomodoros)} left` : undefined}>To-dos</GroupHeading>
+                        {todos.length === 0 ? (
+                            <EmptyGroup>No to-dos due.</EmptyGroup>
+                        ) : (
+                            <ul className="space-y-1.5">
+                                {todos.map((todo) => <TodoRow key={todo.id} todo={todo} starting={startingTodoId === todo.id} onComplete={handleCompleteTodo} onStartFocus={handleStartTodoFocus} />)}
+                            </ul>
+                        )}
+                    </div>
+
                     {done.length > 0 && (
                         <div className="mt-4 space-y-2">
                             <button
@@ -274,7 +364,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                                             ) : (
                                                 <span className="min-w-0 truncate text-[11px] text-neutral-400 line-through">{entry.title}</span>
                                             )}
-                                            {entry.kind === "task" && entry.appTaskId && pendingFinalizeTaskIds.includes(entry.appTaskId) && (
+                                            {(entry.kind === "task" ? entry.appTaskId && pendingFinalizeTaskIds.includes(entry.appTaskId) : isPendingTodo(entry.id, entry.key)) && (
                                                 <span className="shrink-0 text-[10px] text-neutral-500">finishing after this pomodoro</span>
                                             )}
                                         </li>

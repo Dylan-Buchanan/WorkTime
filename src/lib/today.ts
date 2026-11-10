@@ -4,6 +4,7 @@ import { waitingOf } from "./pm/waiting";
 import { getBucketKey, isHabitCompleted } from "./habits";
 import { isProjectWorkableOnDate, type ProjectSchedule } from "./projectSchedule";
 import {
+    EPSILON,
     collectEligibleProjectionTasks,
     getLocalWeekWindow,
     parseDueDateKey,
@@ -129,6 +130,52 @@ export interface TodayDoneEntry {
     appTaskId: string | null;
 }
 
+export interface TodayTodoEntry {
+    id: string; title: string;
+    dueDate: string | null; dueKey: string | null;
+    bucket: TodayTaskBucket;
+    estimatePomos: number; workedPomos: number; remainingPomodoros: number;
+    currentTaskId: string | null;
+    isActive: boolean;
+}
+
+export interface BuildTodayTodosInput {
+    todos: readonly Todo[];
+    backendTasks: Readonly<Record<string, Task>>;
+    reference: Date;
+    activeWorkTaskId?: string | null;
+    activeWorkFraction?: number;
+}
+
+/** Lists due occurrences without completing or rolling them. */
+export function buildTodayTodos(input: BuildTodayTodosInput): { todos: TodayTodoEntry[]; remainingPomodoros: number } {
+    const positions = new Map(input.todos.map((todo) => [todo.id, todo.position]));
+    const todos: TodayTodoEntry[] = [];
+    for (const todo of input.todos) {
+        if (todo.isArchived) continue;
+        const bucket = getTodayDueScope(todo.dueDate, undefined, input.reference);
+        if (bucket === null) continue;
+        const linked = todo.currentTaskId ? input.backendTasks[todo.currentTaskId] : undefined;
+        const isActive = Boolean(todo.currentTaskId) && todo.currentTaskId === input.activeWorkTaskId;
+        let worked = linked?.completed_pomodoros ?? 0;
+        if (isActive) worked = Math.max(worked, (linked?.completed_pomodoros ?? 0) + Math.min(1, Math.max(0, input.activeWorkFraction ?? 0)));
+        const remaining = todo.estimate - worked;
+        todos.push({
+            id: todo.id, title: todo.title || "Untitled to-do",
+            dueDate: todo.dueDate, dueKey: parseDueDateKey(todo.dueDate), bucket,
+            estimatePomos: todo.estimate, workedPomos: worked,
+            remainingPomodoros: remaining > EPSILON ? remaining : 1,
+            currentTaskId: todo.currentTaskId, isActive,
+        });
+    }
+    todos.sort((left, right) => BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket]
+        || (left.dueKey ?? "").localeCompare(right.dueKey ?? "")
+        || (positions.get(left.id) ?? 0) - (positions.get(right.id) ?? 0)
+        || left.title.localeCompare(right.title)
+        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+    return { todos, remainingPomodoros: todos.reduce((total, todo) => total + todo.remainingPomodoros, 0) };
+}
+
 export interface BuildTodayDoneInput {
     pmTasks: readonly PMTask[];
     backendTasks: Readonly<Record<string, Task>>;
@@ -137,7 +184,7 @@ export interface BuildTodayDoneInput {
     todoCompletions?: readonly TodoCompletion[];
 }
 
-/** Completed PM tasks on the reference local date, including archived work. */
+/** Completed tasks and to-do occurrences on the reference local date, including archived work. */
 export function buildTodayDone(input: BuildTodayDoneInput): TodayDoneEntry[] {
     const todayKey = toLocalDateKey(input.reference);
     const seen = new Set<string>();
@@ -157,6 +204,14 @@ export function buildTodayDone(input: BuildTodayDoneInput): TodayDoneEntry[] {
             completedAt,
             appTaskId: task.appTaskId ?? null,
         });
+    }
+    const todos = new Map((input.todos ?? []).map((todo) => [todo.id, todo]));
+    for (const completion of input.todoCompletions ?? []) {
+        const todo = todos.get(completion.todoId);
+        const completed = new Date(completion.createdAt);
+        if (!todo || Number.isNaN(completed.getTime()) || toLocalDateKey(completed) !== todayKey) continue;
+        done.push({ kind: "todo", key: `todo:${completion.id}`, id: todo.id,
+            title: todo.title || "Untitled to-do", completedAt: completion.createdAt, appTaskId: null });
     }
     return done.sort((left, right) => Date.parse(right.completedAt) - Date.parse(left.completedAt)
         || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
@@ -263,6 +318,8 @@ export function buildTodayPomodoros(input: BuildTodayPomodorosInput): TodayPomod
 
 export interface TodayOverview {
     tasks: TodayTaskEntry[];
+    todos: TodayTodoEntry[];
+    todosRemainingPomodoros: number;
     done: TodayDoneEntry[];
     remainingPomodoros: number;
     habits: TodayHabitEntry[];
@@ -271,6 +328,8 @@ export interface TodayOverview {
 }
 
 export interface BuildTodayOverviewInput extends BuildTodayTasksInput {
+    todos?: readonly Todo[];
+    todoCompletions?: readonly TodoCompletion[];
     habits: readonly Habit[];
     completions: readonly Pick<HabitCompletion, "habitId" | "bucket">[];
     logs: readonly PomodoroLogEntry[];
@@ -279,10 +338,13 @@ export interface BuildTodayOverviewInput extends BuildTodayTasksInput {
 /** One call that assembles everything the today surface renders. */
 export function buildTodayOverview(input: BuildTodayOverviewInput): TodayOverview {
     const taskList = buildTodayTasks(input);
+    const todoList = buildTodayTodos({ ...input, todos: input.todos ?? [] });
     const habits = buildTodayHabits(input);
     const pomodoros = buildTodayPomodoros(input);
     return {
         tasks: taskList.tasks,
+        todos: todoList.todos,
+        todosRemainingPomodoros: todoList.remainingPomodoros,
         done: buildTodayDone(input),
         remainingPomodoros: taskList.remainingPomodoros,
         habits,

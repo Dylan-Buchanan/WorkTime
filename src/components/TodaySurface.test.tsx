@@ -6,6 +6,9 @@ import { AppStateProvider, useAppState } from "../state/AppStateContext";
 import { DataProvider } from "../state/DataContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { HabitProvider } from "../state/HabitContext";
+import { TodoProvider } from "../state/TodoContext";
+import type { Todo, TodoCompletion } from "../lib/todos/types";
+import * as soundHooks from "../hooks/useSounds";
 import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
@@ -108,6 +111,8 @@ const TimerProbe = () => {
 };
 
 interface WrapOptions {
+    todos?: Todo[];
+    todoCompletions?: TodoCompletion[];
     appState?: Partial<AppStateData>;
     tasks?: Record<string, PMTask>;
     projects?: Record<string, Project>;
@@ -126,6 +131,9 @@ async function renderSurface(options: WrapOptions = {}) {
     if (options.habits || options.completions) {
         await data.saveHabits(options.habits ?? [], options.completions ?? []);
     }
+    if (options.todos || options.todoCompletions) {
+        await data.saveTodos(options.todos ?? [], options.todoCompletions ?? []);
+    }
     render(
         <TauriCloseProvider>
             <DataProvider dataAccess={data}>
@@ -133,8 +141,10 @@ async function renderSurface(options: WrapOptions = {}) {
                     <AppStateProvider>
                         <ProjectManagerProvider>
                             <HabitProvider>
-                                <TimerProbe />
-                                <TodaySurface onSelectTask={options.onSelectTask ?? (() => {})} />
+                                <TodoProvider>
+                                    <TimerProbe />
+                                    <TodaySurface onSelectTask={options.onSelectTask ?? (() => {})} />
+                                </TodoProvider>
                             </HabitProvider>
                         </ProjectManagerProvider>
                     </AppStateProvider>
@@ -150,6 +160,168 @@ function expandSurface() {
 }
 
 beforeEach(() => localStorage.clear());
+
+function surfaceTodo(overrides: Partial<Todo> = {}): Todo {
+    return { id: "todo-1", title: "Agenda to-do", rule: null, dueDate: todayKey() as Todo["dueDate"],
+        estimate: 1, currentTaskId: null, position: 0, isArchived: false,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...overrides };
+}
+
+describe("Today to-do group", () => {
+    it("renders between Tasks and Habits, with an overdue checkbox that completes through the to-do path without focus or selection", async () => {
+        const play = vi.fn();
+        const sounds = vi.spyOn(soundHooks, "useSounds").mockReturnValue({ play });
+        try {
+            const onSelectTask = vi.fn();
+            const data = await renderSurface({ todos: [surfaceTodo({ dueDate: "2020-01-01" })], onSelectTask });
+            expandSurface();
+            const checkbox = await screen.findByRole("button", { name: "Complete Agenda to-do" });
+            expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Tasks", "To-dos", "Habits", "Pomodoros"]);
+            expect(checkbox).toHaveAttribute("aria-pressed", "false");
+            expect(within(checkbox.closest("li")!).getByText("Overdue")).toBeInTheDocument();
+            fireEvent.click(checkbox);
+            await waitFor(async () => expect((await data.loadTodos()).completions).toHaveLength(1));
+            expect((await data.loadTodos()).todos[0].isArchived).toBe(true);
+            expect(data.store.state.timer).toBeNull();
+            expect(Object.keys(data.store.state.tasks)).toHaveLength(0);
+            expect(play).toHaveBeenCalledWith("completeTask");
+            expect(play).not.toHaveBeenCalledWith("startPomodoro");
+            expect(onSelectTask).not.toHaveBeenCalled();
+        } finally { sounds.mockRestore(); }
+    });
+
+    it("keeps a running linked to-do's timer and shows its Done pending hint without an error", async () => {
+        const running = appTask("todo-running", "Running to-do");
+        const data = await renderSurface({ todos: [surfaceTodo({ currentTaskId: running.id })],
+            appState: { tasks: { [running.id]: running }, active_task: running.id, timer: makeActiveTimer({ task_id: running.id }) } });
+        expandSurface();
+        await screen.findByText("Running");
+        const original = structuredClone(data.store.state.timer);
+        fireEvent.click(screen.getByRole("button", { name: "Complete Agenda to-do" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Done today (1)" }));
+        expect(await screen.findByText("finishing after this pomodoro")).toBeInTheDocument();
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
+        expect(data.store.state.timer).toEqual(original);
+        expect(data.store.state.tasks[running.id].completed_at).toBeNull();
+        expect((await data.loadTodos()).completions).toHaveLength(1);
+        expect(screen.queryByRole("button", { name: "Select Agenda to-do" })).not.toBeInTheDocument();
+    });
+
+    it("promotes a to-do into a linked backend task and starts focus", async () => {
+        const play = vi.fn();
+        const sounds = vi.spyOn(soundHooks, "useSounds").mockReturnValue({ play });
+        try {
+            const data = await renderSurface({ todos: [surfaceTodo({ estimate: 2 })] });
+            expandSurface();
+            fireEvent.click(await screen.findByRole("button", { name: "Start focus on Agenda to-do" }));
+            await waitFor(async () => expect((await data.loadTodos()).todos[0].currentTaskId).toBeTruthy());
+            const linked = (await data.loadTodos()).todos[0].currentTaskId!;
+            await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(linked));
+            expect(data.store.state.tasks[linked]).toMatchObject({ name: "Agenda to-do", target_pomodoros: 2 });
+            expect(data.store.state.timer).toMatchObject({ kind: "Work", task_id: linked });
+            expect((await data.loadTodos()).completions).toHaveLength(0);
+            expect(play).toHaveBeenCalledWith("startPomodoro");
+        } finally { sounds.mockRestore(); }
+    });
+
+    it("shows a deferred hint only on the most recent Done occurrence of a to-do", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 12, 9));
+        try {
+            const running = appTask("recurring-owner", "Recurring work");
+            const earlier = new Date(2026, 7, 12, 8).toISOString();
+            await renderSurface({
+                todos: [surfaceTodo({ currentTaskId: running.id, rule: { type: "weekly", weekdays: [3, 5] } })],
+                todoCompletions: [{ id: "earlier", todoId: "todo-1", bucket: "2026-08-10", createdAt: earlier, updatedAt: earlier }],
+                appState: { tasks: { [running.id]: running }, active_task: running.id, timer: makeActiveTimer({ task_id: running.id }) },
+            });
+            expandSurface();
+            await screen.findByText("Running");
+            fireEvent.click(await screen.findByRole("button", { name: "Complete Agenda to-do" }));
+            fireEvent.click(await screen.findByRole("button", { name: "Done today (2)" }));
+            const hint = await screen.findByText("finishing after this pomodoro");
+            const rows = within(hint.closest("ul")!).getAllByRole("listitem");
+            expect(rows).toHaveLength(2);
+            expect(within(rows[0]).getByText("finishing after this pomodoro")).toBeInTheDocument();
+            expect(within(rows[1]).queryByText("finishing after this pomodoro")).not.toBeInTheDocument();
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("shows focus promotion errors as a notice without playing the start sound", async () => {
+        const play = vi.fn();
+        const sounds = vi.spyOn(soundHooks, "useSounds").mockReturnValue({ play });
+        try {
+            const data = await renderSurface({ todos: [surfaceTodo()] });
+            expandSurface();
+            const focus = await screen.findByRole("button", { name: "Start focus on Agenda to-do" });
+            const create = vi.spyOn(data, "createTask").mockRejectedValueOnce(new Error("Unable to create focus task"));
+            try {
+                fireEvent.click(focus);
+                expect(await screen.findByRole("status")).toHaveTextContent("Unable to create focus task");
+                expect(play).not.toHaveBeenCalledWith("startPomodoro");
+                expect((await data.loadTodos()).completions).toHaveLength(0);
+            } finally { create.mockRestore(); }
+        } finally { sounds.mockRestore(); }
+    });
+
+    it("shows the break notice when focusing a to-do during a break", async () => {
+        const running = appTask("break-owner", "Break owner");
+        const data = await renderSurface({ todos: [surfaceTodo()], appState: {
+            tasks: { [running.id]: running }, active_task: running.id,
+            timer: makeActiveTimer({ task_id: running.id, kind: "ShortBreak" }),
+        } });
+        expandSurface();
+        await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(running.id));
+        const original = structuredClone(data.store.state.timer);
+        fireEvent.click(await screen.findByRole("button", { name: "Start focus on Agenda to-do" }));
+        expect(await screen.findByRole("status")).toHaveTextContent("A break is running.");
+        expect(data.store.state.timer).toEqual(original);
+        expect((await data.loadTodos()).todos[0].currentTaskId).toBeNull();
+        expect(Object.keys(data.store.state.tasks)).toEqual([running.id]);
+    });
+
+    it("always renders an empty To-dos group with No to-dos due.", async () => {
+        await renderSurface();
+        expandSurface();
+        expect(screen.getByRole("heading", { name: "To-dos" })).toBeInTheDocument();
+        expect(screen.getByText("No to-dos due.")).toBeInTheDocument();
+    });
+
+    it("shares one Done today group between a task and a to-do", async () => {
+        const now = new Date().toISOString();
+        await renderSurface({ tasks: { done: pmTask({ id: "done", title: "Done task", status: "Done", completedAt: now }) },
+            todos: [surfaceTodo({ isArchived: true })],
+            todoCompletions: [{ id: "completion", todoId: "todo-1", bucket: todayKey(), createdAt: now, updatedAt: now }] });
+        expandSurface();
+        const doneToggle = await screen.findByRole("button", { name: "Done today (2)" });
+        expect(screen.getAllByRole("button", { name: /Done today/ })).toHaveLength(1);
+        expect(doneToggle).toHaveAttribute("aria-expanded", "false");
+        fireEvent.click(doneToggle);
+        const doneGroup = within(doneToggle.parentElement!);
+        expect(doneGroup.getAllByRole("listitem")).toHaveLength(2);
+        expect(doneGroup.getByRole("button", { name: "Select Done task" })).toBeInTheDocument();
+        expect(doneGroup.getByText("Agenda to-do")).toBeInTheDocument();
+        const content = document.getElementById("today-surface-content")!;
+        expect(Array.from(content.children).map((group) => group.querySelector("h3")?.textContent ?? group.querySelector("button")?.textContent))
+            .toEqual(["Tasks", "To-dos", "Done today (2)", "Habits", "Pomodoros"]);
+    });
+
+    it("sums task and to-do work in the header chip", async () => {
+        await renderSurface({ tasks: { task: pmTask({ id: "task", estimatePomos: 2, dueDate: todayKey() }) }, todos: [surfaceTodo()] });
+        expect(await screen.findByText("3p this week")).toBeInTheDocument();
+    });
+
+    it.each([new Error("Unable to save occurrence"), null])("surfaces completion failures as a card notice: %s", async error => {
+        const data = await renderSurface({ todos: [surfaceTodo()] });
+        expandSurface();
+        const checkbox = await screen.findByRole("button", { name: "Complete Agenda to-do" });
+        const save = vi.spyOn(data, "saveTodos").mockRejectedValueOnce(error);
+        try {
+            fireEvent.click(checkbox);
+            expect(await screen.findByRole("status")).toHaveTextContent(error?.message ?? "Unable to complete the to-do.");
+        } finally { save.mockRestore(); }
+    });
+});
 
 describe("TodaySurface", () => {
     it("hides Done today when no tasks were completed today", async () => {
@@ -220,7 +392,7 @@ describe("TodaySurface", () => {
         expect(within(rows[0]).getByRole("img", { name: "Waiting on person" })).toHaveAttribute("title", "Waiting on person");
         expect(within(rows[1]).getByRole("img", { name: "Waiting on agent" })).toBeInTheDocument();
         expect(screen.getByText("3p left of 3p")).toBeInTheDocument();
-        expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Tasks", "Habits", "Pomodoros"]);
+        expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Tasks", "To-dos", "Habits", "Pomodoros"]);
     });
 
     it("summarises the day while collapsed and reveals the groups when expanded", async () => {
