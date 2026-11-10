@@ -155,10 +155,10 @@ describe("TodaySurface", () => {
     it("pins waiting entries with accessible dots and includes their work in the summary", async () => {
         await renderSurface({ tasks: {
             due: pmTask({ id: "due", title: "Due now", estimatePomos: 2, dueDate: todayKey() }),
-            waiting: pmTask({ id: "waiting", title: "Waiting flexible", estimatePomos: 3, waiting: { type: "agent", since: "2026-08-12T09:00:00Z" } }),
+            waiting: pmTask({ id: "waiting", title: "Waiting flexible", estimatePomos: 3, dueDate: todayKey(), waiting: { type: "agent", since: "2026-08-12T09:00:00Z" } }),
             person: pmTask({ id: "person", title: "Waiting due", estimatePomos: 1, dueDate: todayKey(), waiting: { type: "person", since: "2026-08-12T09:00:00Z" } }),
         } });
-        expect(await screen.findByText("3 tasks · 6p left")).toBeInTheDocument();
+        expect(await screen.findByText("6p this week")).toBeInTheDocument();
         expandSurface();
         const rows = screen.getAllByRole("listitem");
         expect(rows.map((row) => within(row).getByRole("button", { name: /^Select / }).getAttribute("aria-label")))
@@ -173,7 +173,7 @@ describe("TodaySurface", () => {
         await renderSurface({
             tasks: {
                 "task-a": pmTask({ id: "task-a", title: "Ship the report", projectId: "project-1", estimatePomos: 3, dueDate: todayKey() }),
-                "task-b": pmTask({ id: "task-b", title: "Clear inbox", estimatePomos: 1 }),
+                "task-b": pmTask({ id: "task-b", title: "Clear inbox", estimatePomos: 1, dueDate: todayKey() }),
             },
             projects: { "project-1": project({ workableDays: [new Date().getDay() as WorkableWeekday] }) },
             habits: [habit()],
@@ -188,7 +188,7 @@ describe("TodaySurface", () => {
 
         const toggle = await screen.findByRole("button", { name: /Today/ });
         expect(toggle).toHaveAttribute("aria-expanded", "false");
-        expect(await screen.findByText("2 tasks · 4p left")).toBeInTheDocument();
+        expect(await screen.findByText("4p this week")).toBeInTheDocument();
         expect(await screen.findByText("1/1 habits")).toBeInTheDocument();
         expect(screen.getByText("1p · 25m")).toBeInTheDocument();
         expect(screen.queryByText("Ship the report")).not.toBeInTheDocument();
@@ -219,7 +219,7 @@ describe("TodaySurface", () => {
             await renderSurface({
                 tasks: {
                     weekday: pmTask({ id: "weekday", title: "Weekday work", projectId: "weekday", estimatePomos: 3, dueDate: todayKey() }),
-                    saturday: pmTask({ id: "saturday", title: "Saturday work", projectId: "saturday", estimatePomos: 2 }),
+                    saturday: pmTask({ id: "saturday", title: "Saturday work", projectId: "saturday", estimatePomos: 2, dueDate: todayKey() }),
                 },
                 projects: {
                     weekday: project({ id: "weekday" }),
@@ -227,7 +227,7 @@ describe("TodaySurface", () => {
                 },
             });
 
-            expect(await screen.findByText("1 task · 2p left")).toBeInTheDocument();
+            expect(await screen.findByText("2p this week")).toBeInTheDocument();
             expandSurface();
             expect(screen.getByText("Saturday work")).toBeInTheDocument();
             expect(screen.queryByText("Weekday work")).not.toBeInTheDocument();
@@ -277,11 +277,50 @@ describe("TodaySurface", () => {
         await waitFor(async () => expect((await data.loadHabits()).completions).toHaveLength(0));
     });
 
+    it("completes a task from its checkbox without selecting the row", async () => {
+        const user = userEvent.setup();
+        const onSelectTask = vi.fn();
+        const data = await renderSurface({
+            tasks: { "task-a": pmTask({ id: "task-a", title: "Ship the report", estimatePomos: 2, dueDate: todayKey() }) },
+            onSelectTask,
+        });
+        expandSurface();
+
+        const checkbox = await screen.findByRole("button", { name: "Complete Ship the report" });
+        expect(checkbox).toHaveAttribute("aria-pressed", "false");
+
+        await user.click(checkbox);
+
+        await waitFor(async () => {
+            const stored = await data.loadPMState();
+            expect(stored?.tasks["task-a"].status).toBe("Done");
+        });
+        await waitFor(() => expect(screen.queryByRole("button", { name: "Select Ship the report" })).not.toBeInTheDocument());
+        expect(screen.queryByRole("button", { name: "Complete Ship the report" })).not.toBeInTheDocument();
+        expect(onSelectTask).not.toHaveBeenCalled();
+    });
+
+    it("shows a this-week badge and horizon chip for work due later this week", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 12, 10));
+        try {
+            await renderSurface({
+                tasks: { "task-week": pmTask({ id: "task-week", title: "Friday work", estimatePomos: 2, dueDate: "2026-08-14" }) },
+            });
+
+            expect(await screen.findByText("2p this week")).toBeInTheDocument();
+            expandSurface();
+            expect(await screen.findByText("This week")).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("selects a task from the list", async () => {
         const user = userEvent.setup();
         const onSelectTask = vi.fn();
         await renderSurface({
-            tasks: { "task-a": pmTask({ id: "task-a", title: "Ship the report", estimatePomos: 2 }) },
+            tasks: { "task-a": pmTask({ id: "task-a", title: "Ship the report", estimatePomos: 2, dueDate: todayKey() }) },
             onSelectTask,
         });
         expandSurface();
@@ -294,7 +333,7 @@ describe("TodaySurface", () => {
         const user = userEvent.setup();
         const linked = appTask("app-linked", "Linked app task");
         await renderSurface({
-            tasks: { linked: pmTask({ id: "linked", title: "Linked task", appTaskId: linked.id, estimatePomos: 2 }) },
+            tasks: { linked: pmTask({ id: "linked", title: "Linked task", appTaskId: linked.id, estimatePomos: 2, dueDate: todayKey() }) },
             appState: { tasks: { [linked.id]: linked } },
         });
         expandSurface();
@@ -306,7 +345,7 @@ describe("TodaySurface", () => {
     it("creates and links a timer task when starting focus on an unlinked task", async () => {
         const user = userEvent.setup();
         const data = await renderSurface({
-            tasks: { unlinked: pmTask({ id: "unlinked", title: "Unlinked task", estimatePomos: 2 }) },
+            tasks: { unlinked: pmTask({ id: "unlinked", title: "Unlinked task", estimatePomos: 2, dueDate: todayKey() }) },
         });
         expandSurface();
 
@@ -325,8 +364,8 @@ describe("TodaySurface", () => {
         const running = appTask("app-running", "Running app task");
         await renderSurface({
             tasks: {
-                running: pmTask({ id: "running", title: "Running task", appTaskId: running.id, estimatePomos: 2 }),
-                other: pmTask({ id: "other", title: "Other task", estimatePomos: 2 }),
+                running: pmTask({ id: "running", title: "Running task", appTaskId: running.id, estimatePomos: 2, dueDate: todayKey() }),
+                other: pmTask({ id: "other", title: "Other task", estimatePomos: 2, dueDate: todayKey() }),
             },
             appState: {
                 tasks: { [running.id]: running },
@@ -361,7 +400,7 @@ describe("TodaySurface", () => {
 
         expandSurface();
 
-        expect(await screen.findByText("No tasks are due today.")).toBeInTheDocument();
+        expect(await screen.findByText("Nothing left for today!")).toBeInTheDocument();
         expect(screen.getByText("No habits yet.")).toBeInTheDocument();
         expect(screen.getByText("No pomodoros completed today.")).toBeInTheDocument();
         expect(screen.getByText("No tasks")).toBeInTheDocument();
@@ -376,7 +415,7 @@ describe("Today work-window handoff", () => {
         const running = appTask("running", "Running");
         const incoming = appTask("incoming", "Incoming");
         const data = await renderSurface({ tasks: {
-            other: pmTask({ id: "other", title: "Incoming", appTaskId: incoming.id, estimatePomos: 2 }),
+            other: pmTask({ id: "other", title: "Incoming", appTaskId: incoming.id, estimatePomos: 2, dueDate: todayKey() }),
         }, appState: { tasks: { running, incoming }, active_task: running.id,
             timer: makeActiveTimer({ task_id: running.id, window_started_at: new Date().toISOString() }) } });
         const original = data.store.state.timer!;
