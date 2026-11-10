@@ -1,8 +1,17 @@
 import type { ActiveTimer, AppStateData, Task } from "../../state/types";
 import { cloneAppState, type EngineResult } from "./core";
-import { finalizeTask } from "./taskCommands";
+import { archiveTask, finalizeTask } from "./taskCommands";
 
 export type DeferredFinalizeOutcome = "finalized" | "owner" | "skipped";
+
+export function archiveDeferredTask(
+    state: AppStateData, taskId: string,
+): EngineResult<DeferredFinalizeOutcome> {
+    const task = state.tasks[taskId];
+    if (!task || task.archived || task.completed_at !== null) return { state: cloneAppState(state), value: "skipped" };
+    if (ownsWorkWindow(state.timer, taskId)) return { state: cloneAppState(state), value: "owner" };
+    return { state: archiveTask(state, taskId).state, value: "finalized" };
+}
 
 export function finalizeDeferredTask(
     state: AppStateData, taskId: string, now: Date, logId: string,

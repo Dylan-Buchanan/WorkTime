@@ -242,7 +242,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await commitTodos(completed.todos, completed.completions);
         const deferred = ownsWorkWindow(timer, linked);
         if (deferred) setDeferredTodoTasks((previous) => ({ ...previous, [id]: linked }));
-        try { await app!.requestFinalize(linked); }
+        try { await app!.requestFinalize(linked, { mode: "archive" }); }
         catch (error) {
             if (deferred || !(error instanceof Error && error.message.includes("Task not found"))) throw error;
         }

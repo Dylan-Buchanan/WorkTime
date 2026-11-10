@@ -125,6 +125,7 @@ export interface DataAccess {
     updateSettings(settings: Settings): Promise<EngineResult<Settings>>;
     finalizeTask(taskId: string): Promise<EngineResult<Task>>;
     finalizeDeferredTask(taskId: string): Promise<EngineResult<DeferredFinalizeOutcome>>;
+    archiveDeferredTask(taskId: string): Promise<EngineResult<DeferredFinalizeOutcome>>;
     archiveTask(taskId: string): Promise<EngineResult<Task>>;
     setTaskTarget(taskId: string, target: number): Promise<EngineResult<Task>>;
     deleteTask(taskId: string): Promise<EngineResult<void>>;

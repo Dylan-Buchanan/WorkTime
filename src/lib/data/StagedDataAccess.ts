@@ -1,5 +1,5 @@
 import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
-import { finalizeDeferredTask } from "../engine/pendingFinalize";
+import { archiveDeferredTask, finalizeDeferredTask } from "../engine/pendingFinalize";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { EngineResult } from "../engine";
 import {
@@ -402,6 +402,10 @@ export class StagedDataAccess implements DataAccess {
 
     async archiveTask(taskId: string) {
         return this.transition((state) => archiveTask(state, taskId));
+    }
+
+    async archiveDeferredTask(taskId: string) {
+        return this.transition((state) => archiveDeferredTask(state, taskId));
     }
 
     async setTaskTarget(taskId: string, target: number) {
