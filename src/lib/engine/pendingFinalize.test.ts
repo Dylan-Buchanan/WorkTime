@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveTimer, Task } from "../../state/types";
 import { ownsWorkWindow, partitionPendingFinalizes } from "./pendingFinalize";
+import { finalizeDeferredTask } from "./pendingFinalize";
+import { defaultAppState } from "./core";
+import { finalizeTask } from "./taskCommands";
 
 const W = "2026-11-09T14:00:00.000Z";
 const work: ActiveTimer = {
@@ -14,6 +17,49 @@ const tasks: Readonly<Record<string, Task>> = Object.fromEntries(
         created_at: W, completed_at: id === "d" ? W : null, break_skips: 0, archived: false,
     }]),
 );
+
+describe("finalizeDeferredTask", () => {
+    const now = new Date("2026-11-09T14:03:00.000Z");
+    const initial = (timer: ActiveTimer | null = work) => ({
+        ...defaultAppState(), tasks: structuredClone(tasks), active_task: "a", timer: timer ? { ...timer } : null,
+    });
+
+    it.each(["missing", "d"])("skips missing or completed task %s without changing state or input", id => {
+        const state = initial({ ...work, task_id: id });
+        const before = structuredClone(state);
+        const result = finalizeDeferredTask(state, id, now, "log");
+        expect(result).toEqual({ state: before, value: "skipped" });
+        expect(state).toEqual(before);
+    });
+
+    it.each([false, true])("preserves the Work owner and input when paused is %s", paused => {
+        const state = initial({ ...work, paused });
+        const before = structuredClone(state);
+        const result = finalizeDeferredTask(state, "a", now, "log");
+        expect(result).toEqual({ state: before, value: "owner" });
+        expect(result.state.timer).toEqual(before.timer);
+        expect(state).toEqual(before);
+    });
+
+    it.each(["ShortBreak", "LongBreak"] as const)("finalizes the %s owner while preserving the break and input", kind => {
+        const state = initial({ ...work, kind });
+        const before = structuredClone(state);
+        const result = finalizeDeferredTask(state, "a", now, "log");
+        expect(result.value).toBe("finalized");
+        expect(result.state.timer).toEqual(before.timer);
+        expect(result.state.tasks.a).toMatchObject({ completed_at: now.toISOString(), archived: true });
+        expect(state).toEqual(before);
+    });
+
+    it("matches finalizeTask for a non-owner during another task's Work without mutating input", () => {
+        const state = initial({ ...work, task_id: "b" });
+        const before = structuredClone(state);
+        const result = finalizeDeferredTask(state, "a", now, "log");
+        expect(result).toEqual({ state: finalizeTask(state, "a", now, "log").state, value: "finalized" });
+        expect(result.state.timer).toEqual(before.timer);
+        expect(state).toEqual(before);
+    });
+});
 
 describe("ownsWorkWindow", () => {
     it.each([

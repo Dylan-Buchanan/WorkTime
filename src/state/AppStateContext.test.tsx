@@ -1248,8 +1248,8 @@ describe("deferred finalize", () => {
         "logs Work and opens the break before flushing on %s, then never restarts the finalized task", async completion => {
             const c = await setup();
             await act(async () => { await c.app().requestFinalize("A"); });
-            const finalize = c.data.finalizeTask.bind(c.data);
-            const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            const finalize = c.data.finalizeDeferredTask.bind(c.data);
+            const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
                 expect(c.data.store.state.timer).toMatchObject({ kind: "ShortBreak", task_id: "A" });
                 expect(c.data.store.state.logs).toEqual([expect.objectContaining({
                     task_id: "A", duration_minutes: 25, was_break: false, work_window_id: W,
@@ -1279,8 +1279,8 @@ describe("deferred finalize", () => {
     it("logs elapsed work before stopWork flushes the owner", async () => {
         const c = await setup();
         await act(async () => { await c.app().requestFinalize("A"); });
-        const finalize = c.data.finalizeTask.bind(c.data);
-        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             expect(c.data.store.state.timer).toBeNull();
             expect(c.data.store.state.logs).toEqual([expect.objectContaining({
                 task_id: "A", duration_minutes: 3, was_break: false, work_window_id: W,
@@ -1301,8 +1301,8 @@ describe("deferred finalize", () => {
         const c = await setup();
         const timer = structuredClone(c.app().state!.timer!);
         await act(async () => { await c.app().requestFinalize("A"); });
-        const finalize = c.data.finalizeTask.bind(c.data);
-        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             expect(c.data.store.state.timer).toMatchObject({ task_id: "B", window_started_at: W, ends_at: timer.ends_at });
             expect(c.data.store.state.logs).toEqual([expect.objectContaining({
                 task_id: "A", duration_minutes: 3, was_break: false, work_window_id: W,
@@ -1366,7 +1366,7 @@ describe("deferred finalize", () => {
                 await c.app().refresh();
             }
         });
-        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(c.app().pendingFinalizeTaskIds).toEqual(terminal === "finalized" ? [] : ["A"]);
         time(4);
         await act(async () => { await c.app().setActiveTask("B"); });
         if (terminal === "finalized") {
@@ -1383,12 +1383,12 @@ describe("deferred finalize", () => {
     it("replays a reconciliation queued while progression is awaiting a pending finalize", async () => {
         const c = await setup();
         await act(async () => { await c.app().requestFinalize("A"); });
-        const finalize = c.data.finalizeTask.bind(c.data);
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
         let release!: () => void;
         let committed!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
         const committedGate = new Promise<void>(resolve => { committed = resolve; });
-        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+        const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             const result = await finalize(id);
             committed();
             await gate;
@@ -1457,8 +1457,8 @@ describe("deferred finalize", () => {
         let entered!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
         const enteredGate = new Promise<void>(resolve => { entered = resolve; });
-        const finalize = c.data.finalizeTask.bind(c.data);
-        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             if (id === "A") { entered(); await gate; }
             return finalize(id);
         });
@@ -1483,8 +1483,8 @@ describe("deferred finalize", () => {
         await act(async () => {
             await c.data.setActiveTask("B"); await c.app().refresh(); await c.app().requestFinalize("B");
         });
-        const finalize = c.data.finalizeTask.bind(c.data);
-        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             if (id === "A") throw new Error("finalize storage failed");
             return finalize(id);
         });
@@ -1529,8 +1529,8 @@ describe("deferred finalize", () => {
         await act(async () => { await c.app().requestFinalize("A"); });
         time(3);
         await act(async () => { await c.data.stopWorkTimer(); await c.app().refresh(); });
-        const finalize = c.data.finalizeTask.bind(c.data);
-        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             expect(c.events).toEqual([{ type: "enter", taskId: "B", reason: "start", at: at(3), windowId: at(3) }]);
             expect(c.data.store.state.timer).toMatchObject({ kind: "Work", task_id: "B", window_started_at: at(3) });
             return finalize(id);
@@ -1539,6 +1539,101 @@ describe("deferred finalize", () => {
         expect(c.app().pendingFinalizeTaskIds).toEqual([]);
         expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
         expect(finalizeSpy).toHaveBeenCalledExactlyOnceWith("A");
+    });
+
+    it("requeues a claimed task that becomes the Work owner while the first deferred finalize is held", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(1);
+        await act(async () => {
+            await c.data.setActiveTask("B");
+            await c.app().refresh();
+            await c.app().requestFinalize("B");
+        });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A", "B"]);
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const immediate = vi.spyOn(c.data, "finalizeTask");
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
+            if (id === "A") { entered(); await gate; }
+            return finalize(id);
+        });
+        let switching!: Promise<void>;
+        time(3);
+        await act(async () => { switching = c.app().setActiveTask("C"); await enteredGate; });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        time(4);
+        await act(async () => { await c.data.setActiveTask("B"); });
+        const timer = structuredClone(c.data.store.state.timer);
+        expect(timer).toMatchObject({ kind: "Work", task_id: "B", window_started_at: W, paused: false });
+        await act(async () => { release(); await switching; });
+        expect(deferred.mock.calls).toEqual([["A"], ["B"]]);
+        expect(immediate).not.toHaveBeenCalled();
+        expect(c.data.store.state.timer).toEqual(timer);
+        expect(c.app().state?.timer).toEqual(timer);
+        expect(c.data.store.state.tasks.B.completed_at).toBeNull();
+        expect(c.app().state?.tasks.B.completed_at).toBeNull();
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["B"]);
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(4), archived: true });
+        expect(c.app().error).toBeNull();
+    });
+
+    it("deduplicates requestFinalize against a claimed in-flight deferred finalize", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        const immediate = vi.spyOn(c.data, "finalizeTask");
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
+            entered();
+            await gate;
+            return finalize(id);
+        });
+        let switching!: Promise<void>;
+        time(3);
+        await act(async () => { switching = c.app().setActiveTask("B"); await enteredGate; });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        await act(async () => { expect(await c.app().requestFinalize("A")).toBe("deferred"); });
+        expect(deferred).toHaveBeenCalledExactlyOnceWith("A");
+        expect(immediate).not.toHaveBeenCalled();
+        await act(async () => { release(); await switching; });
+        expect(deferred).toHaveBeenCalledExactlyOnceWith("A");
+        expect(immediate).not.toHaveBeenCalled();
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
+    });
+
+    it("removes a queued id before the public finalizeTask wrapper runs", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        const finalize = c.data.finalizeTask.bind(c.data);
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask");
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        const immediate = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            entered();
+            await gate;
+            return finalize(id);
+        });
+        let completion!: Promise<void>;
+        time(3);
+        await act(async () => { completion = c.app().finalizeTask("A"); await enteredGate; });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        // A retained callback also sees the ref removal before storage commits.
+        await act(async () => { release(); await completion; });
+        await act(async () => { await c.app().setActiveTask("B"); });
+        expect(immediate).toHaveBeenCalledExactlyOnceWith("A");
+        expect(deferred).not.toHaveBeenCalled();
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
     });
 
     it("keeps the queue memory-only and loses it when the provider remounts", async () => {

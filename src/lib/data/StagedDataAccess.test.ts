@@ -218,6 +218,74 @@ function makeBaseline(timer: ActiveTimer | null, overrides: Partial<SyncSnapshot
 }
 
 describe("StagedDataAccess", () => {
+    it.each([false, true])("deferred finalize preserves the stored Work owner when paused is %s", async paused => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T00:03:00.000Z"), createTaskId: () => "t1",
+        });
+        await data.createTask("Owner", 2);
+        await data.setActiveTask("t1");
+        await data.startWorkTimer();
+        if (paused) await data.pauseTimer();
+        const before = store.read(OWNER_A).state;
+        expect(await data.finalizeDeferredTask("t1")).toEqual({ state: before, value: "owner" });
+        expect(store.read(OWNER_A).state).toEqual(before);
+        expect(sync).not.toHaveBeenCalled();
+    });
+
+    it("deferred finalize finalizes a non-owner and preserves the stored Work timer", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const now = new Date("2026-01-01T00:03:00.000Z");
+        await store.update(OWNER_A, current => ({ ...current, state: makeAppState({
+            tasks: { t1: { ...TASK_T1 }, t2: { ...TASK_T1, id: "t2" } }, active_task: "t2",
+            timer: makeActiveTimer({ task_id: "t2" }),
+        }) }));
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => now });
+        const timer = store.read(OWNER_A).state.timer;
+        const result = await data.finalizeDeferredTask("t1");
+        expect(result.value).toBe("finalized");
+        expect(store.read(OWNER_A).state.tasks.t1).toMatchObject({ completed_at: now.toISOString(), archived: true });
+        expect(result.state).toEqual(store.read(OWNER_A).state);
+        expect(store.read(OWNER_A).state.timer).toEqual(timer);
+    });
+
+    it("checks deferred finalize ownership against the latest store write before the transition runs", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        await store.update(OWNER_A, current => ({ ...current, state: makeAppState({
+            tasks: { t1: { ...TASK_T1 }, t2: { ...TASK_T1, id: "t2" } }, active_task: "t2",
+            timer: makeActiveTimer({ task_id: "t2" }),
+        }) }));
+        const data = new StagedDataAccess(OWNER_A, store, executor, {
+            now: () => new Date("2026-01-01T00:03:00.000Z"),
+        });
+        // The caller decides t1 is safe to finalize from this earlier snapshot.
+        expect(store.read(OWNER_A).state.timer?.task_id).toBe("t2");
+        const update = store.update.bind(store);
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        vi.spyOn(store, "update").mockImplementationOnce(async (...args) => {
+            entered();
+            await gate;
+            return update(...args);
+        });
+        const pending = data.finalizeDeferredTask("t1");
+        await enteredGate;
+        // A separate write takes ownership before the deferred transition reads.
+        await store.update(OWNER_A, current => ({ ...current, state: {
+            ...current.state, active_task: "t1", timer: { ...current.state.timer!, task_id: "t1" },
+        } }));
+        const latest = store.read(OWNER_A).state;
+        release();
+        expect(await pending).toEqual({ state: latest, value: "owner" });
+        expect(store.read(OWNER_A).state).toEqual(latest);
+        expect(store.read(OWNER_A).state.timer).toMatchObject({ task_id: "t1", paused: false });
+    });
+
     it("executes representative commands locally with zero sync calls", async () => {
         const { executor, sync } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);

@@ -40,6 +40,32 @@ function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {
 }
 
 describe("InMemoryDataAccess", () => {
+    it.each([false, true])("deferred finalize preserves the stored Work owner when paused is %s", async paused => {
+        const data = new InMemoryDataAccess(undefined, { now: () => new Date("2026-01-01T00:03:00.000Z") });
+        const task = (await data.createTask("Owner", 2)).value;
+        await data.setActiveTask(task.id);
+        await data.startWorkTimer();
+        if (paused) await data.pauseTimer();
+        const before = structuredClone(data.store.state);
+        expect(await data.finalizeDeferredTask(task.id)).toEqual({ state: before, value: "owner" });
+        expect(data.store.state).toEqual(before);
+    });
+
+    it("deferred finalize finalizes a non-owner and preserves the stored Work timer", async () => {
+        const now = new Date("2026-01-01T00:03:00.000Z");
+        const data = new InMemoryDataAccess(undefined, { now: () => now });
+        const owner = (await data.createTask("Owner", 2)).value;
+        const other = (await data.createTask("Other", 2)).value;
+        await data.setActiveTask(owner.id);
+        await data.startWorkTimer();
+        const timer = structuredClone(data.store.state.timer);
+        const result = await data.finalizeDeferredTask(other.id);
+        expect(result.value).toBe("finalized");
+        expect(data.store.state.tasks[other.id]).toMatchObject({ completed_at: now.toISOString(), archived: true });
+        expect(result.state).toEqual(data.store.state);
+        expect(data.store.state.timer).toEqual(timer);
+    });
+
     it("returns cloned state and keeps PM ui out of the server slice", async () => {
         const data = new InMemoryDataAccess();
         const created = await data.createTask("Task", 2);
