@@ -47,7 +47,7 @@ const TaskRow: React.FC<{
             type="button"
             aria-pressed={false}
             aria-label={`Complete ${task.title}`}
-            onClick={() => onCompleteTask(task)}
+            onClick={() => void onCompleteTask(task)}
             className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border border-neutral-600 text-transparent transition-colors hover:border-emerald-400/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
         >
             <Check size={12} aria-hidden />
@@ -114,7 +114,7 @@ const HabitRow: React.FC<{ habit: TodayHabitEntry; onToggle: (habit: TodayHabitE
 );
 
 export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
-    const { state, startTaskWork, createTask } = useAppState();
+    const { state, startTaskWork, createTask, requestFinalize, pendingFinalizeTaskIds } = useAppState();
     const { state: pmState, updateTask } = usePM();
     const habitContext = useHabits();
     const { play } = useSounds();
@@ -149,9 +149,16 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
         else habitContext.checkCompletion(habit.id, habit.bucket);
     };
 
-    const handleCompleteTask = (task: TodayTaskEntry) => {
+    const handleCompleteTask = async (task: TodayTaskEntry) => {
         updateTask(task.id, { status: "Done" });
         play("completeTask");
+        const appTaskId = task.appTaskId;
+        if (!appTaskId || !state?.tasks?.[appTaskId]) return;
+        try {
+            await requestFinalize(appTaskId);
+        } catch {
+            setNotice(`Couldn't finish “${task.title}” on the timer.`);
+        }
     };
 
     const handleStartFocus = async (task: TodayTaskEntry) => {
@@ -267,7 +274,9 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                                             ) : (
                                                 <span className="min-w-0 truncate text-[11px] text-neutral-400 line-through">{entry.title}</span>
                                             )}
-                                            {/* Pending completion hint slot, filled by the finalize lane. */}
+                                            {entry.kind === "task" && entry.appTaskId && pendingFinalizeTaskIds.includes(entry.appTaskId) && (
+                                                <span className="shrink-0 text-[10px] text-neutral-500">finishing after this pomodoro</span>
+                                            )}
                                         </li>
                                     ))}
                                 </ul>
