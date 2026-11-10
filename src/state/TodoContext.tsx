@@ -4,6 +4,7 @@ import type { NewTodoInput, Todo, TodoCompletion, TodoRule } from "../lib/todos"
 import { useData } from "./DataContext";
 import { useSync } from "./SyncContext";
 import { workStartOccupation } from "../lib/engine";
+import { ownsWorkWindow } from "../lib/engine/pendingFinalize";
 import { useOptionalAppState } from "./AppStateContext";
 
 export interface TodoState {
@@ -20,6 +21,10 @@ export interface TodoContextValue {
     updateTodo(id: string, patch: Partial<Todo>): void;
     archiveTodo(id: string, archive?: boolean): void;
     completeTodo(id: string): Promise<void>;
+    /** Agenda checkbox: completes now, deferring the linked backend finalize while it owns the Work window. */
+    completeTodoFromAgenda(id: string): Promise<"completed" | "deferred">;
+    /** Memory-only: to-do id -> backend task id whose finalize was deferred from the agenda. */
+    deferredTodoTasks: Readonly<Record<string, string>>;
     startPomodoro(id: string): Promise<void>;
     deleteTodo(id: string): Promise<void>;
     reorderTodos(idsInOrder: string[]): void;
@@ -90,6 +95,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const { initialized, revision, sync } = useSync();
     const [state, setState] = useState<TodoState>(defaultState);
     const [hydrated, setHydrated] = useState(false);
+    const [deferredTodoTasks, setDeferredTodoTasks] = useState<Readonly<Record<string, string>>>({});
     const stateRef = useRef(state);
     const lastSavedRef = useRef<string | null>(null);
     const pendingRef = useRef<string | null>(null);
@@ -223,6 +229,25 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await commitTodos(completed.todos, completed.completions);
         if (linkedTaskId) await archiveLinkedTaskIfExists(linkedTaskId);
     }, [app, archiveLinkedTaskIfExists, commitTodos, completedOccurrenceState]);
+    const completeTodoFromAgenda = useCallback(async (id: string): Promise<"completed" | "deferred"> => {
+        const todo = stateRef.current.todos[id];
+        if (!todo || todo.isArchived) return "completed";
+        const linked = todo.currentTaskId;
+        const timer = app?.state?.timer;
+        if (!linked || timer?.task_id !== linked) {
+            await completeTodo(id);
+            return "completed";
+        }
+        const completed = completedOccurrenceState(todo, new Date());
+        await commitTodos(completed.todos, completed.completions);
+        const deferred = ownsWorkWindow(timer, linked);
+        if (deferred) setDeferredTodoTasks((previous) => ({ ...previous, [id]: linked }));
+        try { await app!.requestFinalize(linked); }
+        catch (error) {
+            if (deferred || !(error instanceof Error && error.message.includes("Task not found"))) throw error;
+        }
+        return deferred ? "deferred" : "completed";
+    }, [app, completeTodo, completedOccurrenceState, commitTodos]);
     const completeTodoForTask = useCallback(async (taskId: string) => {
         const todo = Object.values(stateRef.current.todos)
             .find((candidate) => !candidate.isArchived && candidate.currentTaskId === taskId);
@@ -273,7 +298,13 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         if (!app) return;
-        return app.subscribeTaskCompletions((taskId) => { void completeTodoForTask(taskId); });
+        return app.subscribeTaskCompletions((taskId) => {
+            setDeferredTodoTasks((previous) => {
+                if (!Object.values(previous).includes(taskId)) return previous;
+                return Object.fromEntries(Object.entries(previous).filter(([, linked]) => linked !== taskId));
+            });
+            void completeTodoForTask(taskId);
+        });
     }, [app, completeTodoForTask]);
 
     useEffect(() => {
@@ -296,7 +327,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         void commitTodos(result.todos, completions);
     }, [app?.state, commitTodos, hydrated]);
 
-    return <TodoContext.Provider value={{ state, hydrated, createTodo, updateTodo, archiveTodo, completeTodo, startPomodoro, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;
+    return <TodoContext.Provider value={{ state, hydrated, createTodo, updateTodo, archiveTodo, completeTodo, completeTodoFromAgenda, deferredTodoTasks, startPomodoro, deleteTodo, reorderTodos, setSelectedTodo, refreshTodos }}>{children}</TodoContext.Provider>;
 };
 
 export function useTodos(): TodoContextValue {

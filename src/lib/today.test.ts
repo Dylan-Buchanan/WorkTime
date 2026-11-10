@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { Todo, TodoCompletion } from "./todos/types";
+import { completeTodoOccurrence, createTodoCompletion } from "./todos/integration";
 import { defaultAppState, startWorkTimer, setActiveTask } from "./engine";
 import type { Habit, HabitCompletion, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
 import {
@@ -15,10 +17,89 @@ import {
     buildTodayOverview,
     buildTodayPomodoros,
     buildTodayTasks,
+    buildTodayTodos,
     getTodayDueScope,
 } from "./today";
 
 const REFERENCE = new Date(2026, 7, 12, 9, 30);
+
+function agendaTodo(overrides: Partial<Todo> = {}): Todo {
+    return { id: "todo", title: "To-do", rule: null, dueDate: "2026-08-12", estimate: 2,
+        currentTaskId: null, position: 0, isArchived: false,
+        createdAt: REFERENCE.toISOString(), updatedAt: REFERENCE.toISOString(), ...overrides };
+}
+
+describe("Today to-do agenda", () => {
+    it("admits overdue, today and this-week occurrences without rolling them and drops other scope", () => {
+        const todos = [
+            agendaTodo({ id: "overdue", dueDate: "2026-08-10", rule: { type: "weekly", weekdays: [1] } }),
+            agendaTodo({ id: "today" }), agendaTodo({ id: "week", dueDate: "2026-08-16" }),
+            agendaTodo({ id: "unscheduled", dueDate: null }), agendaTodo({ id: "future", dueDate: "2026-08-17" }),
+            agendaTodo({ id: "archived", isArchived: true }),
+        ];
+        const original = structuredClone(todos);
+        const result = buildTodayTodos({ todos, backendTasks: {}, reference: REFERENCE });
+        expect(result.todos.map((entry) => [entry.id, entry.bucket])).toEqual([
+            ["overdue", "overdue"], ["today", "today"], ["week", "thisWeek"],
+        ]);
+        expect(result.remainingPomodoros).toBe(6);
+        expect(todos).toEqual(original);
+    });
+
+    it.each([
+        { estimate: 2, linked: false, completed: 0, fraction: undefined, active: false, remaining: 2, worked: 0 },
+        { estimate: 2, linked: true, completed: 1, fraction: undefined, active: false, remaining: 1, worked: 1 },
+        { estimate: 1, linked: true, completed: 1, fraction: undefined, active: false, remaining: 1, worked: 1 },
+        { estimate: 2, linked: true, completed: 0, fraction: 0.5, active: true, remaining: 1.5, worked: 0.5 },
+        { estimate: 2, linked: true, completed: 0, fraction: 2, active: true, remaining: 1, worked: 1 },
+        { estimate: 2, linked: true, completed: 0, fraction: -1, active: true, remaining: 2, worked: 0 },
+        { estimate: 1, linked: true, completed: 2, fraction: undefined, active: false, remaining: 1, worked: 2 },
+    ])("computes remaining work and active fraction: %j", ({ estimate, linked, completed, fraction, active, remaining, worked }) => {
+        const result = buildTodayTodos({ todos: [agendaTodo({ estimate, currentTaskId: linked ? "linked" : null })],
+            backendTasks: { linked: backendTask({ id: "linked", completed_pomodoros: completed }) }, reference: REFERENCE,
+            activeWorkTaskId: active ? "linked" : null, activeWorkFraction: fraction });
+        expect(result.todos[0]).toMatchObject({ estimatePomos: estimate, workedPomos: worked, remainingPomodoros: remaining, isActive: active });
+        expect(result.remainingPomodoros).toBe(remaining);
+    });
+
+    it("sorts to-dos by bucket, due key, position, title and id", () => {
+        const result = buildTodayTodos({ todos: [
+            agendaTodo({ id: "week", dueDate: "2026-08-13", position: -1 }),
+            agendaTodo({ id: "b", title: "Alpha", position: 1 }),
+            agendaTodo({ id: "z", title: "Zulu", position: 0 }),
+            agendaTodo({ id: "c", title: "Beta", position: 1 }),
+            agendaTodo({ id: "a", title: "Alpha", position: 1 }),
+            agendaTodo({ id: "overdue-later", dueDate: "2026-08-11", position: -1 }),
+            agendaTodo({ id: "overdue-first", dueDate: "2026-08-10", position: 9 }),
+        ], backendTasks: {}, reference: REFERENCE });
+        expect(result.todos.map((entry) => entry.id)).toEqual(["overdue-first", "overdue-later", "z", "a", "b", "c", "week"]);
+    });
+
+    it("uses completion creation day rather than bucket, includes archived to-dos and ignores missing ids", () => {
+        const today = new Date(2026, 7, 12, 8);
+        const yesterday = new Date(2026, 7, 11, 20);
+        const archived = agendaTodo({ isArchived: true, title: "" });
+        const completions: TodoCompletion[] = [
+            { ...createTodoCompletion(archived, today, "today"), bucket: "2026-08-10" },
+            createTodoCompletion(archived, yesterday, "yesterday"),
+            { ...createTodoCompletion(archived, today, "missing"), todoId: "missing" },
+        ];
+        expect(buildTodayDone({ pmTasks: [], backendTasks: {}, todos: [archived], todoCompletions: completions, reference: REFERENCE }))
+            .toEqual([{ kind: "todo", key: "todo:today", id: "todo", title: "Untitled to-do", completedAt: today.toISOString(), appTaskId: null }]);
+    });
+
+    it("shares a descending Done list with tasks while a recurring successor remains active", () => {
+        const recurring = agendaTodo({ rule: { type: "weekly", weekdays: [3, 5] } });
+        const completion = createTodoCompletion(recurring, new Date(2026, 7, 12, 8), "occurrence");
+        const successor = completeTodoOccurrence(recurring, REFERENCE);
+        const overview = buildTodayOverview({ pmTasks: [pmTask({ id: "done", status: "Done", completedAt: new Date(2026, 7, 12, 9).toISOString() })],
+            backendTasks: {}, projects: {}, reference: REFERENCE, habits: [], completions: [], logs: [],
+            todos: [successor], todoCompletions: [completion] });
+        expect(overview.done.map((entry) => entry.key)).toEqual(["task:done", "todo:occurrence"]);
+        expect(overview.todos[0]).toMatchObject({ id: recurring.id, dueKey: "2026-08-14", bucket: "thisWeek" });
+        expect(overview.todosRemainingPomodoros).toBe(2);
+    });
+});
 
 function pmTask(overrides: Partial<PMTask> = {}): PMTask {
     return {
