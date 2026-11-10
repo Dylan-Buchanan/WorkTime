@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsPanel } from "./SettingsPanel";
 import { AppStateProvider } from "../state/AppStateContext";
@@ -14,10 +14,23 @@ import {
     getAgentApiKey,
 } from "../lib/agent";
 import { THEME_PREFERENCE_STORAGE_KEY } from "../lib/theme";
+import { SOUND_KEYS, SOUND_PREFERENCE_STORAGE_KEY, clearSoundPreference } from "../lib/sound";
+import { play } from "../lib/sound/audioPool";
 
-vi.mock("../hooks/useSounds", () => ({
-    useSounds: () => ({ play: () => {} }),
-}));
+const playClip = vi.fn<(src: string) => void>();
+
+beforeAll(() => {
+    vi.stubGlobal("Audio", class {
+        constructor(readonly src: string) {}
+
+        play() {
+            playClip(this.src);
+            return Promise.resolve();
+        }
+    });
+});
+
+afterAll(() => vi.unstubAllGlobals());
 
 const OWNER = "owner-1";
 
@@ -35,12 +48,20 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
     );
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+    localStorage.clear();
+    clearSoundPreference();
+    playClip.mockClear();
+});
 
 function expandSection(name: string) {
     const button = screen.getByRole("button", { name, expanded: false });
     fireEvent.click(button);
     return screen.getByRole("button", { name, expanded: true });
+}
+
+function soundSwitch(name: string) {
+    return screen.getByRole("switch", { name });
 }
 
 /** Replaces window.matchMedia with one list the test can flip. */
@@ -138,6 +159,11 @@ describe("SettingsPanel reset scope", () => {
         await waitFor(() => expect(screen.getByText("Reset All Data")).toBeTruthy());
         savePMSpy.mockClear();
 
+        expandSection("Sound");
+        fireEvent.click(soundSwitch("Hover"));
+        fireEvent.click(soundSwitch("All sounds"));
+        const soundBefore = localStorage.getItem(SOUND_PREFERENCE_STORAGE_KEY);
+
         act(() => screen.getByText("Reset All Data").click());
 
         // The confirmation copy describes the scoped deletion: timer data is
@@ -167,6 +193,9 @@ describe("SettingsPanel reset scope", () => {
         expect(resetSpy).toHaveBeenCalledTimes(1);
         expect(await data.loadPMState()).toEqual(pmBefore);
         expect(savePMSpy).not.toHaveBeenCalled();
+        expect(localStorage.getItem(SOUND_PREFERENCE_STORAGE_KEY)).toBe(soundBefore);
+        expect(soundSwitch("All sounds")).not.toBeChecked();
+        expect(soundSwitch("Hover")).not.toBeChecked();
     });
 
     it("stores and clears the agent API key locally", async () => {
@@ -208,7 +237,11 @@ describe("SettingsPanel reset scope", () => {
     it("starts all sections collapsed, toggles them independently, and resets on remount", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const view = render(wrap(data, <SettingsPanel />));
-        const names = ["Appearance", "Base settings", "Day hour settings", "Agent API key"];
+        const names = ["Appearance", "Sound", "Base settings", "Day hour settings", "Agent API key"];
+        expect(screen.getAllByRole("button", { expanded: false })).toEqual(
+            names.map((name) => screen.getByRole("button", { name, expanded: false })),
+        );
+        expect(screen.queryByRole("switch")).not.toBeInTheDocument();
         for (const name of names) {
             expect(screen.getByRole("button", { name, expanded: false })).toBeInTheDocument();
         }
@@ -269,5 +302,77 @@ describe("SettingsPanel reset scope", () => {
         expect(localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY)).toBe("system");
         expect(document.documentElement).toHaveAttribute("data-theme", "light");
         expect(screen.getByRole("status")).toHaveTextContent("Current theme: Light (system)");
+    });
+});
+
+describe("SettingsPanel sound preference", () => {
+    it("mutes every clip while preserving editable individual settings", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const updateSettings = vi.spyOn(data, "updateSettings");
+        const view = render(wrap(data, <SettingsPanel />));
+        await act(async () => {});
+        const existingStorageKeys = Object.keys(localStorage);
+        expandSection("Sound");
+
+        const names = ["All sounds", "Hover", "Button press", "Pomodoro start", "Pomodoro finished", "Break over", "Task complete"];
+        expect(screen.getAllByRole("switch")).toEqual(names.map(soundSwitch));
+        for (const name of names) expect(soundSwitch(name)).toBeChecked();
+
+        fireEvent.click(soundSwitch("All sounds"));
+        for (const key of SOUND_KEYS) play(key);
+        expect(playClip).not.toHaveBeenCalled();
+
+        for (const name of names.slice(1)) {
+            expect(soundSwitch(name)).toBeEnabled();
+            expect(soundSwitch(name)).toBeChecked();
+        }
+        fireEvent.click(soundSwitch("Hover"));
+        fireEvent.click(soundSwitch("Task complete"));
+        fireEvent.click(soundSwitch("Task complete"));
+        expect(soundSwitch("Hover")).not.toBeChecked();
+        expect(soundSwitch("Task complete")).toBeChecked();
+        expect(playClip).not.toHaveBeenCalled();
+
+        fireEvent.click(soundSwitch("All sounds"));
+        expect(playClip).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("press-sidepanel-button.mp3"));
+        expect(soundSwitch("Hover")).not.toBeChecked();
+        expect(soundSwitch("Task complete")).toBeChecked();
+        expect(updateSettings).not.toHaveBeenCalled();
+        expect(Object.keys(localStorage).filter((key) => !existingStorageKeys.includes(key))).toEqual([SOUND_PREFERENCE_STORAGE_KEY]);
+
+        view.unmount();
+        render(wrap(data, <SettingsPanel />));
+        await act(async () => {});
+        expandSection("Sound");
+        expect(soundSwitch("All sounds")).toBeChecked();
+        expect(soundSwitch("Hover")).not.toBeChecked();
+    });
+
+    it("silences only a disabled clip and previews it once when re-enabled", async () => {
+        render(wrap(new InMemoryDataAccess(makeAppState()), <SettingsPanel />));
+        await act(async () => {});
+        expandSection("Sound");
+
+        fireEvent.click(soundSwitch("Hover"));
+        expect(playClip).not.toHaveBeenCalled();
+        play("hover");
+        play("pressSide");
+        expect(playClip).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("press-sidepanel-button.mp3"));
+
+        playClip.mockClear();
+        fireEvent.click(soundSwitch("Hover"));
+        expect(playClip).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("hover-sound.mp3"));
+    });
+
+    it("stays silent when unmuting with Button press disabled", async () => {
+        render(wrap(new InMemoryDataAccess(makeAppState()), <SettingsPanel />));
+        await act(async () => {});
+        expandSection("Sound");
+
+        fireEvent.click(soundSwitch("Button press"));
+        fireEvent.click(soundSwitch("All sounds"));
+        fireEvent.click(soundSwitch("All sounds"));
+        expect(soundSwitch("Button press")).not.toBeChecked();
+        expect(playClip).not.toHaveBeenCalled();
     });
 });

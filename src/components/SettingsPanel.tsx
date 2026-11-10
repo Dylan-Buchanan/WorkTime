@@ -15,8 +15,20 @@ import {
 import { DEFAULT_START_OF_DAY, isTimeOfDay } from "../lib/settings";
 import { THEME_PREFERENCE_OPTIONS } from "../lib/theme";
 import { useThemePreference } from "../hooks/useThemePreference";
+import { SOUND_KEYS, type SoundKey } from "../lib/sound";
+import { useSoundPreference } from "../hooks/useSoundPreference";
+import { Switch } from "./Switch";
 import { TimeOfDayInput } from "./TimeOfDayInput";
 import { ChevronDown, ChevronRight } from "lucide-react";
+
+const SOUND_LABELS: Record<SoundKey, string> = {
+    hover: "Hover",
+    pressSide: "Button press",
+    startPomodoro: "Pomodoro start",
+    pomodoroFinish: "Pomodoro finished",
+    breakOver: "Break over",
+    completeTask: "Task complete",
+};
 
 export const SettingsPanel: React.FC = () => {
     const { state, updateSettings, resetAll } = useAppState();
@@ -33,6 +45,7 @@ export const SettingsPanel: React.FC = () => {
     const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
     const toggleSection = (section: string) => setExpandedSections((current) => ({ ...current, [section]: !current[section] }));
     const { preference: themePreference, resolvedTheme, setPreference: setThemePreference } = useThemePreference();
+    const { preference: soundPreference, setPreference: setSoundPreference } = useSoundPreference();
     const resolvedThemeLabel = THEME_PREFERENCE_OPTIONS.find((option) => option.id === resolvedTheme)?.label ?? "Dark";
     React.useEffect(() => {
         setLocal(s || null);
@@ -86,6 +99,38 @@ export const SettingsPanel: React.FC = () => {
                     <p role="status" aria-live="polite" className="text-[10px] text-neutral-500">
                         Current theme: {resolvedThemeLabel}{themePreference === "system" ? " (system)" : ""}
                     </p>
+                </div>
+            </section>
+            <section className="rounded-md border border-neutral-800 bg-neutral-900/30">
+                <button type="button" aria-expanded={Boolean(expandedSections.sound)} aria-controls="settings-sound-content" onClick={() => toggleSection("sound")} className="flex w-full items-center gap-2 px-2 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-800/40">
+                    {expandedSections.sound ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                    <span>Sound</span>
+                </button>
+                <div id="settings-sound-content" hidden={!expandedSections.sound} className="space-y-2 p-2">
+                    <Switch
+                        label="All sounds"
+                        checked={soundPreference.master}
+                        onChange={(master) => {
+                            setSoundPreference({ ...soundPreference, master });
+                            if (master) play("pressSide");
+                        }}
+                    />
+                    <div className={soundPreference.master ? undefined : "opacity-75"}>
+                        {SOUND_KEYS.map((key) => (
+                            <Switch
+                                key={key}
+                                label={SOUND_LABELS[key]}
+                                checked={soundPreference.enabled[key]}
+                                onChange={(enabled) => {
+                                    setSoundPreference({
+                                        ...soundPreference,
+                                        enabled: { ...soundPreference.enabled, [key]: enabled },
+                                    });
+                                    if (enabled && soundPreference.master) play(key);
+                                }}
+                            />
+                        ))}
+                    </div>
                 </div>
             </section>
             <section className="rounded-md border border-neutral-800 bg-neutral-900/30">

@@ -5,14 +5,9 @@ import hoverSoundMp3 from "../../assets/audio/hover-sound.mp3";
 import pomodoroFinishedMp3 from "../../assets/audio/pomodoro-finished.mp3";
 import pressSidepanelButtonMp3 from "../../assets/audio/press-sidepanel-button.mp3";
 import startPomodoroMp3 from "../../assets/audio/start-pomodoro.mp3";
+import { isSoundEnabled, type SoundKey } from "./soundPreference";
 
-export type SoundKey =
-    | "breakOver"
-    | "completeTask"
-    | "hover"
-    | "pomodoroFinish"
-    | "pressSide"
-    | "startPomodoro";
+export type { SoundKey } from "./soundPreference";
 
 const fileMap: Record<SoundKey, string> = {
     breakOver: breakOverMp3,
@@ -37,6 +32,7 @@ export function preloadSounds() {
 }
 
 export function play(key: SoundKey, { interrupt = true } = {}) {
+    if (!isSoundEnabled(key)) return;
     const audio = sounds[key];
     if (!audio) return;
     if (interrupt) {
