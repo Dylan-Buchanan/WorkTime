@@ -481,3 +481,122 @@ describe("Today work-window handoff", () => {
         expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
 });
+
+describe("Today deferred finalize", () => {
+    it("keeps the running Work window and shows the pending hint when checking the task that owns it", async () => {
+        const user = userEvent.setup();
+        const running = appTask("app-running", "Running app task");
+        const windowStartedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+        const data = await renderSurface({
+            tasks: {
+                running: pmTask({ id: "running", title: "Running task", appTaskId: running.id, estimatePomos: 2, dueDate: todayKey() }),
+            },
+            appState: {
+                tasks: { [running.id]: running },
+                active_task: running.id,
+                timer: makeActiveTimer({ task_id: running.id, window_started_at: windowStartedAt }),
+            },
+        });
+        expandSurface();
+        await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(running.id));
+
+        await user.click(screen.getByRole("button", { name: "Complete Running task" }));
+
+        const toggle = await screen.findByRole("button", { name: "Done today (1)" });
+        await waitFor(async () => {
+            expect((await data.loadPMState())?.tasks.running.status).toBe("Done");
+        });
+        expect(data.store.state.timer?.task_id).toBe(running.id);
+        expect(data.store.state.timer?.window_started_at).toBe(windowStartedAt);
+        expect(data.store.state.tasks[running.id].completed_at).toBeNull();
+
+        fireEvent.click(toggle);
+        expect(await screen.findByText("finishing after this pomodoro")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Select Running task" })).toBeInTheDocument();
+        expect(data.store.state.timer?.task_id).toBe(running.id);
+        expect(data.store.state.timer?.window_started_at).toBe(windowStartedAt);
+        expect(data.store.state.tasks[running.id].completed_at).toBeNull();
+    });
+
+    it("finalizes a linked task immediately when it is not running and shows no hint", async () => {
+        const user = userEvent.setup();
+        const linked = appTask("app-linked", "Linked app task", { completed_pomodoros: 1 });
+        const data = await renderSurface({
+            tasks: {
+                linked: pmTask({ id: "linked", title: "Linked task", appTaskId: linked.id, estimatePomos: 2, dueDate: todayKey() }),
+            },
+            appState: { tasks: { [linked.id]: linked } },
+        });
+        expandSurface();
+        await screen.findByText("1p left of 2p");
+
+        await user.click(screen.getByRole("button", { name: "Complete Linked task" }));
+
+        await waitFor(() => {
+            expect(data.store.state.tasks[linked.id].completed_at).toEqual(expect.any(String));
+            expect(data.store.state.tasks[linked.id].archived).toBe(true);
+        });
+        const toggle = await screen.findByRole("button", { name: "Done today (1)" });
+        fireEvent.click(toggle);
+        expect(screen.getByRole("button", { name: "Select Linked task" })).toBeInTheDocument();
+        expect(screen.queryByText("finishing after this pomodoro")).not.toBeInTheDocument();
+    });
+
+    it("completes an unlinked task on the PM side only", async () => {
+        const user = userEvent.setup();
+        const data = await renderSurface({
+            tasks: { unlinked: pmTask({ id: "unlinked", title: "Unlinked task", estimatePomos: 2, dueDate: todayKey() }) },
+        });
+        expandSurface();
+
+        await user.click(await screen.findByRole("button", { name: "Complete Unlinked task" }));
+
+        await waitFor(async () => {
+            expect((await data.loadPMState())?.tasks.unlinked.status).toBe("Done");
+        });
+        expect(Object.keys(data.store.state.tasks)).toHaveLength(0);
+        expect(data.store.state.timer).toBeNull();
+        await screen.findByRole("button", { name: "Done today (1)" });
+    });
+
+    it("completes a PM task whose backend task is missing without an error notice", async () => {
+        const user = userEvent.setup();
+        const data = await renderSurface({
+            tasks: {
+                orphan: pmTask({ id: "orphan", title: "Orphan task", appTaskId: "app-missing", estimatePomos: 2, dueDate: todayKey() }),
+            },
+        });
+        expandSurface();
+
+        await user.click(await screen.findByRole("button", { name: "Complete Orphan task" }));
+
+        await waitFor(async () => {
+            expect((await data.loadPMState())?.tasks.orphan.status).toBe("Done");
+        });
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
+        expect(data.store.state.tasks["app-missing"]).toBeUndefined();
+    });
+
+    it("shows the finalize notice when the backend rejects and still marks the PM task Done", async () => {
+        const user = userEvent.setup();
+        const linked = appTask("app-linked", "Linked app task", { completed_pomodoros: 1 });
+        const data = await renderSurface({
+            tasks: {
+                linked: pmTask({ id: "linked", title: "Linked task", appTaskId: linked.id, estimatePomos: 2, dueDate: todayKey() }),
+            },
+            appState: { tasks: { [linked.id]: linked } },
+        });
+        const finalizeSpy = vi.spyOn(data, "finalizeTask").mockRejectedValueOnce(new Error("Task not found"));
+        expandSurface();
+        await screen.findByText("1p left of 2p");
+
+        await user.click(screen.getByRole("button", { name: "Complete Linked task" }));
+
+        expect(await screen.findByRole("status")).toHaveTextContent("Couldn't finish “Linked task” on the timer.");
+        expect(finalizeSpy).toHaveBeenCalledWith(linked.id);
+        await waitFor(async () => {
+            expect((await data.loadPMState())?.tasks.linked.status).toBe("Done");
+        });
+        expect(data.store.state.tasks[linked.id].completed_at).toBeNull();
+    });
+});
