@@ -246,6 +246,7 @@ export const TimerPanel: React.FC = () => {
     const pmSelectedId = pmState.ui.selectedTaskId;
     const [detailsOpen, setDetailsOpen] = useState(false);
     const [todayDetailsTaskId, setTodayDetailsTaskId] = useState<string | null>(null);
+    const todaySelectionStateRef = useRef<{ done: boolean; archived: boolean } | null>(null);
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
     const resumeMemo = useOptionalResumeMemo();
@@ -351,11 +352,13 @@ export const TimerPanel: React.FC = () => {
 
     /** Quick action from the today surface: select the task and reveal its details. */
     const selectTaskFromToday = useCallback((taskId: string) => {
+        const task = pmState.tasks[taskId];
+        todaySelectionStateRef.current = { done: task?.status === "Done", archived: Boolean(task?.isArchived) };
         setSelectedTask(taskId);
         autoSelectedTaskRef.current = null;
         setTodayDetailsTaskId(taskId);
         setDetailsOpen(true);
-    }, [setSelectedTask]);
+    }, [setSelectedTask, pmState.tasks]);
 
     const handleToggleDetails = useCallback(() => {
         if (detailsOpen) {
@@ -381,7 +384,10 @@ export const TimerPanel: React.FC = () => {
     useEffect(() => {
         if (!todayDetailsTaskId) return;
         const task = pmState.tasks[todayDetailsTaskId];
-        if (task && task.status !== "Done" && !task.isArchived) return;
+        const previous = todaySelectionStateRef.current;
+        const next = { done: task?.status === "Done", archived: Boolean(task?.isArchived) };
+        todaySelectionStateRef.current = next;
+        if (task && !(next.done && !previous?.done) && !(next.archived && !previous?.archived)) return;
         setTodayDetailsTaskId(null);
         if (pmSelectedId === todayDetailsTaskId) setSelectedTask(null);
         if (!linkedTaskId && !activeAppTaskId && (!pmSelectedId || pmSelectedId === todayDetailsTaskId)) {

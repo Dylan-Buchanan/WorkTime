@@ -185,6 +185,91 @@ async function waitForPMSettled(loadSpy: ReturnType<typeof vi.spyOn>) {
     await waitFor(() => expect(loadSpy).toHaveBeenCalledTimes(2));
 }
 
+describe("ProjectManagerContext completion stamps", () => {
+    it("stamps updateTask Done, preserves title edits and reopening, and restamps re-completion", async () => {
+        const data = await workStartData();
+        const view = await renderWorkStart(data, { withoutBridge: true });
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            vi.setSystemTime(new Date("2026-08-12T08:00:00Z"));
+            await act(async () => view.current.pm.updateTask("pt1", { status: "Done" }));
+            const first = view.current.pm.state.tasks.pt1.completedAt;
+            expect(first).toBe("2026-08-12T08:00:00.000Z");
+            expect(view.current.pm.state.tasks.pt1.updatedAt).toBe(first);
+            vi.setSystemTime(new Date("2026-08-12T09:00:00Z"));
+            await act(async () => view.current.pm.updateTask("pt1", { title: "Edited Done task" }));
+            expect(view.current.pm.state.tasks.pt1.completedAt).toBe(first);
+            await act(async () => view.current.pm.updateTask("pt1", { status: "Backlog" }));
+            expect(view.current.pm.state.tasks.pt1.completedAt).toBe(first);
+            await act(async () => view.current.pm.updateTask("pt1", { status: "Done" }));
+            expect(view.current.pm.state.tasks.pt1.completedAt).toBe("2026-08-12T09:00:00.000Z");
+            await waitFor(async () => expect((await data.loadPMState())?.tasks.pt1.completedAt).toBe("2026-08-12T09:00:00.000Z"));
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("stamps only the moving task on moveTaskToStatus into Done", async () => {
+        const data = await workStartData();
+        const seed = (await data.loadPMState())!;
+        await data.savePMState({ ...seed, tasks: { ...seed.tasks, legacy: makePMTask({ id: "legacy", status: "Done" }) } });
+        const view = await renderWorkStart(data, { withoutBridge: true });
+        await act(async () => view.current.pm.moveTaskToStatus("pt1", "Done", 0));
+        const moving = view.current.pm.state.tasks.pt1;
+        expect(moving.status).toBe("Done");
+        expect(moving.completedAt).toBe(moving.updatedAt);
+        expect(Number.isNaN(Date.parse(moving.completedAt!))).toBe(false);
+        expect(view.current.pm.state.tasks.legacy.completedAt).toBeUndefined();
+    });
+
+    it("keeps an explicit completedAt in the updateTask patch", async () => {
+        const view = await renderWorkStart(await workStartData(), { withoutBridge: true });
+        const completedAt = "2026-08-11T20:00:00.000Z";
+        await act(async () => view.current.pm.updateTask("pt1", { status: "Done", completedAt }));
+        expect(view.current.pm.state.tasks.pt1.completedAt).toBe(completedAt);
+    });
+
+    it.each([undefined, "2026-08-11T20:00:00.000Z"])("stamps newly created Done tasks with caller stamp %s", async (completedAt) => {
+        const view = await renderWorkStart(await workStartData(), { withoutBridge: true });
+        await act(async () => { await view.current.pm.createTask("Created Done", { status: "Done", completedAt }); });
+        const stored = Object.values(view.current.pm.state.tasks).find((task) => task.title === "Created Done")!;
+        expect(stored.status).toBe("Done");
+        expect(stored.completedAt).toBe(completedAt ?? stored.updatedAt);
+    });
+
+    it.each([undefined, "2026-08-11T20:00:00.000Z"])("stamps the linked-dedupe creation branch with caller stamp %s", async (completedAt) => {
+        const data = await workStartData();
+        const view = await renderWorkStart(data, { withoutBridge: true });
+        const original = data.createTask.bind(data);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        let backendId!: string;
+        const create = vi.spyOn(data, "createTask").mockImplementation(async (...args) => {
+            const result = await original(...args);
+            backendId = result.value.id;
+            await gate;
+            return result;
+        });
+        let pending!: Promise<PMTask>;
+        act(() => { pending = view.current.pm.createTask("Deduped Done", { status: "Done", completedAt }); });
+        await waitFor(() => expect(create).toHaveBeenCalledOnce());
+        await waitFor(() => expect(backendId).toBeTruthy());
+        await act(async () => { view.current.pm.ensureMetadataForAppTask(backendId, { title: "Bridge metadata" }); });
+        await act(async () => { release(); await pending; });
+        const matches = Object.values(view.current.pm.state.tasks).filter((task) => task.appTaskId === backendId);
+        expect(matches).toHaveLength(1);
+        expect(matches[0].title).toBe("Deduped Done");
+        expect(matches[0].status).toBe("Done");
+        expect(matches[0].completedAt).toBe(completedAt ?? matches[0].updatedAt);
+    });
+
+    it("mirrors the backend completion timestamp into PM state", async () => {
+        const data = await workStartData();
+        const completedAt = "2026-08-12T08:00:00.000Z";
+        data.store.state.tasks.bt1.completed_at = completedAt;
+        const view = await renderWorkStart(data);
+        await waitFor(() => expect(view.current.pm.state.tasks.pt1).toMatchObject({ status: "Done", completedAt }));
+    });
+});
+
 describe("ProjectManagerContext", () => {
     it("hydrates a default state and persists only the local UI slice", async () => {
         const data = new InMemoryDataAccess(makeAppState());

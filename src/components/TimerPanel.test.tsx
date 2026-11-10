@@ -742,6 +742,18 @@ describe("TimerPanel projected finish", () => {
 });
 
 describe("TimerPanel today surface", () => {
+    it("selects an already-Done task from Done today and keeps its details panel open", async () => {
+        await renderWithTasks({ done: makePMTask({ id: "done", title: "Finished Today task", status: "Done", completedAt: new Date().toISOString() }) });
+        const todayRegion = screen.getByRole("region", { name: "Today" });
+        fireEvent.click(within(todayRegion).getByRole("button", { name: /Today/ }));
+        fireEvent.click(await within(todayRegion).findByRole("button", { name: "Done today (1)" }));
+        fireEvent.click(within(todayRegion).getByRole("button", { name: "Select Finished Today task" }));
+        await waitFor(() => expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("done"));
+        const details = document.getElementById("timer-task-details-panel")!;
+        expect(details).toHaveAttribute("aria-hidden", "false");
+        expect(within(details).getByText("Finished Today task")).toBeInTheDocument();
+    });
+
     it.each([
         ["Done", "Complete selected PM task"],
         ["archived", "Archive selected PM task"],

@@ -10,6 +10,7 @@ import {
     getLocalWeekWindow,
 } from "./timer";
 import {
+    buildTodayDone,
     buildTodayHabits,
     buildTodayOverview,
     buildTodayPomodoros,
@@ -195,10 +196,10 @@ describe("buildTodayTasks", () => {
         const result = buildTodayTasks({
             reference: REFERENCE,
             pmTasks: [
-                pmTask({ id: "archived", estimatePomos: 2, isArchived: true }),
-                pmTask({ id: "done", estimatePomos: 2, status: "Done" }),
-                pmTask({ id: "completed", estimatePomos: 2, appTaskId: completed.id }),
-                pmTask({ id: "no-estimate" }),
+                pmTask({ id: "archived", dueDate: "2026-08-12", estimatePomos: 2, isArchived: true }),
+                pmTask({ id: "done", dueDate: "2026-08-12", estimatePomos: 2, status: "Done" }),
+                pmTask({ id: "completed", dueDate: "2026-08-12", estimatePomos: 2, appTaskId: completed.id }),
+                pmTask({ id: "no-estimate", dueDate: "2026-08-12" }),
                 pmTask({ id: "kept", dueDate: "2026-08-12", estimatePomos: 1 }),
             ],
             backendTasks: { [completed.id]: completed },
@@ -393,6 +394,58 @@ describe("buildTodayTasks", () => {
         expect(result.tasks.map((task) => task.id)).toEqual([
             "wait-od", "wait-tw", "od-a", "od-b", "today-z", "tw-a1", "tw-a2", "tw-b",
         ]);
+    });
+});
+
+describe("buildTodayDone", () => {
+    const today = new Date(2026, 7, 12, 8).toISOString();
+    const yesterday = new Date(2026, 7, 11, 20).toISOString();
+
+    it.each<{ name: string; task: Partial<PMTask>; backend?: Partial<Task>; included: boolean }>([
+        { name: "unlinked Done today", task: { completedAt: today }, included: true },
+        { name: "unlinked Done yesterday", task: { completedAt: yesterday }, included: false },
+        { name: "linked Done without PM stamp", task: { appTaskId: "app-task" }, backend: { completed_at: today }, included: true },
+        { name: "linked pending finalize uses PM stamp", task: { appTaskId: "app-task", completedAt: today }, backend: { completed_at: null }, included: true },
+        { name: "backend yesterday wins over PM today", task: { appTaskId: "app-task", completedAt: today }, backend: { completed_at: yesterday }, included: false },
+        { name: "linked not Done despite backend completion", task: { appTaskId: "app-task", status: "In Progress" }, backend: { completed_at: today }, included: false },
+        { name: "legacy Done is never backfilled from updatedAt", task: { updatedAt: today }, included: false },
+        { name: "reopened Backlog with stale stamp", task: { status: "Backlog", completedAt: today }, included: false },
+        { name: "archived and Done counts once", task: { isArchived: true, completedAt: today }, included: true },
+        { name: "unparseable stamp", task: { completedAt: "not-a-date" }, included: false },
+        { name: "unparseable backend wins over valid PM stamp", task: { appTaskId: "app-task", completedAt: today }, backend: { completed_at: "not-a-date" }, included: false },
+        { name: "missing backend falls back to PM stamp", task: { appTaskId: "missing", completedAt: today }, included: true },
+    ])("$name", ({ task, backend, included }) => {
+        const entry = pmTask({ status: "Done", ...task });
+        const backendTasks: Record<string, Task> = backend ? { "app-task": backendTask(backend) } : {};
+        const input = { reference: REFERENCE, pmTasks: [entry, entry], backendTasks };
+        const before = structuredClone(input);
+        const result = buildTodayDone(input);
+        expect(result).toEqual(included ? [{
+            kind: "task", key: `task:${entry.id}`, id: entry.id, title: entry.title,
+            completedAt: backend?.completed_at || entry.completedAt, appTaskId: entry.appTaskId ?? null,
+        }] : []);
+        expect(input).toEqual(before);
+    });
+
+    it("sorts by completion instant descending then key ascending and falls back for empty titles", () => {
+        const early = new Date(2026, 7, 12, 7).toISOString();
+        const pmTasks = [
+            pmTask({ id: "old", status: "Done", completedAt: early }),
+            pmTask({ id: "z", status: "Done", completedAt: today }),
+            pmTask({ id: "a", status: "Done", completedAt: new Date(2026, 7, 12, 8).toString(), title: "" }),
+        ];
+        for (const tasks of [pmTasks, [...pmTasks].reverse()]) {
+            const result = buildTodayDone({ reference: REFERENCE, pmTasks: tasks, backendTasks: {} });
+            expect(result.map((entry) => entry.key)).toEqual(["task:a", "task:z", "task:old"]);
+            expect(result[0].title).toBe("Untitled task");
+        }
+    });
+
+    it("exposes done in buildTodayOverview", () => {
+        const input = { reference: REFERENCE, pmTasks: [pmTask({ status: "Done", completedAt: today })],
+            backendTasks: {}, projects: {}, habits: [], completions: [], logs: [] };
+        expect(buildTodayOverview(input).done).toEqual(buildTodayDone(input));
+        expect(buildTodayOverview(input).tasks).toEqual([]);
     });
 });
 

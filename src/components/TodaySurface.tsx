@@ -119,6 +119,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
     const habitContext = useHabits();
     const { play } = useSounds();
     const [expanded, setExpanded] = useState(false);
+    const [doneOpen, setDoneOpen] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
     const [startingTaskId, setStartingTaskId] = useState<string | null>(null);
 
@@ -176,7 +177,7 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
         }
     };
 
-    const { tasks, remainingPomodoros, habits, habitsCompleted, pomodoros } = overview;
+    const { tasks, done, remainingPomodoros, habits, habitsCompleted, pomodoros } = overview;
 
     return (
         <section className="relative w-full overflow-hidden rounded-xl border border-emerald-400/20 bg-neutral-900/75 text-left shadow-lg shadow-black/10" aria-label="Today">
@@ -237,6 +238,42 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
                             </ul>
                         )}
                     </div>
+
+                    {done.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                            <button
+                                type="button"
+                                aria-expanded={doneOpen}
+                                onClick={() => setDoneOpen((open) => !open)}
+                                className="flex w-full items-center justify-between gap-2 rounded text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+                            >
+                                <span>Done today ({done.length})</span>
+                                {doneOpen ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}
+                            </button>
+                            {doneOpen && (
+                                <ul className="space-y-1.5">
+                                    {done.map((entry) => (
+                                        <li key={entry.key} className="flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900/60 p-2">
+                                            <span aria-hidden className="grid h-5 w-5 shrink-0 place-items-center rounded border border-transparent bg-emerald-500 text-white">
+                                                <Check size={12} />
+                                            </span>
+                                            {entry.kind === "task" ? (
+                                                <button
+                                                    type="button"
+                                                    aria-label={`Select ${entry.title}`}
+                                                    onClick={() => onSelectTask(entry.id)}
+                                                    className="min-w-0 truncate rounded text-left text-[11px] text-neutral-400 line-through hover:text-neutral-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+                                                >{entry.title}</button>
+                                            ) : (
+                                                <span className="min-w-0 truncate text-[11px] text-neutral-400 line-through">{entry.title}</span>
+                                            )}
+                                            {/* Pending completion hint slot, filled by the finalize lane. */}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    )}
 
                     <div className="mt-4 space-y-2">
                         <GroupHeading count={habits.length > 0 ? `${habitsCompleted}/${habits.length} done` : undefined}>Habits</GroupHeading>

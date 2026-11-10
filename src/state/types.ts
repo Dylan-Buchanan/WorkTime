@@ -50,6 +50,7 @@ export interface PMTask {
     timeSpentMinutes: number;
     workedPomos?: number; // derived from timer logs (completed work minutes / 25)
     lastWorkedAt?: string; // ISO
+    completedAt?: string; // ISO; stamped when the task transitions into Done
     description?: string; // markdown
     tags: string[];
     links: string[]; // urls
