@@ -1165,6 +1165,409 @@ describe("AppStateContext", () => {
 });
 
 
+describe("deferred finalize", () => {
+    const W = "2026-11-09T14:00:00.000Z";
+    const at = (minutes: number) => new Date(Date.parse(W) + minutes * 60_000).toISOString();
+    const time = (minutes: number) => vi.setSystemTime(new Date(at(minutes)));
+    beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); time(0); sound.play.mockClear(); });
+    afterEach(() => vi.useRealTimers());
+
+    async function mount(data: ContextFakeDataAccess) {
+        const events: TimerTransitionEvent[] = [];
+        let current!: ReturnType<typeof useAppState>;
+        function Capture() {
+            current = useAppState();
+            const subscribe = current.subscribeTimerTransitions;
+            useLayoutEffect(() => subscribe(event => events.push(event)), [subscribe]);
+            return null;
+        }
+        const view = render(wrap(data, <Capture />));
+        await waitFor(() => expect(current.state).not.toBeNull());
+        return { data, events, app: () => current, ...view };
+    }
+
+    async function setup(kind: "Work" | "ShortBreak" | null = "Work") {
+        let logId = 0;
+        const data = new ContextFakeDataAccess(makeAppState({
+            tasks: Object.fromEntries(["A", "B", "C"].map(id => [id, {
+                id, name: id, target_pomodoros: 4, completed_pomodoros: 0,
+                created_at: W, completed_at: null, break_skips: 0, archived: false,
+            }])), active_task: "A",
+        }), { createLogId: () => `deferred-log-${++logId}` });
+        if (kind === "Work") await data.startWorkTimer();
+        if (kind === "ShortBreak") await data.startBreakTimer();
+        return mount(data);
+    }
+
+    it("defers the running Work owner without touching its timer or backend task", async () => {
+        const c = await setup();
+        const timer = structuredClone(c.app().state!.timer);
+        const finalize = vi.spyOn(c.data, "finalizeTask");
+        await act(async () => { expect(await c.app().requestFinalize("A")).toBe("deferred"); });
+        expect(c.app().state?.timer).toEqual(timer);
+        expect(c.app().state?.timer).toMatchObject({ kind: "Work", task_id: "A", paused: false, window_started_at: W });
+        expect(c.data.store.state.tasks.A).toMatchObject({ completed_at: null, archived: false });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(finalize).not.toHaveBeenCalled();
+        expect(c.events).toEqual([]);
+    });
+
+    it("immediately finalizes a non-owner and leaves the running Work window untouched", async () => {
+        const c = await setup();
+        const timer = structuredClone(c.app().state!.timer);
+        time(3);
+        await act(async () => { expect(await c.app().requestFinalize("B")).toBe("finalized"); });
+        expect(c.data.store.state.tasks.B).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().state?.tasks.B).toEqual(c.data.store.state.tasks.B);
+        expect(c.app().state?.timer).toEqual(timer);
+        expect(c.data.store.state.timer).toEqual(timer);
+        expect(c.app().state?.active_task).toBe("A");
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.logs).toEqual([]);
+    });
+
+    it("keeps one queue entry for simultaneous requests through a retained callback", async () => {
+        const c = await setup();
+        const request = c.app().requestFinalize;
+        await act(async () => {
+            expect(await Promise.all([request("A"), request("A")])).toEqual(["deferred", "deferred"]);
+        });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(c.data.store.state.tasks.A.completed_at).toBeNull();
+    });
+
+    it("rejects an immediate finalize failure and leaves the queue empty", async () => {
+        const c = await setup();
+        await act(async () => { await expect(c.app().requestFinalize("missing")).rejects.toThrow("Task not found"); });
+        expect(c.app().error).toBe("Task not found");
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.timer).toMatchObject({ kind: "Work", task_id: "A" });
+    });
+
+    it.each(["tick", "completeTimer", "reconciliation"] as const)(
+        "logs Work and opens the break before flushing on %s, then never restarts the finalized task", async completion => {
+            const c = await setup();
+            await act(async () => { await c.app().requestFinalize("A"); });
+            const finalize = c.data.finalizeTask.bind(c.data);
+            const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+                expect(c.data.store.state.timer).toMatchObject({ kind: "ShortBreak", task_id: "A" });
+                expect(c.data.store.state.logs).toEqual([expect.objectContaining({
+                    task_id: "A", duration_minutes: 25, was_break: false, work_window_id: W,
+                })]);
+                expect(c.data.store.state.tasks.A.completed_at).toBeNull();
+                return finalize(id);
+            });
+            const startWork = vi.spyOn(c.data, "startWorkTimer");
+            time(25);
+            if (completion === "completeTimer") await act(async () => { await c.app().completeTimer(); });
+            if (completion === "reconciliation") await act(async () => { await c.app().refresh(); });
+            await waitFor(() => expect(c.app().state?.tasks.A.completed_at).toBe(at(25)), { timeout: 2500 });
+            expect(c.app().state?.timer?.kind).toBe("ShortBreak");
+            expect(c.app().state?.tasks.A.archived).toBe(true);
+            expect(c.app().state?.active_task).toBeNull();
+            expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+            expect(finalizeSpy).toHaveBeenCalledExactlyOnceWith("A");
+            expect(c.events).toEqual([]);
+            time(30);
+            await act(async () => { await c.app().completeTimer(); });
+            expect(c.app().state?.timer).toBeNull();
+            expect(startWork).not.toHaveBeenCalled();
+            expect(c.app().state?.logs).toHaveLength(2);
+            expect(c.app().error).toBeNull();
+        });
+
+    it("logs elapsed work before stopWork flushes the owner", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        const finalize = c.data.finalizeTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            expect(c.data.store.state.timer).toBeNull();
+            expect(c.data.store.state.logs).toEqual([expect.objectContaining({
+                task_id: "A", duration_minutes: 3, was_break: false, work_window_id: W,
+            })]);
+            expect(c.data.store.state.tasks.A.completed_at).toBeNull();
+            expect(c.events).toEqual([{ type: "leave", taskId: "A", reason: "stop", at: at(3), windowId: W }]);
+            return finalize(id);
+        });
+        time(3);
+        await act(async () => { await c.app().stopWork(); });
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true, completed_pomodoros: 3 / 25 });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(finalizeSpy).toHaveBeenCalledExactlyOnceWith("A");
+        expect(c.app().error).toBeNull();
+    });
+
+    it.each(["startTaskWork", "setActiveTask"] as const)("logs the outgoing task before %s flushes after a join", async command => {
+        const c = await setup();
+        const timer = structuredClone(c.app().state!.timer!);
+        await act(async () => { await c.app().requestFinalize("A"); });
+        const finalize = c.data.finalizeTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            expect(c.data.store.state.timer).toMatchObject({ task_id: "B", window_started_at: W, ends_at: timer.ends_at });
+            expect(c.data.store.state.logs).toEqual([expect.objectContaining({
+                task_id: "A", duration_minutes: 3, was_break: false, work_window_id: W,
+            })]);
+            expect(c.data.store.state.tasks.A.completed_at).toBeNull();
+            expect(c.events).toEqual([
+                { type: "leave", taskId: "A", reason: "switch", at: at(3), windowId: W },
+                { type: "enter", taskId: "B", reason: "switch", at: at(3), windowId: W, fromTaskId: "A" },
+            ]);
+            return finalize(id);
+        });
+        time(3);
+        await act(async () => {
+            const result = await c.app()[command]("B");
+            if (command === "startTaskWork") expect(result).toBe("joined");
+        });
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true, completed_pomodoros: 3 / 25 });
+        expect(c.app().state?.timer).toMatchObject({ kind: "Work", task_id: "B", window_started_at: W, ends_at: timer.ends_at });
+        expect(c.app().state?.active_task).toBe("B");
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(finalizeSpy).toHaveBeenCalledExactlyOnceWith("A");
+        expect(c.app().error).toBeNull();
+    });
+
+    it("keeps a paused Work owner pending through pause, resume, and another request", async () => {
+        const c = await setup();
+        const finalize = vi.spyOn(c.data, "finalizeTask");
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(3);
+        await act(async () => { await c.app().pauseTimer(); });
+        expect(c.app().state?.timer).toMatchObject({ kind: "Work", task_id: "A", paused: true, window_started_at: W });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(c.data.store.state.tasks.A.completed_at).toBeNull();
+        await act(async () => { await c.app().resumeTimer(); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        await act(async () => { await c.app().pauseTimer(); });
+        await act(async () => { expect(await c.app().requestFinalize("A")).toBe("deferred"); });
+        expect(finalize).not.toHaveBeenCalled();
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+    });
+
+    it("also defers a task first requested while its Work window is paused", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().pauseTimer(); });
+        const timer = structuredClone(c.app().state!.timer);
+        await act(async () => { expect(await c.app().requestFinalize("A")).toBe("deferred"); });
+        expect(c.app().state?.timer).toEqual(timer);
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(c.data.store.state.tasks.A.completed_at).toBeNull();
+    });
+
+    it.each(["finalized", "deleted"] as const)("drops an already %s pending task without double-applying or setting an error", async terminal => {
+        const c = await setup();
+        const finalize = vi.spyOn(c.data, "finalizeTask");
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(3);
+        await act(async () => {
+            if (terminal === "finalized") await c.app().finalizeTask("A");
+            else {
+                await c.data.deleteTask("A");
+                await c.app().refresh();
+            }
+        });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        time(4);
+        await act(async () => { await c.app().setActiveTask("B"); });
+        if (terminal === "finalized") {
+            expect(c.data.store.state.tasks.A.completed_at).toBe(at(3));
+            expect(finalize).toHaveBeenCalledExactlyOnceWith("A");
+        } else {
+            expect(c.app().state?.tasks.A).toBeUndefined();
+            expect(finalize).not.toHaveBeenCalled();
+        }
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().error).toBeNull();
+    });
+
+    it("replays a reconciliation queued while progression is awaiting a pending finalize", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        const finalize = c.data.finalizeTask.bind(c.data);
+        let release!: () => void;
+        let committed!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const committedGate = new Promise<void>(resolve => { committed = resolve; });
+        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            const result = await finalize(id);
+            committed();
+            await gate;
+            return result;
+        });
+        const complete = vi.spyOn(c.data, "completeTimer");
+        const breaks = vi.spyOn(c.data, "startBreakTimer");
+        const startWork = vi.spyOn(c.data, "startWorkTimer");
+        time(25);
+        await act(async () => {
+            const progression = c.app().completeTimer();
+            await committedGate;
+            expect(c.data.store.state.timer?.kind).toBe("ShortBreak");
+            time(30);
+            // fetchState reconciles the expired break and refresh queues its
+            // notice behind the still-running Work progression.
+            await c.app().refresh();
+            expect(c.data.store.state.timer).toBeNull();
+            expect(sound.play.mock.calls.map(([kind]) => kind)).toEqual(["pomodoroFinish"]);
+            release();
+            await progression;
+        });
+        await waitFor(() => expect(sound.play.mock.calls.map(([kind]) => kind)).toEqual(["pomodoroFinish", "breakOver"]));
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(breaks).toHaveBeenCalledOnce();
+        expect(startWork).not.toHaveBeenCalled();
+        expect(finalizeSpy).toHaveBeenCalledExactlyOnceWith("A");
+        expect(c.app().state?.timer).toBeNull();
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(25), archived: true });
+        expect(c.app().state?.logs.map(log => log.was_break)).toEqual([false, true]);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().error).toBeNull();
+        expect(c.events).toEqual([]);
+    });
+
+    it.each(["stopWork", "setActiveTask", "startTaskWork", "completeTimer"] as const)(
+        "publishes exactly the same events for %s with and without a pending finalize", async command => {
+            const run = async (pending: boolean) => {
+                time(0);
+                const c = await setup();
+                if (pending) await act(async () => { await c.app().requestFinalize("A"); });
+                time(command === "completeTimer" ? 25 : 3);
+                await act(async () => {
+                    if (command === "setActiveTask" || command === "startTaskWork") await c.app()[command]("B");
+                    else await c.app()[command]();
+                });
+                expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+                if (pending) expect(c.app().state?.tasks.A.archived).toBe(true);
+                c.unmount();
+                return c.events;
+            };
+            expect(await run(true)).toEqual(await run(false));
+        });
+
+    it("removes all claimed ids before awaiting finalize and prevents overlapping flushes from applying them twice", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(1);
+        await act(async () => {
+            await c.data.setActiveTask("B");
+            await c.app().refresh(); // A revision can move ownership without a command flush.
+            await c.app().requestFinalize("B");
+        });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A", "B"]);
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        const finalize = c.data.finalizeTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            if (id === "A") { entered(); await gate; }
+            return finalize(id);
+        });
+        let switchTask!: Promise<void>;
+        time(3);
+        await act(async () => { switchTask = c.app().setActiveTask("C"); await enteredGate; });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(finalizeSpy.mock.calls).toEqual([["A"]]);
+        await act(async () => { await c.app().setActiveTask("C"); });
+        expect(finalizeSpy.mock.calls).toEqual([["A"]]);
+        await act(async () => { release(); await switchTask; });
+        expect(finalizeSpy.mock.calls).toEqual([["A"], ["B"]]);
+        expect(c.app().state?.tasks.A.archived).toBe(true);
+        expect(c.app().state?.tasks.B.archived).toBe(true);
+        expect(c.app().error).toBeNull();
+    });
+
+    it("continues flushing sequentially after a finalize error without rethrowing or retrying the claimed id", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(1);
+        await act(async () => {
+            await c.data.setActiveTask("B"); await c.app().refresh(); await c.app().requestFinalize("B");
+        });
+        const finalize = c.data.finalizeTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            if (id === "A") throw new Error("finalize storage failed");
+            return finalize(id);
+        });
+        time(3);
+        await act(async () => { await c.app().setActiveTask("C"); });
+        expect(finalizeSpy.mock.calls).toEqual([["A"], ["B"]]);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.tasks.A.completed_at).toBeNull();
+        expect(c.app().state?.tasks.B).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().error).toBe("finalize storage failed");
+        await act(async () => { await c.app().setActiveTask("C"); });
+        expect(finalizeSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the owner queued after a failed stopWork", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        vi.spyOn(c.data, "stopWorkTimer").mockRejectedValue(new Error("stop failed"));
+        const finalize = vi.spyOn(c.data, "finalizeTask");
+        await act(async () => { await c.app().stopWork(); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(c.app().state?.tasks.A.completed_at).toBeNull();
+        expect(c.app().state?.timer?.task_id).toBe("A");
+        expect(finalize).not.toHaveBeenCalled();
+        expect(c.app().error).toBe("stop failed");
+    });
+
+    it("does not flush after setActiveTask rejects", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(1);
+        await act(async () => { await c.data.setActiveTask("B"); await c.app().refresh(); });
+        const finalize = vi.spyOn(c.data, "finalizeTask");
+        await act(async () => { await expect(c.app().setActiveTask("missing")).rejects.toThrow("Task not found"); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        expect(finalize).not.toHaveBeenCalled();
+        expect(c.app().state?.tasks.A.completed_at).toBeNull();
+    });
+
+    it("flushes after startTaskWork starts from a free timer slot", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(3);
+        await act(async () => { await c.data.stopWorkTimer(); await c.app().refresh(); });
+        const finalize = c.data.finalizeTask.bind(c.data);
+        const finalizeSpy = vi.spyOn(c.data, "finalizeTask").mockImplementation(async id => {
+            expect(c.events).toEqual([{ type: "enter", taskId: "B", reason: "start", at: at(3), windowId: at(3) }]);
+            expect(c.data.store.state.timer).toMatchObject({ kind: "Work", task_id: "B", window_started_at: at(3) });
+            return finalize(id);
+        });
+        await act(async () => { expect(await c.app().startTaskWork("B")).toBe("started"); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
+        expect(finalizeSpy).toHaveBeenCalledExactlyOnceWith("A");
+    });
+
+    it("keeps the queue memory-only and loses it when the provider remounts", async () => {
+        const c = await setup();
+        const storage = { ...localStorage };
+        const backend = structuredClone(c.data.store);
+        await act(async () => { await c.app().requestFinalize("A"); });
+        expect({ ...localStorage }).toEqual(storage);
+        expect(c.data.store).toEqual(backend);
+        c.unmount();
+        const remounted = await mount(c.data);
+        expect(remounted.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(remounted.app().state?.tasks.A.completed_at).toBeNull();
+        expect(remounted.app().state?.timer).toMatchObject({ kind: "Work", task_id: "A", window_started_at: W });
+    });
+
+    it("empties the queue on resetAll", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        const finalize = vi.spyOn(c.data, "finalizeTask");
+        await act(async () => { await c.app().resetAll(); });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.app().state?.tasks).toEqual({});
+        expect(c.app().state?.timer).toBeNull();
+        expect(finalize).not.toHaveBeenCalled();
+    });
+});
+
 describe("task work window joins", () => {
     async function setupWindow(kind: "Work" | "ShortBreak" | null) {
         let clock = new Date();

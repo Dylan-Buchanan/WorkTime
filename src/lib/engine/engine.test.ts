@@ -233,6 +233,39 @@ describe("task lifecycle commands", () => {
     });
 });
 
+describe("deferred finalize safety", () => {
+    it.each(["t1", "t2", null])("leaves another task's Work timer and logs unchanged with active_task=%s", activeTask => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.active_task = activeTask;
+        state.timer = timer({ task_id: "t2", window_started_at: T0.toISOString() });
+        const before = structuredClone(state);
+
+        const result = finalizeTask(state, "t1", at(600), "unused-finalize-log");
+
+        expect(result.state.timer).toEqual(before.timer);
+        expect(result.state.logs).toEqual(before.logs);
+        expect(result.state.tasks.t1).toMatchObject({ completed_at: at(600).toISOString(), archived: true });
+        expect(result.state.tasks.t2).toEqual(before.tasks.t2);
+        expect(result.state.active_task).toBe(activeTask === "t1" ? null : activeTask);
+        expect(state).toEqual(before);
+    });
+
+    it.each(["ShortBreak", "LongBreak"] as const)("finalizes the owner without changing any field of its %s timer", kind => {
+        const state = stateWithTask();
+        state.timer = timer({ kind, planned_secs: 300, ends_at: at(300).toISOString() });
+        const before = structuredClone(state);
+
+        const result = finalizeTask(state, "t1", at(100), "unused-break-finalize-log");
+
+        expect(result.state.timer).toEqual(before.timer);
+        expect(result.state.logs).toEqual(before.logs);
+        expect(result.state.tasks.t1).toMatchObject({ completed_at: at(100).toISOString(), archived: true });
+        expect(result.state.active_task).toBeNull();
+        expect(state).toEqual(before);
+    });
+});
+
 describe("timer lifecycle commands", () => {
     it("starts work and resets an expired cycle at the equality boundary", () => {
         const state = stateWithTask();
