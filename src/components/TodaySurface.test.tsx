@@ -5,6 +5,7 @@ import { TodaySurface } from "./TodaySurface";
 import { AppStateProvider, useAppState } from "../state/AppStateContext";
 import { DataProvider } from "../state/DataContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
+import { StateSyncBridge } from "../state/StateSyncBridge";
 import { HabitProvider } from "../state/HabitContext";
 import { TodoProvider } from "../state/TodoContext";
 import type { Todo, TodoCompletion } from "../lib/todos/types";
@@ -168,6 +169,45 @@ function surfaceTodo(overrides: Partial<Todo> = {}): Todo {
 }
 
 describe("Today to-do group", () => {
+    it("shows exactly one Done today entry after a focused to-do completes with the real StateSyncBridge", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 12, 9));
+        try {
+            const data = new InMemoryDataAccess(makeAppState());
+            await data.saveTodos([surfaceTodo()], []);
+            render(<TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId={OWNER}>
+                <AppStateProvider><ProjectManagerProvider><HabitProvider><TodoProvider>
+                    <StateSyncBridge />
+                    <TodaySurface onSelectTask={() => {}} />
+                </TodoProvider></HabitProvider></ProjectManagerProvider></AppStateProvider>
+            </SyncProvider></DataProvider></TauriCloseProvider>);
+            expandSurface();
+            fireEvent.click(await screen.findByRole("button", { name: "Start focus on Agenda to-do" }));
+            await waitFor(() => expect(data.store.state.timer?.kind).toBe("Work"));
+            const timer = structuredClone(data.store.state.timer!);
+            await waitFor(async () => {
+                const mirrors = Object.values((await data.loadPMState())?.tasks ?? {}).filter(task => task.appTaskId === timer.task_id);
+                expect(mirrors).toHaveLength(1);
+            });
+            fireEvent.click(screen.getByRole("button", { name: "Complete Agenda to-do" }));
+            const toggle = await screen.findByRole("button", { name: "Done today (1)" });
+            fireEvent.click(toggle);
+            await screen.findByText("finishing after this pomodoro");
+            expect(data.store.state.timer).toEqual(timer);
+            vi.setSystemTime(new Date(timer.ends_at));
+            await waitFor(() => expect(data.store.state.tasks[timer.task_id]).toMatchObject({ archived: true, completed_at: null }), { timeout: 2500 });
+            await waitFor(() => expect(screen.queryByText("finishing after this pomodoro")).not.toBeInTheDocument());
+            expect(screen.getAllByRole("button", { name: /^Done today/ })).toHaveLength(1);
+            expect(screen.getByRole("button", { name: "Done today (1)" })).toBeInTheDocument();
+            const doneList = within(toggle.parentElement!).getByRole("list");
+            expect(within(doneList).getAllByText("Agenda to-do", { exact: true })).toHaveLength(1);
+            expect((await data.loadTodos()).completions).toHaveLength(1);
+            const mirror = Object.values((await data.loadPMState())!.tasks).find(task => task.appTaskId === timer.task_id)!;
+            expect(mirror.status).not.toBe("Done");
+            expect(data.store.state.timer).toMatchObject({ kind: "ShortBreak", task_id: timer.task_id });
+        } finally { vi.useRealTimers(); }
+    });
+
     it("renders between Tasks and Habits, with an overdue checkbox that completes through the to-do path without focus or selection", async () => {
         const play = vi.fn();
         const sounds = vi.spyOn(soundHooks, "useSounds").mockReturnValue({ play });

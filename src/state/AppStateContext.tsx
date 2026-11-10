@@ -11,6 +11,8 @@ import type { ReconciledTimer } from "../lib/data/DataAccess";
 import type { TimerTransitionEvent } from "./timerTransitions";
 
 type CompletionNotice = ReconciledTimer & { windowId?: string };
+type FinalizeMode = "finalize" | "archive";
+type PendingFinalize = { id: string; mode: FinalizeMode };
 type PauseEpisode = {
     taskId: string; windowId: string; at: string; handoff: boolean;
     accumulatedSecs: ActiveTimer["accumulated_secs"];
@@ -84,7 +86,7 @@ interface AppContextShape {
     error: string | null;
     finalizeTask: (id: string) => Promise<void>;
     /** Finalize now, or queue it when `taskId` owns the current Work window. Memory-only. */
-    requestFinalize: (taskId: string) => Promise<"finalized" | "deferred">;
+    requestFinalize: (taskId: string, options?: { mode?: "finalize" | "archive" }) => Promise<"finalized" | "deferred">;
     /** Backend task ids awaiting a deferred finalize, in enqueue order. Memory-only. */
     pendingFinalizeTaskIds: readonly string[];
     archiveTask: (id: string) => Promise<void>;
@@ -109,8 +111,10 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const [state, setState] = useState<AppStateData | null>(null);
     const [tick, setTick] = useState(0);
     const [error, setError] = useState<string | null>(null);
-    const pendingFinalizeRef = useRef<string[]>([]);
+    const pendingFinalizeRef = useRef<PendingFinalize[]>([]);
     const inFlightFinalizeRef = useRef(new Set<string>());
+    const finalizeRunRef = useRef<Promise<void> | null>(null);
+    const reflushRef = useRef(false);
     const [pendingFinalizeTaskIds, setPendingFinalizeTaskIds] = useState<readonly string[]>([]);
     const progressing = useRef(false);
     const lastNotifiedWindowRef = useRef<string | null>(null);
@@ -205,34 +209,48 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } catch { /* notifications are optional */ }
     }, []);
 
-    const flushPendingFinalizes = useCallback(async () => {
-        const { flush, keep } = partitionPendingFinalizes(
-            pendingFinalizeRef.current, stateRef.current?.timer ?? null, stateRef.current?.tasks ?? {},
-        );
-        // Claim every flushed/dropped id before awaiting any command, so another
-        // flush cannot apply it again while the first command is in flight.
-        pendingFinalizeRef.current = keep;
-        setPendingFinalizeTaskIds(keep);
-        for (const id of flush) inFlightFinalizeRef.current.add(id);
-        for (const id of flush) {
-            try {
-                const result = await data.finalizeDeferredTask(id);
-                if (result.value === "finalized") {
-                    commandAdoptionSeqRef.current += 1;
-                    stateRef.current = result.state;
-                    setState(result.state);
-                    reconcilePauseEpisode(result.state.timer);
-                } else if (result.value === "owner" && !pendingFinalizeRef.current.includes(id)) {
-                    const pending = [...pendingFinalizeRef.current, id];
-                    pendingFinalizeRef.current = pending;
-                    setPendingFinalizeTaskIds(pending);
-                }
-            } catch (err: any) {
-                setError(err?.message || err?.toString?.() || "Unknown error");
-            } finally {
-                inFlightFinalizeRef.current.delete(id);
-            }
+    const flushPendingFinalizes = useCallback((): Promise<void> => {
+        if (finalizeRunRef.current) {
+            reflushRef.current = true;
+            return finalizeRunRef.current;
         }
+        const run = async () => {
+            do {
+                reflushRef.current = false;
+                const queued = pendingFinalizeRef.current;
+                const { flush, keep } = partitionPendingFinalizes(
+                    queued.map(entry => entry.id), stateRef.current?.timer ?? null, stateRef.current?.tasks ?? {},
+                );
+                const claimed = flush.map(id => queued.find(entry => entry.id === id)!);
+                // Claim the whole pass synchronously, preserving each entry's mode.
+                pendingFinalizeRef.current = queued.filter(entry => keep.includes(entry.id));
+                setPendingFinalizeTaskIds(keep);
+                for (const { id } of claimed) inFlightFinalizeRef.current.add(id);
+                for (const entry of claimed) {
+                    const { id, mode } = entry;
+                    try {
+                        const result = await (mode === "archive" ? data.archiveDeferredTask(id) : data.finalizeDeferredTask(id));
+                        if (result.value === "finalized") {
+                            commandAdoptionSeqRef.current += 1;
+                            stateRef.current = result.state;
+                            setState(result.state);
+                            reconcilePauseEpisode(result.state.timer);
+                        } else if (result.value === "owner" && !pendingFinalizeRef.current.some(pending => pending.id === id)) {
+                            const pending = [...pendingFinalizeRef.current, entry];
+                            pendingFinalizeRef.current = pending;
+                            setPendingFinalizeTaskIds(pending.map(item => item.id));
+                        }
+                    } catch (err: any) {
+                        setError(err?.message || err?.toString?.() || "Unknown error");
+                    } finally {
+                        inFlightFinalizeRef.current.delete(id);
+                    }
+                }
+            } while (reflushRef.current);
+        };
+        const active = run().finally(() => { finalizeRunRef.current = null; });
+        finalizeRunRef.current = active;
+        return active;
     }, [data, reconcilePauseEpisode]);
 
     const runProgression = useCallback(async (finishedTimer?: ActiveTimer, reconciliation?: { timer: CompletionNotice; state: AppStateData }) => {
@@ -329,12 +347,13 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         try {
             const result = await fetchAndSetState();
             if (result.reconciledTimer) await runProgression(undefined, { timer: result.reconciledTimer, state: result.state });
+            if (pendingFinalizeRef.current.length || inFlightFinalizeRef.current.size) await flushPendingFinalizes();
             return result.state;
         } catch (err: any) {
             setError(err?.message || err?.toString?.() || "Unknown error");
             throw err;
         }
-    }, [fetchAndSetState, runProgression]);
+    }, [fetchAndSetState, runProgression, flushPendingFinalizes]);
 
     // Read the staged local view on mount and after every same-tab or cross-tab
     // write (revision bump). SyncProvider owns the focus/visibility/pagehide
@@ -507,20 +526,30 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
     const finalizeTask = (id: string) => {
-        const pending = pendingFinalizeRef.current.filter(taskId => taskId !== id);
+        const pending = pendingFinalizeRef.current.filter(entry => entry.id !== id);
         pendingFinalizeRef.current = pending;
-        setPendingFinalizeTaskIds(pending);
+        setPendingFinalizeTaskIds(pending.map(entry => entry.id));
         return adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
     };
-    const requestFinalize = async (taskId: string): Promise<"finalized" | "deferred"> => {
-        if (pendingFinalizeRef.current.includes(taskId) || inFlightFinalizeRef.current.has(taskId)) return "deferred";
-        if (ownsWorkWindow(stateRef.current?.timer, taskId)) {
-            const pending = [...pendingFinalizeRef.current, taskId];
-            pendingFinalizeRef.current = pending;
-            setPendingFinalizeTaskIds(pending);
+    const requestFinalize = async (taskId: string, options?: { mode?: "finalize" | "archive" }): Promise<"finalized" | "deferred"> => {
+        const mode = options?.mode ?? "finalize";
+        const queued = pendingFinalizeRef.current.find(entry => entry.id === taskId);
+        if (queued) {
+            if (mode === "finalize" && queued.mode === "archive") {
+                pendingFinalizeRef.current = pendingFinalizeRef.current.map(entry => entry.id === taskId ? { ...entry, mode } : entry);
+                setPendingFinalizeTaskIds(pendingFinalizeRef.current.map(entry => entry.id));
+            }
             return "deferred";
         }
-        await adoptResult(() => adoptTaskTransition(() => data.finalizeTask(taskId)), true);
+        if (inFlightFinalizeRef.current.has(taskId)) return "deferred";
+        if (ownsWorkWindow(stateRef.current?.timer, taskId)) {
+            const pending = [...pendingFinalizeRef.current, { id: taskId, mode }];
+            pendingFinalizeRef.current = pending;
+            setPendingFinalizeTaskIds(pending.map(entry => entry.id));
+            return "deferred";
+        }
+        if (mode === "archive") await archiveTask(taskId);
+        else await adoptResult(() => adoptTaskTransition(() => data.finalizeTask(taskId)), true);
         return "finalized";
     };
     const archiveTask = async (id: string) => {

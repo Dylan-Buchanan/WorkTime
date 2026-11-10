@@ -40,6 +40,30 @@ function HC(id: string, habitId: string, overrides: Partial<HabitCompletion> = {
 }
 
 describe("InMemoryDataAccess", () => {
+    it.each([false, true])("deferred archive preserves the stored Work owner when paused is %s", async paused => {
+        const data = new InMemoryDataAccess(undefined, { now: () => new Date("2026-01-01T00:03:00.000Z") });
+        const task = (await data.createTask("Owner", 2)).value;
+        await data.setActiveTask(task.id);
+        await data.startWorkTimer();
+        if (paused) await data.pauseTimer();
+        const before = structuredClone(data.store.state);
+        expect(await data.archiveDeferredTask(task.id)).toEqual({ state: before, value: "owner" });
+        expect(data.store.state).toEqual(before);
+    });
+
+    it("deferred archive archives a non-owner without completing it or changing the Work timer", async () => {
+        const data = new InMemoryDataAccess();
+        const owner = (await data.createTask("Owner", 2)).value;
+        const other = (await data.createTask("Other", 2)).value;
+        await data.setActiveTask(owner.id);
+        await data.startWorkTimer();
+        const before = structuredClone(data.store.state);
+        const result = await data.archiveDeferredTask(other.id);
+        expect(result.value).toBe("finalized");
+        expect(data.store.state).toEqual({ ...before, tasks: { ...before.tasks, [other.id]: { ...other, archived: true } } });
+        expect(result.state).toEqual(data.store.state);
+    });
+
     it.each([false, true])("deferred finalize preserves the stored Work owner when paused is %s", async paused => {
         const data = new InMemoryDataAccess(undefined, { now: () => new Date("2026-01-01T00:03:00.000Z") });
         const task = (await data.createTask("Owner", 2)).value;

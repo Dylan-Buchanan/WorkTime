@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ActiveTimer, Task } from "../../state/types";
+import type { ActiveTimer, AppStateData, Task } from "../../state/types";
 import { ownsWorkWindow, partitionPendingFinalizes } from "./pendingFinalize";
 import { finalizeDeferredTask } from "./pendingFinalize";
+import { archiveDeferredTask } from "./pendingFinalize";
 import { defaultAppState } from "./core";
 import { finalizeTask } from "./taskCommands";
 
@@ -17,6 +18,39 @@ const tasks: Readonly<Record<string, Task>> = Object.fromEntries(
         created_at: W, completed_at: id === "d" ? W : null, break_skips: 0, archived: false,
     }]),
 );
+
+describe("archiveDeferredTask", () => {
+    const initial = (timer: ActiveTimer = work): AppStateData => ({
+        ...defaultAppState(), tasks: { ...structuredClone(tasks), c: { ...tasks.c, archived: true } },
+        active_task: "a", timer: { ...timer },
+    });
+
+    it.each(["missing", "c", "d"])("skips missing, archived or completed task %s without changing state or input", id => {
+        const state = initial({ ...work, task_id: id });
+        const before = structuredClone(state);
+        expect(archiveDeferredTask(state, id)).toEqual({ state: before, value: "skipped" });
+        expect(state).toEqual(before);
+    });
+
+    it.each([false, true])("preserves the Work owner and input when paused is %s", paused => {
+        const state = initial({ ...work, paused });
+        const before = structuredClone(state);
+        expect(archiveDeferredTask(state, "a")).toEqual({ state: before, value: "owner" });
+        expect(state).toEqual(before);
+    });
+
+    it.each(["Work", "ShortBreak", "LongBreak"] as const)("archives safely during %s without changing timer, selection or input", kind => {
+        const state = initial({ ...work, kind, task_id: kind === "Work" ? "b" : "a" });
+        const before = structuredClone(state);
+        const result = archiveDeferredTask(state, "a");
+        expect(result.value).toBe("finalized");
+        expect(result.state).toEqual({ ...before, tasks: { ...before.tasks, a: { ...before.tasks.a, archived: true } } });
+        expect(result.state.tasks.a.completed_at).toBeNull();
+        expect(result.state.timer).toEqual(before.timer);
+        expect(result.state.active_task).toBe(before.active_task);
+        expect(state).toEqual(before);
+    });
+});
 
 describe("finalizeDeferredTask", () => {
     const now = new Date("2026-11-09T14:03:00.000Z");

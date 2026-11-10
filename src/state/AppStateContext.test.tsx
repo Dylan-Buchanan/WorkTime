@@ -1199,6 +1199,127 @@ describe("deferred finalize", () => {
         return mount(data);
     }
 
+    it("drains an externally stopped Work owner on a sync revision without publishing transitions", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(3);
+        await act(async () => { await c.data.stopWorkTimer(); c.data.bumpRevision(); });
+        await waitFor(() => expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true }));
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([]);
+    });
+
+    it("reruns the active flush after refresh overtakes a late owner result", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementationOnce(async id => {
+            await c.data.setActiveTask(id);
+            const result = await finalize(id);
+            expect(result.value).toBe("owner");
+            entered();
+            await gate;
+            return result;
+        });
+        let switching!: Promise<void>;
+        time(3);
+        await act(async () => { switching = c.app().setActiveTask("B"); await enteredGate; });
+        let refresh!: Promise<unknown>;
+        await act(async () => {
+            await c.data.stopWorkTimer();
+            refresh = c.app().refresh();
+        });
+        expect(c.app().state?.timer).toBeNull();
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        await act(async () => { release(); await Promise.all([switching, refresh]); });
+        expect(deferred.mock.calls).toEqual([["A"], ["A"]]);
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([
+            { type: "leave", taskId: "A", reason: "switch", at: at(3), windowId: W },
+            { type: "enter", taskId: "B", reason: "switch", at: at(3), windowId: W, fromTaskId: "A" },
+        ]);
+    });
+
+    it("shares one flush across concurrent refresh triggers and awaits its completion", async () => {
+        const c = await setup();
+        await act(async () => { await c.app().requestFinalize("A"); });
+        time(3);
+        await c.data.stopWorkTimer();
+        const finalize = c.data.finalizeDeferredTask.bind(c.data);
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+        const deferred = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
+            entered();
+            await gate;
+            return finalize(id);
+        });
+        const settled: number[] = [];
+        let first!: Promise<unknown>;
+        let second!: Promise<unknown>;
+        await act(async () => {
+            first = c.app().refresh().then(() => settled.push(1));
+            await enteredGate;
+            second = c.app().refresh().then(() => settled.push(2));
+        });
+        expect(deferred).toHaveBeenCalledExactlyOnceWith("A");
+        expect(settled).toEqual([]);
+        await act(async () => { release(); await Promise.all([first, second]); });
+        expect(deferred).toHaveBeenCalledExactlyOnceWith("A");
+        expect(settled).toHaveLength(2);
+        expect(c.app().state?.tasks.A.archived).toBe(true);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([]);
+    });
+
+    it("defers archive mode until natural Work completion and never restarts the archived task after its break", async () => {
+        const c = await setup();
+        const timer = structuredClone(c.app().state!.timer);
+        const archive = vi.spyOn(c.data, "archiveDeferredTask");
+        const finalize = vi.spyOn(c.data, "finalizeDeferredTask");
+        const startWork = vi.spyOn(c.data, "startWorkTimer");
+        await act(async () => { expect(await c.app().requestFinalize("A", { mode: "archive" })).toBe("deferred"); });
+        expect(c.app().state?.timer).toEqual(timer);
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        time(25);
+        await waitFor(() => expect(c.app().state?.tasks.A).toMatchObject({ archived: true, completed_at: null }), { timeout: 2500 });
+        expect(archive).toHaveBeenCalledExactlyOnceWith("A");
+        expect(finalize).not.toHaveBeenCalled();
+        expect(c.app().state?.timer).toMatchObject({ kind: "ShortBreak", task_id: "A" });
+        expect(c.app().state?.active_task).toBeNull();
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        time(30);
+        await act(async () => { await c.app().completeTimer(); });
+        expect(c.app().state?.timer).toBeNull();
+        expect(c.app().state?.active_task).toBeNull();
+        expect(startWork).not.toHaveBeenCalled();
+        expect(c.events).toEqual([]);
+    });
+
+    it("upgrades a queued archive to finalize and never downgrades it", async () => {
+        const c = await setup();
+        const archive = vi.spyOn(c.data, "archiveDeferredTask");
+        const finalize = vi.spyOn(c.data, "finalizeDeferredTask");
+        await act(async () => {
+            expect(await c.app().requestFinalize("A", { mode: "archive" })).toBe("deferred");
+            expect(await c.app().requestFinalize("A", { mode: "finalize" })).toBe("deferred");
+            expect(await c.app().requestFinalize("A", { mode: "archive" })).toBe("deferred");
+        });
+        expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
+        time(3);
+        await act(async () => { await c.app().stopWork(); });
+        expect(c.app().state?.tasks.A).toMatchObject({ archived: true, completed_at: at(3) });
+        expect(finalize).toHaveBeenCalledExactlyOnceWith("A");
+        expect(archive).not.toHaveBeenCalled();
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+    });
+
     it("defers the running Work owner without touching its timer or backend task", async () => {
         const c = await setup();
         const timer = structuredClone(c.app().state!.timer);
@@ -1366,7 +1487,7 @@ describe("deferred finalize", () => {
                 await c.app().refresh();
             }
         });
-        expect(c.app().pendingFinalizeTaskIds).toEqual(terminal === "finalized" ? [] : ["A"]);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
         time(4);
         await act(async () => { await c.app().setActiveTask("B"); });
         if (terminal === "finalized") {
@@ -1405,10 +1526,11 @@ describe("deferred finalize", () => {
             time(30);
             // fetchState reconciles the expired break and refresh queues its
             // notice behind the still-running Work progression.
-            await c.app().refresh();
-            expect(c.data.store.state.timer).toBeNull();
+            const refreshing = c.app().refresh();
             expect(sound.play.mock.calls.map(([kind]) => kind)).toEqual(["pomodoroFinish"]);
             release();
+            await refreshing;
+            expect(c.data.store.state.timer).toBeNull();
             await progression;
         });
         await waitFor(() => expect(sound.play.mock.calls.map(([kind]) => kind)).toEqual(["pomodoroFinish", "breakOver"]));
@@ -1449,7 +1571,8 @@ describe("deferred finalize", () => {
         time(1);
         await act(async () => {
             await c.data.setActiveTask("B");
-            await c.app().refresh(); // A revision can move ownership without a command flush.
+            // Adopt the external ownership through a command without a flush point.
+            await c.app().updateSettings(c.app().state!.settings);
             await c.app().requestFinalize("B");
         });
         expect(c.app().pendingFinalizeTaskIds).toEqual(["A", "B"]);
@@ -1467,9 +1590,10 @@ describe("deferred finalize", () => {
         await act(async () => { switchTask = c.app().setActiveTask("C"); await enteredGate; });
         expect(c.app().pendingFinalizeTaskIds).toEqual([]);
         expect(finalizeSpy.mock.calls).toEqual([["A"]]);
-        await act(async () => { await c.app().setActiveTask("C"); });
+        let overlapping!: Promise<void>;
+        await act(async () => { overlapping = c.app().setActiveTask("C"); });
         expect(finalizeSpy.mock.calls).toEqual([["A"]]);
-        await act(async () => { release(); await switchTask; });
+        await act(async () => { release(); await Promise.all([switchTask, overlapping]); });
         expect(finalizeSpy.mock.calls).toEqual([["A"], ["B"]]);
         expect(c.app().state?.tasks.A.archived).toBe(true);
         expect(c.app().state?.tasks.B.archived).toBe(true);
@@ -1481,7 +1605,9 @@ describe("deferred finalize", () => {
         await act(async () => { await c.app().requestFinalize("A"); });
         time(1);
         await act(async () => {
-            await c.data.setActiveTask("B"); await c.app().refresh(); await c.app().requestFinalize("B");
+            await c.data.setActiveTask("B");
+            await c.app().updateSettings(c.app().state!.settings);
+            await c.app().requestFinalize("B");
         });
         const finalize = c.data.finalizeDeferredTask.bind(c.data);
         const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
@@ -1516,7 +1642,10 @@ describe("deferred finalize", () => {
         const c = await setup();
         await act(async () => { await c.app().requestFinalize("A"); });
         time(1);
-        await act(async () => { await c.data.setActiveTask("B"); await c.app().refresh(); });
+        await act(async () => {
+            await c.data.setActiveTask("B");
+            await c.app().updateSettings(c.app().state!.settings);
+        });
         const finalize = vi.spyOn(c.data, "finalizeTask");
         await act(async () => { await expect(c.app().setActiveTask("missing")).rejects.toThrow("Task not found"); });
         expect(c.app().pendingFinalizeTaskIds).toEqual(["A"]);
@@ -1528,7 +1657,10 @@ describe("deferred finalize", () => {
         const c = await setup();
         await act(async () => { await c.app().requestFinalize("A"); });
         time(3);
-        await act(async () => { await c.data.stopWorkTimer(); await c.app().refresh(); });
+        await act(async () => {
+            await c.data.stopWorkTimer();
+            await c.app().updateSettings(c.app().state!.settings);
+        });
         const finalize = c.data.finalizeDeferredTask.bind(c.data);
         const finalizeSpy = vi.spyOn(c.data, "finalizeDeferredTask").mockImplementation(async id => {
             expect(c.events).toEqual([{ type: "enter", taskId: "B", reason: "start", at: at(3), windowId: at(3) }]);
@@ -1547,7 +1679,7 @@ describe("deferred finalize", () => {
         time(1);
         await act(async () => {
             await c.data.setActiveTask("B");
-            await c.app().refresh();
+            await c.app().updateSettings(c.app().state!.settings);
             await c.app().requestFinalize("B");
         });
         expect(c.app().pendingFinalizeTaskIds).toEqual(["A", "B"]);
