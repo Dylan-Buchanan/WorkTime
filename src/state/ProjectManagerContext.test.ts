@@ -48,6 +48,18 @@ describe("quickAddParse", () => {
 });
 
 describe("normalizeState", () => {
+    it("round-trips completedAt without backfilling legacy Done tasks", () => {
+        const completedAt = "2026-08-12T08:00:00.000Z";
+        const first = normalizeState({ tasks: {
+            done: { id: "done", title: "Done", status: "Done", completedAt },
+            reopened: { id: "reopened", title: "Reopened", status: "Backlog", completedAt },
+            legacy: { id: "legacy", title: "Legacy", status: "Done" },
+        } });
+        const restored = normalizeState(JSON.parse(JSON.stringify(first)));
+        expect(restored.tasks.done.completedAt).toBe(completedAt);
+        expect(restored.tasks.reopened.completedAt).toBe(completedAt);
+        expect(restored.tasks.legacy.completedAt).toBeUndefined();
+    });
     it("returns a valid default state when given nothing", () => {
         const s = normalizeState(null);
         expect(Object.keys(s.projects).length).toBe(1);

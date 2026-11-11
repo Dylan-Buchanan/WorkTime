@@ -63,6 +63,138 @@ function wrapIntegration(data: InMemoryDataAccess) {
 
 beforeEach(() => localStorage.clear());
 
+async function agendaContext(data: InMemoryDataAccess) {
+    let currentTodos: ReturnType<typeof useTodos> | undefined;
+    let currentApp: ReturnType<typeof useAppState> | undefined;
+    function AgendaProbe() {
+        currentTodos = useTodos();
+        currentApp = useAppState();
+        return null;
+    }
+    render(<TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId={OWNER}>
+        <AppStateProvider><TodoProvider><AgendaProbe /></TodoProvider></AppStateProvider>
+    </SyncProvider></DataProvider></TauriCloseProvider>);
+    await waitFor(() => {
+        expect(currentTodos?.hydrated).toBe(true);
+        expect(currentApp?.state).toBeTruthy();
+        expect(currentTodos?.state.todos.td1).toBeTruthy();
+    });
+    return { todos: () => currentTodos!, app: () => currentApp! };
+}
+
+describe("TodoContext agenda completion", () => {
+    it.each(["Work", "ShortBreak"] as const)("archives the agenda %s owner without a completion stamp or duplicate occurrence", async kind => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 12, 9));
+        try {
+            const data = new InMemoryDataAccess(makeAppState());
+            const task = (await data.createTask("Agenda archive", 2)).value;
+            await data.setActiveTask(task.id);
+            if (kind === "Work") await data.startWorkTimer();
+            else await data.startBreakTimer();
+            const original = structuredClone(data.store.state.timer!);
+            await data.saveTodos([{ ...todo("td1"), currentTaskId: task.id }], []);
+            const context = await agendaContext(data);
+            const archive = vi.spyOn(data, "archiveTask");
+            const deferredArchive = vi.spyOn(data, "archiveDeferredTask");
+            const finalize = vi.spyOn(data, "finalizeTask");
+            const deferredFinalize = vi.spyOn(data, "finalizeDeferredTask");
+            await act(async () => {
+                expect(await context.todos().completeTodoFromAgenda("td1")).toBe(kind === "Work" ? "deferred" : "completed");
+            });
+            expect(data.store.state.timer).toEqual(original);
+            if (kind === "Work") {
+                expect(context.app().pendingFinalizeTaskIds).toEqual([task.id]);
+                vi.setSystemTime(new Date(original.ends_at));
+                await act(async () => { await context.app().completeTimer(); });
+                expect(deferredArchive).toHaveBeenCalledExactlyOnceWith(task.id);
+                expect(archive).not.toHaveBeenCalled();
+            } else expect(archive).toHaveBeenCalledExactlyOnceWith(task.id);
+            await waitFor(() => expect(context.todos().deferredTodoTasks).toEqual({}));
+            expect(data.store.state.tasks[task.id]).toMatchObject({ archived: true, completed_at: null });
+            expect(data.store.state.timer).toMatchObject({ kind: "ShortBreak", task_id: task.id });
+            expect((await data.loadTodos()).completions).toHaveLength(1);
+            expect(context.app().pendingFinalizeTaskIds).toEqual([]);
+            expect(finalize).not.toHaveBeenCalled();
+            expect(deferredFinalize).not.toHaveBeenCalled();
+        } finally { vi.useRealTimers(); }
+    });
+
+    it.each([false, true])("defers a running linked finalize, completes one occurrence and cleans up after natural Work completion (recurring=%s)", async recurring => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 7, 12, 9));
+        try {
+            const data = new InMemoryDataAccess(makeAppState());
+            const task = (await data.createTask("Agenda work", 2)).value;
+            await data.setActiveTask(task.id);
+            await data.startWorkTimer();
+            const original = structuredClone(data.store.state.timer!);
+            await data.saveTodos([{ ...todo("td1"), currentTaskId: task.id,
+                ...(recurring ? { rule: { type: "weekly" as const, weekdays: [3, 5] } } : {}) }], []);
+            const context = await agendaContext(data);
+            await act(async () => expect(await context.todos().completeTodoFromAgenda("td1")).toBe("deferred"));
+            const stored = await data.loadTodos();
+            expect(stored.completions).toHaveLength(1);
+            expect(stored.completions[0]).toMatchObject({ todoId: "td1", bucket: "2026-08-12" });
+            expect(stored.todos[0]).toMatchObject({ currentTaskId: null, isArchived: !recurring,
+                dueDate: recurring ? "2026-08-14" : "2026-08-12" });
+            expect(data.store.state.timer).toEqual(original);
+            expect(data.store.state.tasks[task.id].completed_at).toBeNull();
+            expect(context.todos().deferredTodoTasks).toEqual({ td1: task.id });
+            expect(context.app().pendingFinalizeTaskIds).toEqual([task.id]);
+
+            vi.setSystemTime(new Date(original.ends_at));
+            await waitFor(() => expect(data.store.state.tasks[task.id]).toMatchObject({ completed_at: null, archived: true }), { timeout: 2500 });
+            await waitFor(() => expect(context.todos().deferredTodoTasks).toEqual({}));
+            expect(data.store.state.tasks[task.id].archived).toBe(true);
+            expect(data.store.state.timer).toMatchObject({ kind: "ShortBreak", task_id: task.id });
+            expect((await data.loadTodos()).completions).toEqual(stored.completions);
+            expect((await data.loadTodos()).todos[0]).toEqual(stored.todos[0]);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("completes immediately with one completion when no currentTaskId exists", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.saveTodos([todo("td1")], []);
+        const context = await agendaContext(data);
+        await act(async () => expect(await context.todos().completeTodoFromAgenda("td1")).toBe("completed"));
+        expect((await data.loadTodos()).completions).toHaveLength(1);
+        expect((await data.loadTodos()).todos[0].isArchived).toBe(true);
+        expect(context.todos().deferredTodoTasks).toEqual({});
+        expect(data.store.state.timer).toBeNull();
+    });
+
+    it("finalizes a linked task immediately while leaving its owned break unchanged", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const task = (await data.createTask("Break owner", 2)).value;
+        await data.setActiveTask(task.id);
+        await data.startBreakTimer();
+        const original = structuredClone(data.store.state.timer);
+        await data.saveTodos([{ ...todo("td1"), currentTaskId: task.id }], []);
+        const context = await agendaContext(data);
+        await act(async () => expect(await context.todos().completeTodoFromAgenda("td1")).toBe("completed"));
+        expect(data.store.state.timer).toEqual(original);
+        expect(data.store.state.tasks[task.id]).toMatchObject({ completed_at: null, archived: true });
+        expect((await data.loadTodos()).completions).toHaveLength(1);
+        expect(context.todos().deferredTodoTasks).toEqual({});
+    });
+
+    it("keeps the existing completeTodo guard for a running linked task", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const task = (await data.createTask("Running", 2)).value;
+        await data.setActiveTask(task.id);
+        await data.startWorkTimer();
+        await data.saveTodos([{ ...todo("td1"), currentTaskId: task.id }], []);
+        const context = await agendaContext(data);
+        await act(async () => {
+            await expect(context.todos().completeTodo("td1")).rejects.toThrow("Stop or skip the active timer before completing this to-do");
+        });
+        expect((await data.loadTodos()).completions).toHaveLength(0);
+        expect(context.todos().deferredTodoTasks).toEqual({});
+        expect(data.store.state.tasks[task.id].completed_at).toBeNull();
+    });
+});
+
 describe("TodoContext", () => {
     it("normalizes, persists and clears descriptions", async () => {
         const data = new InMemoryDataAccess(makeAppState());

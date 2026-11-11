@@ -1,20 +1,105 @@
 import { describe, expect, it } from "vitest";
+import type { Todo, TodoCompletion } from "./todos/types";
+import { completeTodoOccurrence, createTodoCompletion } from "./todos/integration";
 import { defaultAppState, startWorkTimer, setActiveTask } from "./engine";
 import type { Habit, HabitCompletion, PMTask, PomodoroLogEntry, Project, Task } from "../state/types";
 import {
     computeActiveFractionComplete,
     buildProjectionBacklogs,
+    classifyDueScope,
     collectEligibleProjectionTasks,
+    getDailyProjectionScope,
     getLocalWeekWindow,
 } from "./timer";
 import {
+    buildTodayDone,
     buildTodayHabits,
     buildTodayOverview,
     buildTodayPomodoros,
     buildTodayTasks,
+    buildTodayTodos,
+    getTodayDueScope,
 } from "./today";
 
 const REFERENCE = new Date(2026, 7, 12, 9, 30);
+
+function agendaTodo(overrides: Partial<Todo> = {}): Todo {
+    return { id: "todo", title: "To-do", rule: null, dueDate: "2026-08-12", estimate: 2,
+        currentTaskId: null, position: 0, isArchived: false,
+        createdAt: REFERENCE.toISOString(), updatedAt: REFERENCE.toISOString(), ...overrides };
+}
+
+describe("Today to-do agenda", () => {
+    it("admits overdue, today and this-week occurrences without rolling them and drops other scope", () => {
+        const todos = [
+            agendaTodo({ id: "overdue", dueDate: "2026-08-10", rule: { type: "weekly", weekdays: [1] } }),
+            agendaTodo({ id: "today" }), agendaTodo({ id: "week", dueDate: "2026-08-16" }),
+            agendaTodo({ id: "unscheduled", dueDate: null }), agendaTodo({ id: "future", dueDate: "2026-08-17" }),
+            agendaTodo({ id: "archived", isArchived: true }),
+        ];
+        const original = structuredClone(todos);
+        const result = buildTodayTodos({ todos, backendTasks: {}, reference: REFERENCE });
+        expect(result.todos.map((entry) => [entry.id, entry.bucket])).toEqual([
+            ["overdue", "overdue"], ["today", "today"], ["week", "thisWeek"],
+        ]);
+        expect(result.remainingPomodoros).toBe(6);
+        expect(todos).toEqual(original);
+    });
+
+    it.each([
+        { estimate: 2, linked: false, completed: 0, fraction: undefined, active: false, remaining: 2, worked: 0 },
+        { estimate: 2, linked: true, completed: 1, fraction: undefined, active: false, remaining: 1, worked: 1 },
+        { estimate: 1, linked: true, completed: 1, fraction: undefined, active: false, remaining: 1, worked: 1 },
+        { estimate: 2, linked: true, completed: 0, fraction: 0.5, active: true, remaining: 1.5, worked: 0.5 },
+        { estimate: 2, linked: true, completed: 0, fraction: 2, active: true, remaining: 1, worked: 1 },
+        { estimate: 2, linked: true, completed: 0, fraction: -1, active: true, remaining: 2, worked: 0 },
+        { estimate: 1, linked: true, completed: 2, fraction: undefined, active: false, remaining: 1, worked: 2 },
+    ])("computes remaining work and active fraction: %j", ({ estimate, linked, completed, fraction, active, remaining, worked }) => {
+        const result = buildTodayTodos({ todos: [agendaTodo({ estimate, currentTaskId: linked ? "linked" : null })],
+            backendTasks: { linked: backendTask({ id: "linked", completed_pomodoros: completed }) }, reference: REFERENCE,
+            activeWorkTaskId: active ? "linked" : null, activeWorkFraction: fraction });
+        expect(result.todos[0]).toMatchObject({ estimatePomos: estimate, workedPomos: worked, remainingPomodoros: remaining, isActive: active });
+        expect(result.remainingPomodoros).toBe(remaining);
+    });
+
+    it("sorts to-dos by bucket, due key, position, title and id", () => {
+        const result = buildTodayTodos({ todos: [
+            agendaTodo({ id: "week", dueDate: "2026-08-13", position: -1 }),
+            agendaTodo({ id: "b", title: "Alpha", position: 1 }),
+            agendaTodo({ id: "z", title: "Zulu", position: 0 }),
+            agendaTodo({ id: "c", title: "Beta", position: 1 }),
+            agendaTodo({ id: "a", title: "Alpha", position: 1 }),
+            agendaTodo({ id: "overdue-later", dueDate: "2026-08-11", position: -1 }),
+            agendaTodo({ id: "overdue-first", dueDate: "2026-08-10", position: 9 }),
+        ], backendTasks: {}, reference: REFERENCE });
+        expect(result.todos.map((entry) => entry.id)).toEqual(["overdue-first", "overdue-later", "z", "a", "b", "c", "week"]);
+    });
+
+    it("uses completion creation day rather than bucket, includes archived to-dos and ignores missing ids", () => {
+        const today = new Date(2026, 7, 12, 8);
+        const yesterday = new Date(2026, 7, 11, 20);
+        const archived = agendaTodo({ isArchived: true, title: "" });
+        const completions: TodoCompletion[] = [
+            { ...createTodoCompletion(archived, today, "today"), bucket: "2026-08-10" },
+            createTodoCompletion(archived, yesterday, "yesterday"),
+            { ...createTodoCompletion(archived, today, "missing"), todoId: "missing" },
+        ];
+        expect(buildTodayDone({ pmTasks: [], backendTasks: {}, todos: [archived], todoCompletions: completions, reference: REFERENCE }))
+            .toEqual([{ kind: "todo", key: "todo:today", id: "todo", title: "Untitled to-do", completedAt: today.toISOString(), appTaskId: null }]);
+    });
+
+    it("shares a descending Done list with tasks while a recurring successor remains active", () => {
+        const recurring = agendaTodo({ rule: { type: "weekly", weekdays: [3, 5] } });
+        const completion = createTodoCompletion(recurring, new Date(2026, 7, 12, 8), "occurrence");
+        const successor = completeTodoOccurrence(recurring, REFERENCE);
+        const overview = buildTodayOverview({ pmTasks: [pmTask({ id: "done", status: "Done", completedAt: new Date(2026, 7, 12, 9).toISOString() })],
+            backendTasks: {}, projects: {}, reference: REFERENCE, habits: [], completions: [], logs: [],
+            todos: [successor], todoCompletions: [completion] });
+        expect(overview.done.map((entry) => entry.key)).toEqual(["task:done", "todo:occurrence"]);
+        expect(overview.todos[0]).toMatchObject({ id: recurring.id, dueKey: "2026-08-14", bucket: "thisWeek" });
+        expect(overview.todosRemainingPomodoros).toBe(2);
+    });
+});
 
 function pmTask(overrides: Partial<PMTask> = {}): PMTask {
     return {
@@ -103,12 +188,43 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
     };
 }
 
+describe("getTodayDueScope", () => {
+    const weekendProject = project({ id: "weekend", workableDays: [0, 6] });
+
+    it.each([
+        { dueDate: "2026-08-10", project: undefined, expected: "overdue" },
+        { dueDate: "2026-08-12", project: undefined, expected: "today" },
+        { dueDate: "2026-08-13", project: undefined, expected: "thisWeek" },
+        { dueDate: "2026-08-16", project: undefined, expected: "thisWeek" },
+        { dueDate: "2026-08-17", project: undefined, expected: null },
+        { dueDate: null, project: undefined, expected: null },
+        { dueDate: "", project: undefined, expected: null },
+        { dueDate: "2026-08-10", project: weekendProject, expected: null },
+        { dueDate: "2026-08-12", project: weekendProject, expected: null },
+        { dueDate: "2026-08-14", project: weekendProject, expected: "thisWeek" },
+    ])("classifies $dueDate with the worked-example table", ({ dueDate, project: scheduled, expected }) => {
+        expect(getTodayDueScope(dueDate, scheduled, REFERENCE)).toBe(expected);
+    });
+
+    it("uses the Sunday reference window", () => {
+        const sunday = new Date(2026, 7, 16, 10);
+        expect(getTodayDueScope("2026-08-16", undefined, sunday)).toBe("today");
+        expect(getTodayDueScope("2026-08-17", undefined, sunday)).toBeNull();
+    });
+
+    it("uses the Monday reference window", () => {
+        const monday = new Date(2026, 7, 17, 10);
+        expect(getTodayDueScope("2026-08-16", undefined, monday)).toBe("overdue");
+        expect(getTodayDueScope("2026-08-23", undefined, monday)).toBe("thisWeek");
+    });
+});
+
 describe("buildTodayTasks", () => {
     it("pins waiting first, then bucket, due date and title without changing scope or remaining work", () => {
         const waiting = { type: "agent" as const, since: "2026-08-12T09:00:00Z" };
         const pmTasks = [
-            pmTask({ id: "normal-flex", title: "A", estimatePomos: 2 }),
-            pmTask({ id: "wait-flex", title: "Z", estimatePomos: 1.5, waiting }),
+            pmTask({ id: "normal-flex", title: "A", dueDate: "2026-08-14", estimatePomos: 2 }),
+            pmTask({ id: "wait-flex", title: "Z", dueDate: "2026-08-14", estimatePomos: 1.5, waiting }),
             pmTask({ id: "wait-today", dueDate: "2026-08-12", estimatePomos: 3, waiting }),
             pmTask({ id: "wait-overdue-z", title: "Z", dueDate: "2026-08-11", estimatePomos: 1, waiting }),
             pmTask({ id: "normal-today", dueDate: "2026-08-12", estimatePomos: 1 }),
@@ -137,7 +253,7 @@ describe("buildTodayTasks", () => {
         expect(pinned.tasks[pinned.tasks.length - 1].waiting).toBeNull();
     });
 
-    it("classifies due-today, overdue, and undated work against one reference date", () => {
+    it("classifies due-today, overdue, this-week, and undated work against one reference date", () => {
         const result = buildTodayTasks({
             reference: REFERENCE,
             pmTasks: [
@@ -151,9 +267,9 @@ describe("buildTodayTasks", () => {
             projects: {},
         });
 
-        expect(result.tasks.map((task) => task.id)).toEqual(["overdue", "today", "flexible"]);
-        expect(result.tasks.map((task) => task.bucket)).toEqual(["overdue", "today", "flexible"]);
-        expect(result.remainingPomodoros).toBe(6);
+        expect(result.tasks.map((task) => task.id)).toEqual(["overdue", "today", "this-week"]);
+        expect(result.tasks.map((task) => task.bucket)).toEqual(["overdue", "today", "thisWeek"]);
+        expect(result.remainingPomodoros).toBe(7);
     });
 
     it("excludes archived, Done, completed backend, and no-estimate tasks", () => {
@@ -161,11 +277,11 @@ describe("buildTodayTasks", () => {
         const result = buildTodayTasks({
             reference: REFERENCE,
             pmTasks: [
-                pmTask({ id: "archived", estimatePomos: 2, isArchived: true }),
-                pmTask({ id: "done", estimatePomos: 2, status: "Done" }),
-                pmTask({ id: "completed", estimatePomos: 2, appTaskId: completed.id }),
-                pmTask({ id: "no-estimate" }),
-                pmTask({ id: "kept", estimatePomos: 1 }),
+                pmTask({ id: "archived", dueDate: "2026-08-12", estimatePomos: 2, isArchived: true }),
+                pmTask({ id: "done", dueDate: "2026-08-12", estimatePomos: 2, status: "Done" }),
+                pmTask({ id: "completed", dueDate: "2026-08-12", estimatePomos: 2, appTaskId: completed.id }),
+                pmTask({ id: "no-estimate", dueDate: "2026-08-12" }),
+                pmTask({ id: "kept", dueDate: "2026-08-12", estimatePomos: 1 }),
             ],
             backendTasks: { [completed.id]: completed },
             projects: {},
@@ -178,7 +294,7 @@ describe("buildTodayTasks", () => {
         const backend = backendTask({ id: "target-app", target_pomodoros: 3, completed_pomodoros: 1 });
         const result = buildTodayTasks({
             reference: REFERENCE,
-            pmTasks: [pmTask({ id: "target", appTaskId: backend.id })],
+            pmTasks: [pmTask({ id: "target", dueDate: "2026-08-12", appTaskId: backend.id })],
             backendTasks: { [backend.id]: backend },
             projects: {},
         });
@@ -190,7 +306,7 @@ describe("buildTodayTasks", () => {
         const backend = backendTask({ id: "active-app", target_pomodoros: 2, completed_pomodoros: 0 });
         const result = buildTodayTasks({
             reference: REFERENCE,
-            pmTasks: [pmTask({ id: "active", appTaskId: backend.id, estimatePomos: 2 })],
+            pmTasks: [pmTask({ id: "active", appTaskId: backend.id, dueDate: "2026-08-12", estimatePomos: 2 })],
             backendTasks: { [backend.id]: backend },
             projects: {},
             activeWorkTaskId: backend.id,
@@ -206,7 +322,7 @@ describe("buildTodayTasks", () => {
         const backend = backendTask({ id: "over-app", completed_pomodoros: 3 });
         const result = buildTodayTasks({
             reference: REFERENCE,
-            pmTasks: [pmTask({ id: "over", appTaskId: backend.id, estimatePomos: 2 })],
+            pmTasks: [pmTask({ id: "over", appTaskId: backend.id, dueDate: "2026-08-12", estimatePomos: 2 })],
             backendTasks: { [backend.id]: backend },
             projects: {},
         });
@@ -218,8 +334,8 @@ describe("buildTodayTasks", () => {
         const result = buildTodayTasks({
             reference: REFERENCE,
             pmTasks: [
-                pmTask({ id: "with-project", projectId: "project-1", estimatePomos: 1 }),
-                pmTask({ id: "missing-project", projectId: "gone", estimatePomos: 1 }),
+                pmTask({ id: "with-project", projectId: "project-1", dueDate: "2026-08-12", estimatePomos: 1 }),
+                pmTask({ id: "missing-project", projectId: "gone", dueDate: "2026-08-12", estimatePomos: 1 }),
             ],
             backendTasks: {},
             projects: { "project-1": project() },
@@ -240,7 +356,8 @@ describe("buildTodayTasks", () => {
                 pmTask({ id: "weekday-due", projectId: "weekday", dueDate: "2026-08-15", estimatePomos: 2 }),
                 pmTask({ id: "weekday-overdue", projectId: "weekday", dueDate: "2026-08-14", estimatePomos: 3 }),
                 pmTask({ id: "weekday-flexible", projectId: "weekday", estimatePomos: 4 }),
-                pmTask({ id: "saturday", projectId: "saturday", estimatePomos: 1.5 }),
+                pmTask({ id: "weekday-this-week", projectId: "weekday", dueDate: "2026-08-16", estimatePomos: 2 }),
+                pmTask({ id: "saturday", projectId: "saturday", dueDate: "2026-08-15", estimatePomos: 1.5 }),
                 pmTask({ id: "unassigned", dueDate: "2026-08-15", estimatePomos: 2 }),
                 pmTask({ id: "missing-project", projectId: "gone", dueDate: "2026-08-14", estimatePomos: 1 }),
             ],
@@ -251,11 +368,11 @@ describe("buildTodayTasks", () => {
             },
         });
 
-        expect(result.tasks.map((task) => task.id)).toEqual(["missing-project", "unassigned", "saturday"]);
-        expect(result.remainingPomodoros).toBe(4.5);
+        expect(result.tasks.map((task) => task.id)).toEqual(["missing-project", "saturday", "unassigned", "weekday-this-week"]);
+        expect(result.remainingPomodoros).toBe(6.5);
     });
 
-    it("agrees with the daily projected-finish backlog", () => {
+    it("measures a different set than the daily projected-finish backlog", () => {
         const input = {
             reference: REFERENCE,
             backendTasks: {},
@@ -273,9 +390,143 @@ describe("buildTodayTasks", () => {
         const { daily } = buildProjectionBacklogs(eligible, input.reference, input.projects);
         const today = buildTodayTasks(input);
 
-        expect(today.remainingPomodoros).toBeCloseTo(daily.totalPomodoros, 10);
-        expect(today.tasks.map((task) => task.id)).toEqual(["overdue", "today", "flexible"]);
+        expect(today.tasks.map((task) => task.id)).toEqual(["overdue", "today", "this-week"]);
+        expect(today.remainingPomodoros).toBe(7.5);
+        expect(daily.totalPomodoros).toBe(6.5);
         expect(getLocalWeekWindow(REFERENCE).endKey).toBe("2026-08-16");
+    });
+
+    it("keeps the daily projection scope and backlog values unchanged", () => {
+        const projects: Readonly<Record<string, Project>> = { weekend: project({ id: "weekend", workableDays: [0, 6] }) };
+        const input = {
+            reference: REFERENCE,
+            backendTasks: {},
+            projects,
+            pmTasks: [
+                pmTask({ id: "overdue", dueDate: "2026-08-10", estimatePomos: 2 }),
+                pmTask({ id: "today", dueDate: "2026-08-12", estimatePomos: 1.5 }),
+                pmTask({ id: "unscheduled", estimatePomos: 3 }),
+                pmTask({ id: "this-week", dueDate: "2026-08-14", estimatePomos: 4 }),
+                pmTask({ id: "future", dueDate: "2026-08-17", estimatePomos: 5 }),
+                pmTask({ id: "off-today", projectId: "weekend", dueDate: "2026-08-12", estimatePomos: 6 }),
+            ],
+        };
+        const eligible = collectEligibleProjectionTasks(input);
+        const { daily } = buildProjectionBacklogs(eligible, input.reference, input.projects);
+
+        expect(daily.totalPomodoros).toBe(6.5);
+        expect(daily.dueTodayOrOverduePomodoros).toBe(3.5);
+        expect(daily.unscheduledPomodoros).toBe(3);
+
+        const scopes = Object.fromEntries(eligible.map((entry) => [
+            entry.task.id,
+            getDailyProjectionScope(
+                classifyDueScope(entry.dueDate, input.reference),
+                entry.projectId ? input.projects[entry.projectId] : undefined,
+                input.reference,
+            ),
+        ]));
+        expect(scopes).toEqual({
+            overdue: "due",
+            today: "due",
+            unscheduled: "unscheduled",
+            "this-week": null,
+            future: null,
+            "off-today": null,
+        });
+    });
+
+    it("admits tomorrow and this-week work, and excludes next-month, unscheduled, and non-workable overdue work", () => {
+        const result = buildTodayTasks({
+            reference: REFERENCE,
+            pmTasks: [
+                pmTask({ id: "tomorrow", title: "Tomorrow", dueDate: "2026-08-13", estimatePomos: 1 }),
+                pmTask({ id: "next-month", title: "Next month", dueDate: "2026-09-12", estimatePomos: 2 }),
+                pmTask({ id: "unscheduled", title: "Unscheduled", estimatePomos: 3 }),
+                pmTask({ id: "off-overdue", title: "Off overdue", projectId: "weekend", dueDate: "2026-08-10", estimatePomos: 4 }),
+                pmTask({ id: "off-this-week", title: "Off this week", projectId: "weekend", dueDate: "2026-08-14", estimatePomos: 5 }),
+            ],
+            backendTasks: {},
+            projects: { weekend: project({ id: "weekend", workableDays: [0, 6] }) },
+        });
+
+        expect(result.tasks.map((task) => task.id)).toEqual(["tomorrow", "off-this-week"]);
+        expect(result.tasks.map((task) => task.bucket)).toEqual(["thisWeek", "thisWeek"]);
+        expect(result.remainingPomodoros).toBe(6);
+    });
+
+    it("sorts waiting first, then overdue, today, thisWeek, dueKey, title, and id", () => {
+        const result = buildTodayTasks({
+            reference: REFERENCE,
+            pmTasks: [
+                pmTask({ id: "tw-b", title: "B", dueDate: "2026-08-14", estimatePomos: 1 }),
+                pmTask({ id: "tw-a2", title: "A", dueDate: "2026-08-14", estimatePomos: 1 }),
+                pmTask({ id: "tw-a1", title: "A", dueDate: "2026-08-14", estimatePomos: 1 }),
+                pmTask({ id: "today-z", title: "Z", dueDate: "2026-08-12", estimatePomos: 1 }),
+                pmTask({ id: "od-b", title: "B", dueDate: "2026-08-11", estimatePomos: 1 }),
+                pmTask({ id: "od-a", title: "A", dueDate: "2026-08-11", estimatePomos: 1 }),
+                pmTask({ id: "wait-tw", title: "A", dueDate: "2026-08-14", estimatePomos: 1, waiting: { type: "agent", since: "2026-08-12T09:00:00Z" } }),
+                pmTask({ id: "wait-od", title: "A", dueDate: "2026-08-10", estimatePomos: 1, waiting: { type: "agent", since: "2026-08-12T09:00:00Z" } }),
+            ],
+            backendTasks: {},
+            projects: {},
+        });
+
+        expect(result.tasks.map((task) => task.id)).toEqual([
+            "wait-od", "wait-tw", "od-a", "od-b", "today-z", "tw-a1", "tw-a2", "tw-b",
+        ]);
+    });
+});
+
+describe("buildTodayDone", () => {
+    const today = new Date(2026, 7, 12, 8).toISOString();
+    const yesterday = new Date(2026, 7, 11, 20).toISOString();
+
+    it.each<{ name: string; task: Partial<PMTask>; backend?: Partial<Task>; included: boolean }>([
+        { name: "unlinked Done today", task: { completedAt: today }, included: true },
+        { name: "unlinked Done yesterday", task: { completedAt: yesterday }, included: false },
+        { name: "linked Done without PM stamp", task: { appTaskId: "app-task" }, backend: { completed_at: today }, included: true },
+        { name: "linked pending finalize uses PM stamp", task: { appTaskId: "app-task", completedAt: today }, backend: { completed_at: null }, included: true },
+        { name: "backend yesterday wins over PM today", task: { appTaskId: "app-task", completedAt: today }, backend: { completed_at: yesterday }, included: false },
+        { name: "linked not Done despite backend completion", task: { appTaskId: "app-task", status: "In Progress" }, backend: { completed_at: today }, included: false },
+        { name: "legacy Done is never backfilled from updatedAt", task: { updatedAt: today }, included: false },
+        { name: "reopened Backlog with stale stamp", task: { status: "Backlog", completedAt: today }, included: false },
+        { name: "archived and Done counts once", task: { isArchived: true, completedAt: today }, included: true },
+        { name: "unparseable stamp", task: { completedAt: "not-a-date" }, included: false },
+        { name: "unparseable backend wins over valid PM stamp", task: { appTaskId: "app-task", completedAt: today }, backend: { completed_at: "not-a-date" }, included: false },
+        { name: "missing backend falls back to PM stamp", task: { appTaskId: "missing", completedAt: today }, included: true },
+    ])("$name", ({ task, backend, included }) => {
+        const entry = pmTask({ status: "Done", ...task });
+        const backendTasks: Record<string, Task> = backend ? { "app-task": backendTask(backend) } : {};
+        const input = { reference: REFERENCE, pmTasks: [entry, entry], backendTasks };
+        const before = structuredClone(input);
+        const result = buildTodayDone(input);
+        expect(result).toEqual(included ? [{
+            kind: "task", key: `task:${entry.id}`, id: entry.id, title: entry.title,
+            completedAt: backend?.completed_at || entry.completedAt, appTaskId: entry.appTaskId ?? null,
+        }] : []);
+        expect(input).toEqual(before);
+    });
+
+    it("sorts by completion instant descending then key ascending and falls back for empty titles", () => {
+        const early = new Date(2026, 7, 12, 7).toISOString();
+        const pmTasks = [
+            pmTask({ id: "old", status: "Done", completedAt: early }),
+            pmTask({ id: "z", status: "Done", completedAt: today }),
+            pmTask({ id: "a", status: "Done", completedAt: new Date(2026, 7, 12, 8).toString(), title: "" }),
+        ];
+        for (const tasks of [pmTasks, [...pmTasks].reverse()]) {
+            const result = buildTodayDone({ reference: REFERENCE, pmTasks: tasks, backendTasks: {} });
+            expect(result.map((entry) => entry.key)).toEqual(["task:a", "task:z", "task:old"]);
+            expect(result[0].title).toBe("Untitled task");
+        }
+    });
+
+    it("exposes done in buildTodayOverview", () => {
+        const input = { reference: REFERENCE, pmTasks: [pmTask({ status: "Done", completedAt: today })],
+            backendTasks: {}, projects: {}, habits: [], completions: [], logs: [] };
+        expect(buildTodayOverview(input).done).toEqual(buildTodayDone(input));
+        expect(buildTodayOverview(input).tasks).toEqual([]);
     });
 });
 
@@ -442,13 +693,13 @@ describe("post-review Today accounting", () => {
         const running = startWorkTimer(state, REFERENCE).state;
         const now = new Date(REFERENCE.getTime() + 600_000);
         const switched = setActiveTask(running, "b", now, "switch").state;
-        const tasks = [pmTask({ id: "a", appTaskId: "a", estimatePomos: 1 }), pmTask({ id: "b", appTaskId: "b", estimatePomos: 1 })];
+        const tasks = [pmTask({ id: "a", appTaskId: "a", dueDate: "2026-08-12", estimatePomos: 1 }), pmTask({ id: "b", appTaskId: "b", dueDate: "2026-08-12", estimatePomos: 1 })];
         const remaining = (s: typeof state) => buildTodayTasks({ reference: REFERENCE, pmTasks: tasks, backendTasks: s.tasks, projects: {}, activeWorkTaskId: s.timer!.task_id, activeWorkFraction: computeActiveFractionComplete(s.timer, now.getTime(), 25) }).remainingPomodoros;
         expect(remaining(running)).toBeCloseTo(1.6);
         expect(remaining(switched)).toBeCloseTo(remaining(running));
     });
     it("orders equal titles and due dates by id independently of insertion order", () => {
-        const tasks = [pmTask({ id: "b", estimatePomos: 1 }), pmTask({ id: "a", estimatePomos: 1 })];
+        const tasks = [pmTask({ id: "b", dueDate: "2026-08-12", estimatePomos: 1 }), pmTask({ id: "a", dueDate: "2026-08-12", estimatePomos: 1 })];
         for (const pmTasks of [tasks, [...tasks].reverse()]) {
             expect(buildTodayTasks({ reference: REFERENCE, pmTasks, backendTasks: {}, projects: {} }).tasks.map(t => t.id)).toEqual(["a", "b"]);
         }
