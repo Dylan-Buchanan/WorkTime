@@ -1,267 +1,174 @@
-# Title: Forgot password via a special reset password instead of an emailed reset link
-
 ## Tags
 
-Complexity Classification: T3
-Classification Reason: The change crosses the React auth UI (`src/components/auth/LoginPage.tsx`, `src/components/auth/ResetPasswordPage.tsx`), the auth provider (`src/auth/AuthContext.tsx`), error mapping (`src/auth/authErrors.ts`), the route table (`src/App.tsx`), a new Supabase Edge Function plus its per-function JWT setting and server-only secret, deployment/setup docs, and the unit/E2E suites. Removing the emailed-link path also removes `PASSWORD_RECOVERY`/`recoveringPassword`, which currently gates `updatePassword` and the reset page. Resolution of an account by email through the service-role admin client is a genuine unknown, so research is still required.
+Complexity Classification: T2
+Classification Reason: Single-route UI/navigation refactor confined to the Goals page. Blast radius is `src/components/GoalsPage.tsx` (page shell, tracker card, tracker maintenance), `src/components/GoalsPage.test.tsx` (markup-coupled assertions), and optionally one new rail component; no data model, schema, storage key, or auth change. Behavior is non-trivial client state work (centralized selection reset, effective-tracker derivation, archive auto-selection, rail/drawer/menu open state, scroll-into-view) but every reuse point is already identified.
 
-Severity: High
-Severity Reason: Password recovery is the only way back into the app after a forgotten password. If the shared reset password is checked incorrectly, any known email can be taken over; if the flow or the function configuration is wrong, the owner can be locked out with no working recovery path. The change also touches the only server-only secret gate in the auth area.
+Severity: Medium
+Severity Reason: This is the primary navigation and tracker-switching surface of the Goals page. A regression could strand a user on an archived tracker, break check-in/deck flows, or clip content by introducing a second scroller — but there is no data-loss risk, selection keeps persisting through the existing `goals_state_v1` UI state, and archiving keeps its existing confirmation.
 
-Needs research before implementation: Yes
-
-### Research Needed
-
-The flow itself is clear; the open questions are about how the server side safely finds and updates an account, and what removing the email-recovery path affects.
-
-- Decide how `reset-password` resolves a user id from an email with the service-role client. `invite-signup` only ever creates users; it never looks one up. Compare bounded `admin.listUsers({ page, perPage })` pagination against a small Postgres RPC, and note whether a migration is needed.
-- Confirm `admin.updateUserById(id, { password })` is the right server-side update, whether it enforces `minimum_password_length` from `supabase/config.toml`, and whether existing sessions on other devices are left valid (decide if that is out of scope).
-- Enumerate every consumer of `resetPassword`, `recoveringPassword`, and the `INVALID_RECOVERY` code so removing the emailed path does not leave dead state or a route guard that bounces users. Check `src/auth/AuthContext.tsx`, `src/auth/authErrors.ts`, `src/components/auth/ResetPasswordPage.tsx`, `src/components/auth/LoginPage.tsx`, and `src/App.test.tsx`.
-- Decide whether `/reset-password` stays a standalone public route or moves under `RedirectIfAuthenticated` in `src/App.tsx` L81–86, and how the email is passed from `/login` to `/reset-password` (router state vs. query parameter) without putting the reset password anywhere near the URL.
-- Confirm local and hosted setup for a new `verify_jwt = false` function: `supabase/.env.local`, `supabase secrets set`, `functions deploy --no-verify-jwt`, and the `[functions.reset-password]` entry in `supabase/config.toml`.
-- Decide the abuse story for a single shared reset password (no GoTrue rate limit applies to a custom function) and whether the E2E test should follow the skippable `TEST_SIGNUP_INVITE_CODE` pattern in `e2e/auth.spec.ts`.
+Needs research before implementation: No
 
 ## Summary
 
-Password reset currently depends on Supabase sending a recovery email and the browser landing back on `/reset-password` with a `PASSWORD_RECOVERY` session. WorkTime is a personal app with a tiny, known user set, so this should be a direct flow instead: the user enters their email, proves they know the app's special reset password, and sets a new password immediately.
+Tracker switching is currently buried in a `<select>` disguised as the tracker card's title, so the set of trackers a user owns is invisible until the dropdown is opened and switching costs two interactions. Replace that select with a persistent, full-height left rail that lists every tracker and selects one on click, and move all tracker maintenance (new, edit, archive, reactivate, archived filtering, goal-set import/export) out of the card and into the rail so it has a stable home.
 
-This issue replaces the emailed-link reset with a special-password reset:
-
-1. The user presses **Forgot password?** on `/login`.
-2. `/reset-password` opens with the email already filled in.
-3. The user enters the special reset password, a new password, and its confirmation.
-4. The reset password is verified server-side by a new `reset-password` Edge Function against a server-only secret; on success the account password is updated.
-5. The user is returned to `/login` with the email prefilled and a "password updated" notice, ready to sign in.
-
-The special reset password must never reach the client bundle, a `VITE_` variable, or local storage.
+The rail should make selection one click, surface per-tracker status at a glance, and match the navigation pattern already used by the timer sidebar and the Projects screen.
 
 ## Steps to Reproduce Context
 
-1. Sign out, or open the app at `/login`.
-2. Enter the account email and press **Forgot password?** (`src/components/auth/LoginPage.tsx` L45–61, L73).
-3. Observe that the only recovery path is an email: `resetPassword` calls `client.auth.resetPasswordForEmail(...)` with `redirectTo` `${VITE_PUBLIC_APP_URL}/reset-password` (`src/auth/AuthContext.tsx` L91–98).
-4. Follow the emailed link and land on `/reset-password`, which only shows the new-password form when `session && recoveringPassword` is true (`src/components/auth/ResetPasswordPage.tsx` L48–49); `recoveringPassword` is set only by the `PASSWORD_RECOVERY` auth event (`src/auth/AuthContext.tsx` L44).
-
-## Expected Behavior
-
-- **Forgot password?** on `/login` opens the reset page with the email the user already typed prefilled, without sending any email.
-- The reset page collects the email, the special reset password, the new password, and the new-password confirmation in one simple form.
-- The password changes only when the submitted special reset password matches the server-side secret, the email belongs to an existing account, and the new password passes the existing minimum-length rule (6 characters, `minimum_password_length` in `supabase/config.toml`).
-- A wrong reset password or an unknown email shows a clear error and changes nothing; the user stays on the reset page and can retry.
-- A successful reset does not sign the user in. It returns them to `/login` with the email prefilled and a notice that the password was updated, matching the existing `state: { passwordReset: true }` notice.
-- The emailed reset-link path is gone end to end: no `resetPasswordForEmail` call, no `PASSWORD_RECOVERY`/`recoveringPassword` gating, no "reset link invalid or expired" copy, and no redirect-allow-list entry that implies an emailed reset.
-- The special reset password and the service-role key stay server-side only; the browser client talks to the Edge Function with the public anon key.
-- The rest of sign-in, signup with an invite code, sign-out, and the authenticated shell behave exactly as they do today.
-
-## Actual Behavior
-
-- **Forgot password?** requires a working SMTP setup and an emailed link. The owner cannot reset the password from inside the app.
-- `/reset-password` is a recovery-link landing page: without a `PASSWORD_RECOVERY` session it renders "This password-reset link is invalid or has expired." (`src/components/auth/ResetPasswordPage.tsx` L49).
-- `updatePassword` refuses to run unless `session && recoveringPassword` (`src/auth/AuthContext.tsx` L100–106), so no password change is possible from a plain, logged-out visit.
-- `src/App.test.tsx` L84–98 asserts the string "Reset link unavailable" for `/reset-password`, encoding the current email-link behaviour.
-- `src/auth/authErrors.ts` exposes `INVALID_RECOVERY` with the message "This password-reset link is invalid or has expired." (`L6`, `L14`, `L55–57`).
+1. Open the Goals page with at least two trackers saved.
+2. Observe the tracker card header: the tracker name is rendered as a dropdown (`<select aria-label="Tracker">` in `src/components/GoalsPage.tsx` L263–277), with the archived tag and a `···` menu beside it.
+3. Click the name and pick the other tracker — this costs an extra interaction and gives no view of the other trackers' status before opening it.
+4. Observe that "Show archived trackers" lives in the page header (L217), "Add tracker" lives in the page header (L218), and Edit tracker / Archive tracker / goal-set import-export live inside the card's `···` panel (L296–318) — i.e. maintenance is inside the thing you are trying to switch away from.
 
 ## Requirements for completed issue
 
-1. `/login` shows a **Forgot password?** control that navigates to the reset page with the email field prefilled when the typed email is valid.
-2. The reset page has one form with email, special reset password, new password, and confirmation, and a single submit action.
-3. A new `reset-password` Edge Function validates the submitted special reset password against a new server-only secret (for example `RESET_PASSWORD_CODE`) before doing anything else, and returns a safe error when the secret is unset.
-4. A valid request updates the password for the account matching the normalized email through the service-role admin client, without creating or requiring a session on the client.
-5. Invalid input, a wrong reset password, and a missing account each show a clear, specific error and leave the password unchanged.
-6. Success returns the user to `/login` with the email prefilled and the existing "password updated" notice, and no active session.
-7. The emailed reset-link path and its state are fully removed (`resetPassword`/`resetPasswordForEmail`, `recoveringPassword`, the `PASSWORD_RECOVERY` branch, and the `INVALID_RECOVERY` code) with no dead references left behind.
-8. The reset password and the service-role key appear only in the ignored `supabase/.env.local` and hosted Supabase secrets — never in a `VITE_` variable, committed source, client bundle, log, or local storage.
-9. `supabase/config.toml` declares the new function with `verify_jwt = false`; `supabase/README.md` documents the local secret, hosted secret, deploy command, and manual cases; any now-misleading emailed-reset guidance is corrected.
-10. The design does not add a Tauri `invoke` data path, background sync, or any change to timer/task/data-sync semantics.
+1. The Goals page renders a two-column shell under TopNav: a persistent `w-64` rail at `lg` and above (border-r, `bg-neutral-900/30`, independently scrolling via `app-scrollbar`) plus a content column that keeps the Goals title/description, the tracker card, the goal list, and the existing `<main>` scroller with `mx-auto max-w-5xl` preserved.
+2. Below `lg` the rail is hidden and a "Trackers" button in the content column opens a drawer with an overlay, `role="dialog"`, `aria-modal`, an accessible name, and a Close control; the drawer closes on overlay click, Escape, and tracker selection, mirroring `pm-projects-drawer`.
+3. The rail is a `<nav aria-label="Goal trackers">` of buttons; each row shows the color dot, the truncated tracker name (`title` for the full value), and a status line in the form "3 active · 1 achieved" that excludes dropped goals (matching the card's progress math), plus `TrackerDueBadge` only for a tracker that is due.
+4. Archived rows render dimmed with the existing "Archived" tag, and the selected row is highlighted with `aria-current` and scrolled into view on mount and whenever selection changes.
+5. Selection goes through `goals.selectTracker(...)` from one centralized handler that also clears `editingGoal`, `pinnedCheckIn`, `deckPreview`, and `trackerActionsOpen` and scrolls the content column back to the top.
+6. The in-card `<select aria-label="Tracker">` is removed and the tracker name becomes a plain `<h2>`; the card's `···` panel and its Archive/Edit buttons are removed.
+7. The rail header has a compact "New tracker" action, and each row has a `···` menu with Edit tracker, Archive tracker (keeping the existing confirm), and Reactivate tracker for archived rows. Edit opens the existing `TrackerForm` inline at the top of the content column.
+8. `GoalSetActions` (import/export goal set) becomes an explicit control in the content column next to the card; an import creates and selects a new tracker, the rail/drawer reflect it immediately, and the drawer closes.
+9. A "Show archived (n)" toggle at the bottom of the rail replaces the page-header "Show archived trackers" checkbox, and the page header's "Add tracker" button is removed (the rail's "New tracker" is the only creation affordance when trackers exist).
+10. The effective tracker stays selected-if-visible ?? first-visible; the rail highlights the effective tracker and never a stale archived selection. Archiving the selected tracker auto-selects the next active tracker, or clears selection when none remain.
+11. The rail renders whenever any tracker exists; with zero trackers it is hidden and the existing "Start your first tracker" panel goes full width.
+12. The card's internal `lg:grid-cols-[minmax(0,1fr)_19rem]` split moves to `xl:` so it is not squeezed between 1024 and 1279px.
+13. `<main>` remains the only content scroller: no second nested scroller is introduced around the card and `CheckInWizard` stays mounted inside `<main>`.
+14. `data-goals-slot` values stay unique — per-row due badges use a distinct slot (e.g. `tracker-rail`) rather than reusing `tracker-due`.
+15. `GoalsPage.test.tsx` is updated for the removed `combobox` "Tracker" and the changed "Add tracker" button counts, and covers the rail, the drawer path, and archived filtering.
+
+## Expected Behavior
+
+- Every tracker the user owns is visible at a glance in the rail, with its active/achieved counts and a due badge when that tracker's deck is due.
+- One click on a rail row switches the content column, clears any pinned check-in / deck preview / open editor, and shows the newly selected card from the top.
+- Tracker maintenance (new, edit, archive, reactivate, archived toggle, goal-set import/export) is reachable from the rail or the content column, never from inside the card's title.
+- On narrow widths, the "Trackers" button opens a drawer that behaves like the Projects drawer and closes on overlay click, Escape, or selection.
+- Archived trackers never become the highlighted row when they are hidden; if the selected tracker disappears, the first visible tracker is shown without writing a new selection.
+- With zero trackers, no rail is rendered and the start panel fills the width with a single "Add tracker" affordance.
+
+## Actual Behavior
+
+- Tracker switching is a `<select>` styled as the card title (`GoalsPage.tsx` L263–277); the tracker set and per-tracker status are invisible until the dropdown is opened.
+- Tracker maintenance, archived filtering, and creation are split between the page header (L217–218) and the card's `···` panel (L296–318).
+- No rail exists, so there is no persistent tracker navigation and no per-tracker status summary outside the selected tracker's card.
 
 ### Testing
 
-1. `pnpm test:unit` — update the route table test in `src/App.test.tsx` L84–98 to the new reset-page heading, and keep its assertion that public auth routes construct no authenticated data.
-2. New unit coverage for the auth provider's reset call using the injectable `client` (the `AuthProvider` already accepts `client`): success invokes the function once with normalized email; failure surfaces the mapped error; no session is created; a short or mismatched new password is rejected before invoking.
-3. New unit coverage for the reset page: prefilled email from router state, validation messages, pending state, and navigation to `/login` with `{ email, passwordReset: true }` on success.
-4. Function-level coverage for the reset handler (pure handler with an injected client, following the existing `supabase/functions/**` test pattern): wrong reset password, missing secret, unknown email, success, and malformed JSON return safe status codes and change no password.
-5. `pnpm lint:supabase` (deno check on all functions) and `pnpm build` pass.
-6. E2E in `e2e/auth.spec.ts`, skipped unless a test reset password is configured (mirroring the `TEST_SIGNUP_INVITE_CODE` pattern at L43–44): create a user with the local service-role key, reset it through the UI, confirm the login page shows the prefilled email and notice, sign in with the new password, then delete the user.
-7. Manual checks: wrong reset password, unknown email, mismatched confirmation, 5-character password, correct reset in both the browser and the packaged Tauri app, and confirmation that no recovery email is sent.
+- `pnpm test:unit` — update the existing `GoalsPage.test.tsx` assertions that depend on the removed select (`getByRole("combobox", { name: "Tracker" })` at L145, 208, 531, 544, 740, 742, 810, 817, 978, 1020), the "Add tracker" counts (L123, L155), the "Show archived trackers" checkbox (L186, 543, 816), and the "Tracker actions" menu (L162, 179, 183, 960, 975, 979, 1007).
+- Assert the slot loop at `GoalsPage.test.tsx` L203 (single element per `data-goals-slot`) still passes with the new rail due-badge slot.
+- New coverage: rail renders one row per tracker with name, color dot, and status counts; clicking a row switches the card; archived rows are dimmed and tagged; the due badge appears only on due trackers; the "Show archived (n)" toggle filters; Edit/Archive/Reactivate from a row work; archiving the selected tracker auto-selects the next active one; zero trackers hides the rail.
+- Drawer coverage: with the `lg` media query stubbed false, the "Trackers" button opens a `role="dialog"` drawer that closes on overlay click, Escape, and selection. Note that jsdom's `matchMedia` stub makes `isLg` false by default, so both branches need explicit stubbing via `src/hooks/useMediaQuery.ts`.
+- Manual check in the Tauri webview or a narrow desktop window that the drawer path works without touch input.
 
-## Context
+## Issue Context
 
-### Current forgot-password trigger
+### New Files
 
-Code Source: `src/components/auth/LoginPage.tsx` L45–61, L73
-Code Description: Validates the typed email and sends a recovery email; the notice text is what changes.
+Optional but recommended: `src/components/goals/TrackerRail.tsx` to hold the rail markup (`<nav aria-label="Goal trackers">`, rows, header "New tracker" action, "Show archived (n)" toggle, per-row `···` menu). Suggested props:
 
 ```tsx
-async function forgotPassword() {
-    setError(null);
-    setNotice(null);
-    if (!isEmail(email)) {
-        setError("Enter your email address first.");
-        return;
-    }
-    setPending(true);
-    try {
-        await resetPassword(email);
-        setNotice("If an account matches that email, a password-reset link will be sent.");
-    } catch (cause) {
-        setError(cause instanceof AuthActionError ? cause.message : "Unable to request a password reset.");
-    } finally {
-        setPending(false);
-    }
+export interface TrackerRailProps {
+    trackers: readonly GoalTracker[]; // effective display order
+    selectedId: string | null; // effective tracker, never a stale archived id
+    showArchived: boolean;
+    archivedCount: number;
+    onSelect: (id: string) => void; // centralized selection reset
+    onNew: () => void;
+    onEdit: (tracker: GoalTracker) => void;
+    onArchive: (tracker: GoalTracker) => void; // keeps the existing window.confirm
+    onReactivate: (tracker: GoalTracker) => void;
+    onToggleArchived: (show: boolean) => void;
 }
-
-<button type="button" … onClick={forgotPassword} disabled={pending}>Forgot password?</button>
 ```
 
-The login form already initializes its notice from `location.state?.passwordReset` (L26), which is the success signal the new flow can reuse.
+### Remove Files
 
-### Current recovery API surface
+None.
 
-Code Source: `src/auth/AuthContext.tsx` L13–23, L91–106
-Code Description: `resetPassword` sends the email; `updatePassword` is gated by a recovery session, and `recoveringPassword` comes from the `PASSWORD_RECOVERY` event at L44.
+### Change Files
 
-```ts
-export interface AuthContextValue {
-    session: Session | null;
-    user: User | null;
-    loading: boolean;
-    recoveringPassword: boolean;
-    signIn(email: string, password: string): Promise<void>;
-    signUp(input: SignUpInput): Promise<void>;
-    signOut(): Promise<void>;
-    resetPassword(email: string): Promise<void>;
-    updatePassword(password: string): Promise<void>;
-}
+#### Goals page shell
 
-const resetPassword = useCallback(async (email: string) => {
-    const normalizedEmail = email.trim();
-    if (!validEmail(normalizedEmail)) throw invalidFields();
-    const { publicAppUrl } = readPublicAppEnv(import.meta.env);
-    const origin = publicAppUrl ?? (typeof window !== "undefined" ? window.location.origin : "");
-    const { error } = await client.auth.resetPasswordForEmail(normalizedEmail, { redirectTo: `${origin.replace(/\/+$/, "")}/reset-password` });
-    if (error) throw mapAuthError(error, "recovery");
-}, [client]);
-
-const updatePassword = useCallback(async (password: string) => {
-    if (password.length < 6) throw invalidFields();
-    if (!session || !recoveringPassword) throw new AuthActionError("INVALID_RECOVERY");
-    const { error } = await client.auth.updateUser({ password });
-    if (error) throw mapAuthError(error, "recovery");
-    if (mounted.current) setRecoveringPassword(false);
-}, [client, recoveringPassword, session]);
-```
-
-`AuthProvider` already accepts an injectable `client` (L31), so tests can supply a fake.
-
-### Current reset page gate and success path
-
-Code Source: `src/components/auth/ResetPasswordPage.tsx` L22–49
-Code Description: Redirects away when a session exists, and otherwise requires a recovery session; on success it signs out and navigates to `/login`.
+Code Source: `src/components/GoalsPage.tsx` L209–223
+Code Description: The page is a single column — `header` (title, description, archived checkbox, Add tracker) then `<main className="min-h-0 flex-1 overflow-auto p-4">` wrapping `<div className="mx-auto max-w-5xl space-y-4">`.
+Code Change Description: Introduce the two-column shell (rail + content column) under the existing `<main>`/`max-w-5xl` content wrapper, keeping `<main>` as the only content scroller. Add the `<lg` "Trackers" button and drawer. Remove the archived checkbox and Add tracker from the header.
 
 ```tsx
-useEffect(() => {
-    if (!checking && !pending && session && !recoveringPassword) navigate("/", { replace: true });
-}, [checking, navigate, pending, recoveringPassword, session]);
-
-if (loading || checking) return <AuthPageLayout title="Checking reset link">…</AuthPageLayout>;
-if (!session || !recoveringPassword) return <AuthPageLayout title="Reset link unavailable">…</AuthPageLayout>;
-
-// on submit success:
-await updatePassword(newPassword);
-await signOut();
-navigate("/login", { replace: true, state: { passwordReset: true } });
+<header className="border-b border-neutral-800 px-4 py-4 sm:px-6"> ... </header>
+<main className="min-h-0 flex-1 overflow-auto p-4">
+    <div className="mx-auto max-w-5xl space-y-4"> ... </div>
+</main>
 ```
 
-The new page needs a different gate (no session, no link) and should pass `{ email, passwordReset: true }` so `/login` can prefill the email.
+#### Tracker list and effective selection
 
-### Route registration
-
-Code Source: `src/App.tsx` L81–86
-Code Description: `/login` and `/signup` are wrapped in `RedirectIfAuthenticated`; `/reset-password` is a standalone public route. Also note `src/App.tsx` L54–58 lazy-loads `ResetPasswordPage`.
+Code Source: `src/components/GoalsPage.tsx` L38, L94–96
+Code Description:
 
 ```tsx
-<Route element={<RedirectIfAuthenticated />}>
-    <Route path="/login" element={<LoginPage />} />
-    <Route path="/signup" element={<SignupPage />} />
-</Route>
-<Route path="/reset-password" element={<ResetPasswordPage />} />
+const ordered = <T extends { sortOrder: number; id: string }>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+const trackers = ordered(Object.values(state.trackers)).filter((row) => showArchived || !row.isArchived);
+const hasTrackers = Object.keys(state.trackers).length > 0;
+const tracker = trackers.find((row) => row.id === state.ui.selectedTrackerId) ?? trackers[0];
 ```
 
-### Existing server-side secret pattern to follow
+Code Change Description: Keep the selected-if-visible ?? first-visible derivation for the content column, but derive an explicit rail list from all trackers so the rail can render active and archived rows (dimmed) and highlight the effective tracker. Do not write a new `selectedTrackerId` during fallback.
 
-Code Source: `supabase/functions/invite-signup/index.ts` L24–71
-Code Description: The only current secret-gated function. It validates POST JSON, compares against a server-only env secret, and uses the service-role client. `reset-password` should mirror this shape (CORS, method guard, safe JSON errors, `500` when the secret or service-role values are missing).
+#### Selection handler
 
-```ts
-const expectedInviteCode = Deno.env.get("SIGNUP_INVITE_CODE");
-if (!expectedInviteCode) {
-    return jsonResponse({ error: "Signup is unavailable" }, 500);
-}
-if (payload.inviteCode !== expectedInviteCode) {
-    return jsonResponse({ error: "Invalid invite" }, 403);
-}
-
-const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-});
-const { data, error } = await supabase.auth.admin.createUser({ … });
-```
-
-Deployment/config references:
-
-- `supabase/config.toml` L385–386 — `[functions.invite-signup] verify_jwt = false` is the model for the new entry.
-- `supabase/config.toml` L163 — `additional_redirect_urls` currently lists the reset-password URLs and should be revisited when the email path goes.
-- `supabase/config.toml` L182 — `minimum_password_length = 6`.
-- `supabase/README.md` L21, L23–58 — the emailed-reset guidance and the invite-secret/deploy procedure to mirror.
-
-### Error mapping to update
-
-Code Source: `src/auth/authErrors.ts` L1–16, L39–57
-Code Description: `INVALID_RECOVERY` is specific to link recovery; the new flow needs codes/messages for a wrong reset password and a missing account.
-
-```ts
-export type AuthErrorCode = "INVALID_FIELDS" | "INVALID_CREDENTIALS" | "INVALID_INVITE" | "ACCOUNT_EXISTS" | "INVALID_RECOVERY" | "AUTH_UNAVAILABLE";
-const messages: Record<AuthErrorCode, string> = {
-    …
-    INVALID_RECOVERY: "This password-reset link is invalid or has expired.",
-    …
-};
-if (operation === "recovery" && (status === 400 || /expired|invalid.*(token|recovery|refresh)/.test(text))) {
-    return new AuthActionError("INVALID_RECOVERY");
-}
-```
-
-### Tests that encode current behaviour
-
-Code Source: `src/App.test.tsx` L84–98
-Code Description: The public-route table asserts the old reset-page heading; it must change to the new heading while keeping the "no authenticated data" guarantee.
+Code Source: `src/components/GoalsPage.tsx` L263–277
+Code Description: The select handler already performs the reset that must survive the refactor.
 
 ```tsx
-it.each([
-    ["/login", "Sign in"],
-    ["/signup", "Create an account"],
-    ["/reset-password", "Reset link unavailable"],
-    ["/goals", "Sign in"],
-])("never constructs authenticated data or reads goals for public/unauthenticated %s", …);
+onChange={event => {
+    goals.selectTracker(event.target.value);
+    setEditingGoal(null);
+    setPinnedCheckIn(null);
+    setDeckPreview(null);
+    setTrackerActionsOpen(false);
+}}
 ```
 
-Code Source: `e2e/auth.spec.ts` L43–66
-Code Description: The only skippable secret-gated E2E test. It creates and deletes a user with the local service-role client — the same cleanup shape the reset E2E needs.
+Code Change Description: Move this into one `selectTracker(id)` handler shared by rail rows, drawer rows, and `GoalSetActions.onImported`; add a content-column scroll-to-top so the newly selected card is fully visible. Remove the `<select>` and the `▾` glyph; render the tracker name as a plain `<h2>` (replacing the `sr-only` h2 at L261).
 
-```ts
-test("signs up with a valid invite and lands on timer", async ({ browser }) => {
-    test.skip(!process.env.TEST_SIGNUP_INVITE_CODE, "Set TEST_SIGNUP_INVITE_CODE and serve invite-signup to run invite signup E2E");
-    const config = localSupabaseConfig();
-    const admin = createClient(config.url, config.serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
-    …
-});
-```
+#### Card maintenance removal
+
+Code Source: `src/components/GoalsPage.tsx` L284–318
+Code Description: Archived → "Reactivate tracker" button; otherwise the `···` "Tracker actions" button with `aria-controls="tracker-actions-panel"` opening a panel containing Edit tracker, Archive tracker (`window.confirm(\`Archive “${tracker.name}”? Its goals and history will be kept.\`)`), and `data-goals-slot="goal-set-actions"`around`<GoalSetActions key={tracker.id} trackerId={tracker.id} onImported={...} />`.
+Code Change Description: Delete the panel and both buttons. Move Edit/Archive/Reactivate into the rail rows and mount `GoalSetActions`as an explicit control in the content column next to the card.`GoalSetActionsProps` (`src/components/goals/GoalSetActions.tsx`L18–21) is`{ trackerId: string; onImported: (newTrackerId: string) => void }`and its`onImported` must go through the shared selection handler and close the drawer.
+
+#### Due badge slot
+
+Code Source: `src/components/GoalsPage.tsx` L324–326
+Code Description: `<div data-goals-slot="tracker-due" data-tracker-id={tracker.id}><TrackerDueBadge due={dueTracker !== null} periodLabel={...} /></div>`
+Code Change Description: Keep the card's `tracker-due` slot as the single card instance and give rail rows a distinct slot (e.g. `data-goals-slot="tracker-rail"`) so the single-element slot assertions in `GoalsPage.test.tsx` L203 and the `querySelector('[data-goals-slot="tracker-due"]')` lookups at L206, 527, 542, 553 keep working.
+
+#### Empty states
+
+Code Source: `src/components/GoalsPage.tsx` L237–247
+Code Description: A single section that renders either "No active trackers" or "Start your first tracker" with copy and one `primaryLarge` "Add tracker" button.
+Code Change Description: Keep both panels; "No active trackers" renders inside the content column while the rail is still shown; "Start your first tracker" renders full width with the rail hidden.
+
+#### Drawer precedent
+
+Code Source: `src/components/ProjectManager/ProjectManagerPage.tsx` L102–112, L203–218
+Code Description: Trigger button uses `aria-expanded` / `aria-controls="pm-projects-drawer"`; the drawer is `<div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="Projects">` with a `bg-black/60` overlay whose `onClick` closes, and a `#pm-projects-drawer` panel (`w-80 max-w-[85vw]`, `inset-y-0 left-0`, `bg-neutral-950 shadow-2xl`) with a Close button. Responsiveness comes from `useMediaQuery` (`src/hooks/useMediaQuery.ts`), `isLg = "(min-width: 1024px)"`.
+Code Change Description: Mirror this structure for the Goals tracker drawer and use the same `useMediaQuery` hook so the rail/drawer branch is CSS-independent and testable.
+
+#### Existing state used, not extended
+
+Code Source: `src/state/GoalContext.tsx` L11–15, L296
+Code Description: `GoalUIState` is `{ selectedTrackerId: string | null; expandedGoalIds: Record<string, boolean> }`, persisted to `GOAL_UI_STORAGE_KEY = "goals_state_v1"`; `selectTracker: id => mutate(previous => ({ ...previous, ui: { ...previous.ui, selectedTrackerId: id } }))`.
+Code Change Description: None — reuse `selectedTrackerId` and `selectTracker` exactly; do not add a second selection source or a schema/storage change.
+
+### Files Using
+
+`src/App.tsx` (lazy route `/goals`, TopNav link at L215), `src/state/GoalContext.tsx`, `src/components/GoalsPage.test.tsx`.
 
 ## Notes
 
-- **Assumption:** one app-wide special reset password, stored as a new server-only Edge Function secret (suggested name `RESET_PASSWORD_CODE`), rather than reusing `SIGNUP_INVITE_CODE` or per-user codes. Confirm before implementation; reusing the invite code is a smaller change if preferred.
-- **Assumption:** the emailed reset-link flow is replaced, not kept alongside this one, because the request says "instead of an email".
-- **Assumption:** failures are explicit (a wrong special reset password says so, and an unknown email says no account exists) rather than generic. This is friendlier for a personal app but does disclose whether an email is registered; switch to a generic message if that matters.
-- The reset password can be typed by anyone who knows it, for any registered email; that is the accepted trade-off for this personal app. A modest delay or per-IP throttle in the function is optional, and no GoTrue rate limit covers a custom function.
-- Existing sessions on other devices are expected to stay valid after the reset; revoking them is out of scope unless implementation decides otherwise.
-- Repo constraints to preserve: no service-role key, invite code, or new secret in a `VITE_` variable or committed source; no Tauri `invoke` data path; keep `DataProvider`, `AppStateProvider`, `ProjectManagerProvider`, and `StateSyncBridge` behind the authenticated route shell, and do not let public auth pages trigger authenticated data reads.
+- This is Issue 1 of 2. Issue 2 ("Reorder active goal trackers from the rail") adds `reorderTrackers` to the goals context and drag handles over active rail rows, and assumes this issue is merged.
+- Explicitly out of scope for this issue: dragging/reordering trackers, any `sortOrder` write path, and any persistence or schema change.
+- The inline `CheckInWizard` is mounted inside `<main>` deliberately (`GoalsPage.tsx` L407–417) so later goals are not clipped; do not move it or wrap the card in a nested scroller.

@@ -11,6 +11,7 @@ import { normalizeTaskDueDate } from "../lib/taskDueDate";
 import { applyWorkStart } from "../lib/pm/workStart";
 import { normalizeWaiting, withWaitingInvariant } from "../lib/pm/waiting";
 import { withCompletionStamp } from "../lib/pm/completion";
+import { reorderChecklistItems, type ChecklistZone } from "../lib/pm/checklistOrder";
 
 // LocalStorage key
 const LS_KEY = "pm_state_v1";
@@ -93,6 +94,7 @@ interface PMContextShape {
     createTask: (title: string, opts?: Partial<PMTask>) => Promise<PMTask>;
     ensureMetadataForAppTask: (appTaskId: string, meta: { title: string; estimatePomos?: number }) => PMTask;
     updateTask: (id: string, patch: Partial<PMTask>) => void;
+    reorderChecklist: (taskId: string, zone: ChecklistZone, activeId: string, overId: string) => void;
     recordWorkStart: (taskId: string, at?: string) => void;
     archiveTask: (id: string, archive?: boolean) => void;
     setSelectedTask: (id: string | null) => void;
@@ -691,6 +693,16 @@ export const ProjectManagerProvider: React.FC<{
             return { ...prev, tasks: { ...prev.tasks, [id]: withWaitingInvariant(withCompletionStamp(task, merged, merged.updatedAt)) } };
         });
     };
+    const reorderChecklist = (taskId: string, zone: ChecklistZone, activeId: string, overId: string) => {
+        persist((prev) => {
+            if (prev.ui.selectedTaskId !== taskId) return prev;
+            const task = prev.tasks[taskId];
+            if (!task) return prev;
+            const checklist = reorderChecklistItems(task.checklist, zone, activeId, overId);
+            if (checklist === task.checklist) return prev;
+            return { ...prev, tasks: { ...prev.tasks, [taskId]: { ...task, checklist } } };
+        });
+    };
     const recordWorkStart = useCallback((taskId: string, at: string = now()) => {
         persist((prev) => {
             const task = prev.tasks[taskId];
@@ -816,6 +828,7 @@ export const ProjectManagerProvider: React.FC<{
                 createTask,
                 ensureMetadataForAppTask,
                 updateTask,
+                reorderChecklist,
                 recordWorkStart,
                 archiveTask,
                 setSelectedTask,

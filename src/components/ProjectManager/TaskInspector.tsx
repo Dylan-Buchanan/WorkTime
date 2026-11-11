@@ -4,11 +4,15 @@ import { PMTask, TaskPriority, TaskStatus } from "../../state/types";
 import { useAppState } from "../../state/AppStateContext";
 import { workStartOccupation } from "../../lib/engine";
 import { waitingOf } from "../../lib/pm/waiting";
+import { getChecklistZones, insertChecklistItem, type ChecklistZone } from "../../lib/pm/checklistOrder";
 import { useNavigate } from "react-router-dom";
 import type { GoogleCalendarDataAccess } from "../../lib/data/GoogleCalendarDataAccess";
 import type { GoogleCalendarOAuthReturn } from "../../lib/integrations";
 import { GoogleCalendarTaskSection } from "./GoogleCalendarTaskSection";
+import { ChecklistRow, ChecklistZones } from "./ChecklistRows";
 // import { InspectorSkeleton } from './Skeletons';
+
+const ChecklistSortable = React.lazy(() => import("./ChecklistSortable"));
 
 export interface TaskInspectorProps {
     googleCalendarDataAccess?: GoogleCalendarDataAccess;
@@ -21,7 +25,7 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
     googleCalendarResume,
     onGoogleCalendarResumeConsumed,
 }) => {
-    const { state, updateTask } = usePM();
+    const { state, updateTask, reorderChecklist } = usePM();
     const app = useAppState();
     const navigate = useNavigate();
     const id = state.ui.selectedTaskId;
@@ -319,7 +323,12 @@ export const TaskInspector: React.FC<TaskInspectorProps> = ({
                     <LinksEditor links={task.links} onChange={(links) => updateTask(task.id, { links })} />
                 </Section>
                 <Section title="Checklist">
-                    <Checklist task={task} update={(patch) => updateTask(task.id, patch)} />
+                    <Checklist
+                        key={task.id}
+                        task={task}
+                        update={(patch) => updateTask(task.id, patch)}
+                        onReorder={(zone, activeId, overId) => reorderChecklist(task.id, zone, activeId, overId)}
+                    />
                 </Section>
             </div>
             <div className="px-4 py-2.5 border-t border-neutral-800 text-[10px] text-neutral-500 flex flex-wrap gap-x-3 gap-y-1 items-center bg-neutral-900/30">
@@ -466,35 +475,36 @@ const LinksEditor: React.FC<{
 const Checklist: React.FC<{
     task: PMTask;
     update: (patch: Partial<PMTask>) => void;
-}> = ({ task, update }) => {
+    onReorder: (zone: ChecklistZone, activeId: string, overId: string) => void;
+}> = ({ task, update, onReorder }) => {
     const [input, setInput] = React.useState("");
+    const zones = getChecklistZones(task.checklist);
+    const canReorder = zones.open.length > 1 || zones.done.length > 1;
     const add = () => {
         const title = input.trim();
         if (title) {
             update({
-                checklist: [...task.checklist, { id: crypto.randomUUID(), title, done: false }],
+                checklist: insertChecklistItem(task.checklist, { id: crypto.randomUUID(), title, done: false }),
             });
         }
         setInput("");
     };
+    const toggle = (id: string) => {
+        update({ checklist: task.checklist.map((item) => item.id === id ? { ...item, done: !item.done } : item) });
+    };
+    const staticRows = (
+        <ChecklistZones
+            open={zones.open.length > 0 && zones.open.map((item) => <ChecklistRow key={item.id} item={item} onToggle={toggle} />)}
+            done={zones.done.length > 0 && zones.done.map((item) => <ChecklistRow key={item.id} item={item} onToggle={toggle} />)}
+        />
+    );
     return (
         <div className="space-y-2">
-            <div className="space-y-1">
-                {task.checklist.map((item) => (
-                    <label key={item.id} className="flex items-center gap-2 text-[11px] bg-neutral-900 border border-neutral-800 px-2 py-1 rounded">
-                        <input
-                            type="checkbox"
-                            checked={item.done}
-                            onChange={() =>
-                                update({
-                                    checklist: task.checklist.map((c) => (c.id === item.id ? { ...c, done: !c.done } : c)),
-                                })
-                            }
-                        />
-                        <span className={item.done ? "line-through opacity-60" : ""}>{item.title}</span>
-                    </label>
-                ))}
-            </div>
+            {canReorder ? (
+                <React.Suspense fallback={staticRows}>
+                    <ChecklistSortable zones={zones} onToggle={toggle} onReorder={onReorder} />
+                </React.Suspense>
+            ) : staticRows}
             <div className="flex items-center gap-1">
                 <input
                     value={input}
