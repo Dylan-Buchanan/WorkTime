@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import { useAppState } from "../state/AppStateContext";
 import { Settings } from "../state/types";
 import { useSounds } from "../hooks/useSounds";
@@ -268,11 +269,24 @@ export const SettingsPanel: React.FC = () => {
             >
                 Reset All Data
             </button>
-            {showReset && (
-                <div className="fixed inset-0 z-40 flex items-center justify-center">
-                    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" />
+            {/*
+             * Portalled to <body>: SettingsPanel is mounted inside the desktop
+             * sidebar (<aside> in App.tsx), whose `backdrop-blur-sm` makes it the
+             * containing block for `position: fixed` descendants. Without the
+             * portal the overlay would resolve `inset-0` against the 288px
+             * column instead of the viewport. SyncControls uses the same escape.
+             */}
+            {showReset && createPortal(
+                <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="confirm-data-reset-title"
+                    data-testid="reset-confirm-overlay"
+                >
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" data-testid="reset-confirm-scrim" />
                     <div className="relative w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-neutral-700 bg-neutral-900/95 p-4 shadow-xl space-y-3 text-[11px]">
-                        <h4 className="text-neutral-200 font-semibold text-xs">
+                        <h4 id="confirm-data-reset-title" className="text-neutral-200 font-semibold text-xs">
                             Confirm Data Reset
                         </h4>
                         <p className="text-neutral-400 leading-relaxed">
@@ -331,7 +345,8 @@ export const SettingsPanel: React.FC = () => {
                             </button>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body,
             )}
         </div>
     );

@@ -198,6 +198,23 @@ describe("SettingsPanel reset scope", () => {
         expect(soundSwitch("Hover")).not.toBeChecked();
     });
 
+    it("renders the reset confirmation outside the blurred sidebar subtree", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        // The desktop sidebar carries `backdrop-blur-sm`, which would make it the
+        // containing block for a `position: fixed` overlay. jsdom runs no layout,
+        // so this asserts the structural escape (portalled to <body>) rather than
+        // geometry; e2e/overlay-geometry.spec.ts covers the real layout.
+        render(wrap(data, <div data-testid="blurred-sidebar" className="backdrop-blur-sm"><SettingsPanel /></div>));
+
+        await waitFor(() => expect(screen.getByText("Reset All Data")).toBeTruthy());
+        act(() => screen.getByText("Reset All Data").click());
+
+        const dialog = screen.getByRole("dialog", { name: "Confirm Data Reset" });
+        expect(dialog.parentElement).toBe(document.body);
+        expect(screen.getByTestId("blurred-sidebar").contains(dialog)).toBe(false);
+        expect(document.body.contains(dialog)).toBe(true);
+    });
+
     it("stores and clears the agent API key locally", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         render(wrap(data, <SettingsPanel />));
