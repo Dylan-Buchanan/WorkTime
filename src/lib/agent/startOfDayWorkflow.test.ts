@@ -119,6 +119,28 @@ describe("Start-of-Day workflow", () => {
         ]);
     });
 
+    it("requires the planner to preserve checklist order and leaves the writer clause unchanged", async () => {
+        const complete = vi.fn()
+            .mockResolvedValueOnce(plannerJson())
+            .mockResolvedValueOnce(JSON.stringify({
+                summary: "Ready",
+                proposedTasks: [{ id: "t1", title: "Draft", description: "", checklist: [{ id: "c1", title: "Old wording", done: false }] }],
+            }));
+        await runStartOfDayWorkflow({
+            projectId: "p1", pmState: pmState(), logs: [], settings: { work_minutes: 25 },
+            now: new Date("2026-08-07T09:00:00.000Z"), workUntil: new Date("2026-08-07T11:00:00.000Z"),
+            client: { complete } as ChatCompletionsClient, provider: "openai",
+        });
+        const plannerSystem = complete.mock.calls[0][0].messages[0].content as string;
+        expect(plannerSystem).toContain(
+            "Preserve ids, projectId, existing checklist item ids/done flags and their order, and relationships unless the plan deliberately updates their content.",
+        );
+        const writerSystem = complete.mock.calls[1][0].messages[0].content as string;
+        expect(writerSystem).toContain(
+            "Structure is frozen: return exactly the same task count and order, preserve every task id, and preserve checklist count, ids, order, and done flags.",
+        );
+    });
+
     it("passes caller-supplied busy intervals into the frozen planner budget", async () => {
         const complete = vi.fn()
             .mockResolvedValueOnce(plannerJson())
