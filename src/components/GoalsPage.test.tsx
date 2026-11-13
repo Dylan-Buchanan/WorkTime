@@ -4,7 +4,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { GoalsPage } from "./GoalsPage";
-import { GoalProvider } from "../state/GoalContext";
+import { GoalProvider, GOAL_UI_STORAGE_KEY } from "../state/GoalContext";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { HabitProvider } from "../state/HabitContext";
 import { AppStateProvider } from "../state/AppStateContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
@@ -28,6 +29,7 @@ import {
 
 const drag = vi.hoisted(() => ({ end: null as null | ((event: DragEndEvent) => void) }));
 const deckExport = vi.hoisted(() => ({ render: vi.fn(), deliver: vi.fn(), stamp: vi.fn() }));
+vi.mock("../hooks/useMediaQuery");
 vi.mock("../lib/goals/deck/render", () => ({ renderDeck: deckExport.render }));
 vi.mock("../lib/goals/deck/delivery", () => ({ initiateBlobDownload: deckExport.deliver }));
 vi.mock("../state/GoalContext", async importOriginal => {
@@ -53,8 +55,11 @@ function tree(data: InMemoryDataAccess, today?: LocalDateKey) {
 }
 async function mount(data = new InMemoryDataAccess(makeAppState()), today?: LocalDateKey) {
     const view = render(tree(data, today));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add tracker" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^(Add tracker|New tracker|Trackers)$/ })).toBeEnabled());
     return { data, user: userEvent.setup(), ...view };
+}
+function trackerRow(name: string) {
+    return within(screen.getByRole("navigation", { name: "Goal trackers" })).getByRole("button", { name });
 }
 async function oneTracker() {
     const data = new InMemoryDataAccess(makeAppState());
@@ -103,6 +108,7 @@ const habitMetric = (overrides: Partial<GoalMetric> = {}): GoalMetric => ({
 });
 beforeEach(() => {
     localStorage.clear();
+    vi.mocked(useMediaQuery).mockReturnValue(true);
     deckExport.render.mockReset().mockResolvedValue({ blob: new Blob(["deck"]), fileName: "Work.pptx" });
     deckExport.deliver.mockReset().mockResolvedValue(undefined);
     deckExport.stamp.mockReset().mockResolvedValue(undefined);
@@ -121,6 +127,8 @@ describe("GoalsPage", () => {
         expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
         expect(screen.getByText(/A tracker holds the goals you are working toward/)).toBeInTheDocument();
         expect(screen.getAllByRole("button", { name: "Add tracker" })).toHaveLength(1);
+        expect(screen.queryByRole("navigation", { name: "Goal trackers" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Trackers" })).not.toBeInTheDocument();
         await user.click(screen.getByRole("button", { name: "Add tracker" }));
         await user.type(screen.getByLabelText("Tracker name"), "Work");
         await user.type(screen.getByLabelText("Purpose"), "Ship useful things");
@@ -133,7 +141,9 @@ describe("GoalsPage", () => {
         expect(screen.getByPlaceholderText("Add your first goal")).toBeInTheDocument();
         expect(screen.getByText(/Review what you did/)).toBeInTheDocument();
         expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
-        await user.click(screen.getByRole("button", { name: "Add tracker" }));
+        expect(screen.queryByRole("combobox", { name: "Tracker" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Add tracker" })).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "New tracker" }));
         await user.type(screen.getByLabelText("Tracker name"), "Life");
         await user.selectOptions(screen.getByLabelText("Cadence"), "monthly-weekday");
         await user.selectOptions(screen.getByLabelText("Weekday"), "5");
@@ -142,7 +152,7 @@ describe("GoalsPage", () => {
         const saved = await data.loadGoals();
         expect(saved.trackers.find(row => row.name === "Work")).toMatchObject({ purpose: "Ship useful things", cadence: { kind: "every-n-weeks", weekday: 3, intervalWeeks: 3 }, color: "#123456" });
         expect(saved.trackers.find(row => row.name === "Life")?.cadence).toEqual({ kind: "monthly-weekday", weekday: 5 });
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), saved.trackers.find(row => row.name === "Work")!.id);
+        await user.click(trackerRow("Work"));
         expect(screen.getByRole("heading", { name: "Work" })).toBeInTheDocument();
     });
 
@@ -152,14 +162,131 @@ describe("GoalsPage", () => {
         await mount(data);
         expect(screen.getByRole("heading", { name: "No active trackers" })).toBeInTheDocument();
         expect(screen.getByText(/Every tracker you have is archived/)).toBeInTheDocument();
-        expect(screen.getAllByRole("button", { name: "Add tracker" })).toHaveLength(1);
+        expect(screen.queryByRole("button", { name: "Add tracker" })).not.toBeInTheDocument();
+        expect(screen.getByRole("navigation", { name: "Goal trackers" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "New tracker" })).toBeEnabled();
         expect(screen.queryByRole("heading", { name: "Start your first tracker" })).not.toBeInTheDocument();
+    });
+
+    it("shows tracker status in the rail and highlights the visible fallback without overwriting selection", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const work = buildGoalTrackerFixture({ color: "#123456" });
+        const life = buildGoalTrackerFixture({ id: "life", name: "Life", sortOrder: 1, lastBuiltPeriodStart: "2026-10-04" });
+        const archived = buildArchivedTrackerFixture({ sortOrder: 2 });
+        await data.saveGoals([work, life, archived], [
+            buildGoalFixture({ id: "active", trackerId: work.id }),
+            buildGoalFixture({ id: "achieved", trackerId: work.id, lifecycle: "achieved" }),
+            buildGoalFixture({ id: "dropped", trackerId: work.id, lifecycle: "dropped" }),
+        ], []);
+        localStorage.setItem(GOAL_UI_STORAGE_KEY, JSON.stringify({ selectedTrackerId: archived.id, expandedGoalIds: {} }));
+        const { user } = await mount(data, "2026-10-20");
+        const navigation = screen.getByRole("navigation", { name: "Goal trackers" });
+        expect(within(navigation).getAllByRole("listitem")).toHaveLength(2);
+        expect(trackerRow(work.name)).toHaveAttribute("aria-current", "true");
+        expect(trackerRow(work.name)).toHaveAccessibleDescription("1 active · 1 achieved Deck due · October 2026");
+        expect(within(trackerRow(work.name)).getByTitle(work.name)).toHaveClass("truncate");
+        expect(trackerRow(work.name).querySelector("[style]")).toHaveStyle({ backgroundColor: "rgb(18, 52, 86)" });
+        expect(trackerRow(life.name)).toHaveAccessibleDescription("0 active · 0 achieved");
+        expect(screen.queryByRole("button", { name: "Trackers" })).not.toBeInTheDocument();
+        expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(archived.id);
+
+        const toggle = within(navigation).getByRole("checkbox", { name: "Show archived (1)" });
+        await user.click(toggle);
+        expect(within(navigation).getAllByRole("listitem")).toHaveLength(3);
+        expect(trackerRow(archived.name)).toHaveAttribute("aria-current", "true");
+        expect(trackerRow(archived.name)).toHaveAccessibleDescription("0 active · 0 achieved Archived");
+        expect(trackerRow(archived.name).closest("li")).toHaveClass("opacity-75");
+        await user.click(toggle);
+        expect(within(navigation).queryByRole("button", { name: archived.name })).not.toBeInTheDocument();
+        expect(trackerRow(work.name)).toHaveAttribute("aria-current", "true");
+        expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(archived.id);
+    });
+
+    it("switches from the rail in one click and resets the content scroll and inline editors", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const work = buildGoalTrackerFixture();
+        const life = buildGoalTrackerFixture({ id: "life", name: "Life", sortOrder: 1 });
+        await data.saveGoals([work, life], [buildGoalFixture({ trackerId: work.id })], []);
+        const { user } = await mount(data, "2026-10-20");
+        const main = screen.getByRole("main");
+        await user.click(screen.getByRole("button", { name: "Check in · October 2026" }));
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const next = trackerRow(life.name);
+        const scrollIntoView = vi.fn();
+        Object.defineProperty(next.closest("li"), "scrollIntoView", { value: scrollIntoView });
+        main.scrollTop = 100;
+        await user.click(next);
+        expect(screen.getByRole("heading", { level: 2, name: life.name })).toBeInTheDocument();
+        expect(next).toHaveAttribute("aria-current", "true");
+        expect(main.scrollTop).toBe(0);
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+        await user.click(trackerRow(work.name));
+        expect(main.querySelector('[data-goals-slot="check-in-wizard"]')).toBeEmptyDOMElement();
+        expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
+    });
+
+    it("selects the next active tracker after archiving the selected row even when archives are shown", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const first = buildGoalTrackerFixture();
+        const selected = buildGoalTrackerFixture({ id: "selected", name: "Selected", sortOrder: 1 });
+        const next = buildGoalTrackerFixture({ id: "next", name: "Next", sortOrder: 2 });
+        await data.saveGoals([first, selected, next, buildArchivedTrackerFixture()], [], []);
+        const { user } = await mount(data);
+        await user.click(trackerRow(selected.name));
+        await user.click(screen.getByRole("checkbox", { name: "Show archived (1)" }));
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await user.click(screen.getByRole("button", { name: "Actions for Selected" }));
+        await user.click(screen.getByRole("button", { name: "Archive tracker" }));
+        expect(trackerRow(selected.name)).not.toHaveAttribute("aria-current");
+        expect(trackerRow(selected.name)).toHaveAccessibleDescription("0 active · 0 achieved Archived");
+        expect(trackerRow(next.name)).toHaveAttribute("aria-current", "true");
+        expect(screen.getByRole("heading", { level: 2, name: next.name })).toBeInTheDocument();
+        expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(next.id);
+    });
+
+    it("opens the narrow drawer and closes it by overlay, Escape, Close, or tracker selection", async () => {
+        vi.mocked(useMediaQuery).mockReturnValue(false);
+        const data = new InMemoryDataAccess(makeAppState());
+        const work = buildGoalTrackerFixture();
+        const life = buildGoalTrackerFixture({ id: "life", name: "Life", sortOrder: 1 });
+        await data.saveGoals([work, life], [], []);
+        const { user } = await mount(data);
+        const trigger = screen.getByRole("button", { name: "Trackers" });
+        const open = async () => {
+            await user.click(trigger);
+            expect(trigger).toHaveAttribute("aria-expanded", "true");
+            const dialog = screen.getByRole("dialog", { name: "Trackers" });
+            expect(dialog).toHaveAttribute("aria-modal", "true");
+            expect(within(dialog).getByRole("button", { name: "Close" })).toHaveFocus();
+            expect(within(dialog).getByRole("navigation", { name: "Goal trackers" })).toBeInTheDocument();
+            return dialog;
+        };
+        const expectClosed = () => {
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+            expect(screen.queryByRole("navigation", { name: "Goal trackers" })).not.toBeInTheDocument();
+            expect(trigger).toHaveAttribute("aria-expanded", "false");
+            expect(trigger).toHaveFocus();
+        };
+        await user.click((await open()).querySelector("[aria-hidden=true]")!);
+        expectClosed();
+        await open();
+        await user.tab({ shift: true });
+        expect(screen.getByRole("checkbox", { name: "Show archived (0)" })).toHaveFocus();
+        await user.keyboard("{Escape}");
+        expectClosed();
+        await user.click(within(await open()).getByRole("button", { name: "Close" }));
+        expectClosed();
+        await user.click(within(await open()).getByRole("button", { name: life.name }));
+        expectClosed();
+        expect(screen.getByRole("heading", { level: 2, name: life.name })).toBeInTheDocument();
+        await open();
+        expect(trackerRow(life.name)).toHaveAttribute("aria-current", "true");
     });
 
     it("rejects invalid tracker forms and supports tracker edit, confirmed archive, and restore", async () => {
         const { data, tracker } = await oneTracker();
         const { user } = await mount(data);
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
+        await user.click(screen.getByRole("button", { name: `Actions for ${tracker.name}` }));
         await user.click(screen.getByRole("button", { name: "Edit tracker" }));
         await user.clear(screen.getByLabelText("Tracker name"));
         await user.click(screen.getByRole("button", { name: "Save tracker" }));
@@ -176,15 +303,17 @@ describe("GoalsPage", () => {
         await user.click(screen.getByRole("button", { name: "Save tracker" }));
         expect(await screen.findByRole("heading", { name: "Renamed" })).toBeInTheDocument();
         const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
+        await user.click(screen.getByRole("button", { name: "Actions for Renamed" }));
         await user.click(screen.getByRole("button", { name: "Archive tracker" }));
         expect(screen.getByRole("heading", { name: "Renamed" })).toBeInTheDocument();
         confirm.mockReturnValue(true);
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
+        await user.click(screen.getByRole("button", { name: "Actions for Renamed" }));
         await user.click(screen.getByRole("button", { name: "Archive tracker" }));
         expect(confirm).toHaveBeenCalledWith(expect.stringContaining("history will be kept"));
-        await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
+        expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBeNull();
+        await user.click(screen.getByRole("checkbox", { name: "Show archived (1)" }));
         expect(await screen.findByRole("heading", { name: "Renamed" })).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Actions for Renamed" }));
         await user.click(screen.getByRole("button", { name: "Reactivate tracker" }));
         await waitFor(async () => expect((await data.loadGoals()).trackers[0].isArchived).toBe(false));
         expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -201,11 +330,11 @@ describe("GoalsPage", () => {
         expect(screen.getByText(/No open period. First period starts on/)).toHaveTextContent("2099-01-04");
         expect(screen.queryByRole("button", { name: /check.in|build deck/i })).not.toBeInTheDocument();
         for (const slot of ["tracker-due", "check-in-entry", "deck-entry", "goal-set-actions", "goal-slip", "check-in-wizard", "deck-preview", "due-nudge"]) {
-            expect(container.querySelector(`[data-goals-slot="${slot}"]`)).not.toBeNull();
+            expect(container.querySelectorAll(`[data-goals-slot="${slot}"]`)).toHaveLength(1);
         }
         expect(container.querySelector('[data-goals-slot="tracker-due"]')).toHaveAttribute("data-tracker-id", future.id);
         expect(container.querySelector('[data-goals-slot="goal-slip"]')).toHaveAttribute("data-goal-id", goal.id);
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), past.id);
+        await user.click(trackerRow(past.name));
         expect(screen.getByText(/First period started on/)).toHaveTextContent(past.cadenceAnchorAt);
         expect(screen.queryByText(/No open period/)).not.toBeInTheDocument();
     });
@@ -528,7 +657,7 @@ describe("GoalsPage", () => {
         expect(slot()).toHaveAttribute("data-tracker-id", due.id);
         expect(slot()).toHaveTextContent("Deck due · October 2026");
         // An equal build key permits a rebuild but no longer shows the badge.
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), built.id);
+        await user.click(trackerRow(built.name));
         expect(slot()).toHaveAttribute("data-tracker-id", built.id);
         expect(slot()).toBeEmptyDOMElement();
     });
@@ -540,8 +669,8 @@ describe("GoalsPage", () => {
         await data.saveGoals([active, archived], [], []);
         const { user, container, unmount } = await mount(data, "2026-10-20");
         const slot = () => container.querySelector('[data-goals-slot="tracker-due"]') as HTMLElement;
-        await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), archived.id);
+        await user.click(screen.getByRole("checkbox", { name: "Show archived (1)" }));
+        await user.click(trackerRow(archived.name));
         expect(slot()).toHaveAttribute("data-tracker-id", archived.id);
         expect(slot()).toBeEmptyDOMElement();
 
@@ -737,9 +866,9 @@ describe("GoalsPage", () => {
             expect(within(entry()).queryByRole("button", { name: "Build deck" })).not.toBeInTheDocument();
             expect(container.querySelector('[data-goals-slot="deck-preview"]')).toBeEmptyDOMElement();
 
-            await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), plainTracker.id);
+            await user.click(trackerRow(plainTracker.name));
             expect(within(entry()).getByRole("button", { name: "Build deck" })).toBeEnabled();
-            await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), tracker.id);
+            await user.click(trackerRow(tracker.name));
             expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
 
             await act(async () => { finishLoading(loadedHabits); });
@@ -807,14 +936,14 @@ describe("GoalsPage", () => {
         expect(preview()).toBeEmptyDOMElement();
         expect(screen.queryByRole("button", { name: /build deck|rebuild deck/i })).not.toBeInTheDocument();
 
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), future.id);
+        await user.click(trackerRow(future.name));
         expect(entry()).toHaveAttribute("data-tracker-id", future.id);
         expect(entry()).toHaveTextContent("it starts on 2099-01-04");
         expect(within(entry()).getByRole("button", { name: "Deck not ready" })).toBeDisabled();
         expect(preview()).toBeEmptyDOMElement();
 
-        await user.click(screen.getByRole("checkbox", { name: "Show archived trackers" }));
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), archived.id);
+        await user.click(screen.getByRole("checkbox", { name: "Show archived (1)" }));
+        await user.click(trackerRow(archived.name));
         // Archived trackers collapse the period spine entirely.
         expect(entry()).toBeNull();
         expect(container.querySelector('[data-goals-slot="check-in-entry"]')).toBeNull();
@@ -956,8 +1085,7 @@ describe("GoalsPage", () => {
 
     it("mounts goal-set export and import actions in the selected tracker's slot", async () => {
         const { data, tracker } = await oneTracker();
-        const { user, container } = await mount(data);
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
+        const { container } = await mount(data);
         const slot = container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         expect(slot).toHaveAttribute("data-tracker-id", tracker.id);
         expect(within(slot).getByRole("button", { name: "Export goals" })).toBeDisabled();
@@ -972,11 +1100,9 @@ describe("GoalsPage", () => {
         const second = buildGoalTrackerFixture({ id: "tracker-beta", name: "Beta", sortOrder: 1 });
         await data.saveGoals([first, second], [], []);
         const { user, container } = await mount(data);
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         expect(slot()).toHaveAttribute("data-tracker-id", first.id);
-        await user.selectOptions(screen.getByRole("combobox", { name: "Tracker" }), second.id);
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
+        await user.click(trackerRow(second.name));
         expect(slot()).toHaveAttribute("data-tracker-id", second.id);
         expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeDisabled();
         expect(within(slot()).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
@@ -1004,7 +1130,6 @@ describe("GoalsPage", () => {
         expect(screen.getByRole("form", { name: "Edit goal" })).toBeInTheDocument();
 
         // Drive the real Lane B component through a validated file and confirm.
-        await user.click(screen.getByRole("button", { name: "Tracker actions" }));
         await user.upload(
             within(slot()).getByLabelText("Import goals"),
             new File([serializeGoalSet(tracker, [goal])], "goals-work-2026-10-20.json", { type: "application/json" }),
@@ -1017,7 +1142,8 @@ describe("GoalsPage", () => {
         const created = (await data.loadGoals()).trackers.find(row => row.id !== tracker.id)!;
         expect(created).toBeDefined();
         expect(slot()).toHaveAttribute("data-tracker-id", created.id);
-        expect(screen.getByRole("combobox", { name: "Tracker" })).toHaveValue(created.id);
+        expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(created.id);
+        expect(screen.getByRole("navigation", { name: "Goal trackers" }).querySelector("[aria-current=true]")).toHaveTextContent(created.name);
         expect(wizard()).toBeEmptyDOMElement();
         expect(preview()).toBeEmptyDOMElement();
         expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();

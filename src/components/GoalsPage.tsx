@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import { useHabits } from "../state/HabitContext";
 import { usePM } from "../state/ProjectManagerContext";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
@@ -26,6 +27,7 @@ import { GoalSetActions } from "./goals/GoalSetActions";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
 import { TrackerDueBadge } from "./goals/TrackerDueBadge";
+import { TrackerRail } from "./goals/TrackerRail";
 
 const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const control = "rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs";
@@ -34,7 +36,6 @@ const primary = "rounded bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-ind
 const primaryLarge = "rounded bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50";
 const achieveButton = "rounded border border-emerald-700 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50";
 const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-900/40";
-const menuButton = "rounded-md border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-sm leading-none text-neutral-300 hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300";
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
 const habitsLoadingMessage = "Habits are still loading. Try again when they finish.";
@@ -69,32 +70,35 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [error, setError] = useState<string | null>(null);
     const [pinnedCheckIn, setPinnedCheckIn] = useState<{ trackerId: string; period: GoalPeriod } | null>(null);
     const [deckPreview, setDeckPreview] = useState<{ trackerId: string; plan: DeckPlan } | null>(null);
-    const [trackerActionsOpen, setTrackerActionsOpen] = useState(false);
-    const trackerActionsRef = useRef<HTMLDivElement>(null);
+    const [trackerActionsOpen, setTrackerActionsOpen] = useState<string | null>(null);
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const isLg = useMediaQuery("(min-width: 1024px)");
+    const mainRef = useRef<HTMLElement>(null);
+    const drawerTriggerRef = useRef<HTMLButtonElement>(null);
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
     );
-    // The overflow panel is low-frequency; dismiss it on outside press or Escape.
+    const allTrackers = ordered(Object.values(state.trackers));
+    const activeTrackers = allTrackers.filter(row => !row.isArchived);
+    const trackers = showArchived ? allTrackers : activeTrackers;
+    const hasTrackers = allTrackers.length > 0;
+    const drawerVisible = hasTrackers && !isLg && drawerOpen;
     useEffect(() => {
-        if (!trackerActionsOpen) return;
-        const onPointerDown = (event: PointerEvent) => {
-            if (!trackerActionsRef.current?.contains(event.target as Node)) setTrackerActionsOpen(false);
-        };
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") setTrackerActionsOpen(false);
-        };
-        document.addEventListener("pointerdown", onPointerDown);
-        document.addEventListener("keydown", onKeyDown);
-        return () => {
-            document.removeEventListener("pointerdown", onPointerDown);
-            document.removeEventListener("keydown", onKeyDown);
-        };
-    }, [trackerActionsOpen]);
-    const trackers = ordered(Object.values(state.trackers)).filter(row => showArchived || !row.isArchived);
-    const hasTrackers = Object.keys(state.trackers).length > 0;
+        setDrawerOpen(false);
+        setTrackerActionsOpen(null);
+    }, [isLg, hasTrackers]);
     const tracker = trackers.find(row => row.id === state.ui.selectedTrackerId) ?? trackers[0];
-    const allGoals = tracker ? ordered(Object.values(state.goals).filter(row => row.trackerId === tracker.id)) : [];
+    const trackerCounts = new Map<string, { active: number; achieved: number }>();
+    const allGoals: Goal[] = [];
+    for (const goal of Object.values(state.goals)) {
+        if (goal.trackerId === tracker?.id) allGoals.push(goal);
+        if (goal.lifecycle === "dropped") continue;
+        const count = trackerCounts.get(goal.trackerId) ?? { active: 0, achieved: 0 };
+        count[goal.lifecycle]++;
+        trackerCounts.set(goal.trackerId, count);
+    }
+    ordered(allGoals);
     const hasHabitMetric = allGoals.some(goal => goal.metric?.source === "habit");
     const visible = allGoals.filter(row => lifecycle === "all" || row.lifecycle === lifecycle);
     const edit = editingGoal ? state.goals[editingGoal] : null;
@@ -141,8 +145,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
         return slipSummary(goalId, Object.values(state.checkIns), currentPeriodStart).consecutiveSlips;
     };
-    const activeCount = allGoals.filter(row => row.lifecycle === "active").length;
-    const achievedCount = allGoals.filter(row => row.lifecycle === "achieved").length;
+    const { active: activeCount, achieved: achievedCount } = trackerCounts.get(tracker?.id ?? "") ?? { active: 0, achieved: 0 };
     const slippedCount = allGoals.filter(row => slipCount(row.id) > 0).length;
     // Dropped goals leave the denominator so abandoning a goal never pulls the bar backwards.
     const progressTotal = activeCount + achievedCount;
@@ -157,6 +160,40 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
 
     function attempt(action: () => void) {
         try { action(); setError(null); } catch (error) { setError(errorMessage(error)); }
+    }
+    const closeDrawer = useCallback(() => {
+        setDrawerOpen(false);
+        setTrackerActionsOpen(null);
+    }, []);
+    function scrollToTop() {
+        if (mainRef.current) mainRef.current.scrollTop = 0;
+    }
+    function selectTracker(id: string | null) {
+        goals.selectTracker(id);
+        setEditingGoal(null);
+        setPinnedCheckIn(null);
+        setDeckPreview(null);
+        setTrackerForm(null);
+        closeDrawer();
+        scrollToTop();
+    }
+    function openTrackerForm(value: GoalTracker | "new") {
+        closeDrawer();
+        setTrackerForm(value);
+        scrollToTop();
+    }
+    function archiveTracker(row: GoalTracker) {
+        setTrackerActionsOpen(null);
+        if (!window.confirm(`Archive “${row.name}”? Its goals and history will be kept.`)) return;
+        attempt(() => {
+            goals.archiveTracker(row.id);
+            if (row.id === tracker?.id) {
+                const index = activeTrackers.findIndex(active => active.id === row.id);
+                selectTracker((activeTrackers[index + 1] ?? activeTrackers[index - 1])?.id ?? null);
+            } else if (typeof trackerForm === "object" && trackerForm?.id === row.id) {
+                setTrackerForm(null);
+            }
+        });
     }
     function reorder({ active, over }: DragEndEvent) {
         if (!tracker || !over || active.id === over.id) return;
@@ -206,20 +243,33 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         }
     }
 
-    return <div className="flex h-full min-h-0 flex-col">
+    const showRail = hasTrackers && isLg;
+    const rail = <TrackerRail
+        trackers={trackers} selectedId={tracker?.id ?? null} today={today} counts={trackerCounts} hydrated={hydrated}
+        showArchived={showArchived} archivedCount={allTrackers.length - activeTrackers.length}
+        actionsOpen={trackerActionsOpen} onActionsChange={setTrackerActionsOpen}
+        onSelect={selectTracker} onNew={() => openTrackerForm("new")} onEdit={openTrackerForm}
+        onArchive={archiveTracker} onReactivate={row => {
+            setTrackerActionsOpen(null);
+            attempt(() => goals.archiveTracker(row.id, false));
+        }}
+        onToggleArchived={setShowArchived}
+    />;
+
+    return <>
+    <div inert={drawerVisible} className={`grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] ${showRail ? "grid-cols-[16rem_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]"}`}>
+        {showRail && <aside className="row-span-2 flex min-h-0 w-64 flex-col border-r border-neutral-800 bg-neutral-900/30">{rail}</aside>}
         <header className="border-b border-neutral-800 px-4 py-4 sm:px-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-1">
                     <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">Goals</h1>
                     <p className="max-w-prose text-sm leading-relaxed text-neutral-400">Trackers group the goals you are working toward. Check in each period to record progress and plan what comes next.</p>
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-2 text-sm text-neutral-300"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />Show archived trackers</label>
-                    {tracker && <button className={primary} disabled={!hydrated} onClick={() => setTrackerForm("new")}>Add tracker</button>}
-                </div>
+                {hasTrackers && !isLg && <button ref={drawerTriggerRef} type="button" className={button} aria-haspopup="dialog" aria-expanded={drawerVisible}
+                    aria-controls={drawerVisible ? "goal-trackers-drawer" : undefined} onClick={() => setDrawerOpen(true)}>Trackers</button>}
             </div>
         </header>
-        <main className="min-h-0 flex-1 overflow-auto p-4">
+        <main ref={mainRef} className="min-h-0 overflow-auto p-4">
             <div className="mx-auto max-w-5xl space-y-4">
                 {!hydrated && <p role="status">Loading goals…</p>}
                 {error && <p role="alert" className="text-red-300">{error}</p>}
@@ -229,7 +279,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                     onSave={input => {
                         if (trackerForm === "new") {
                             const created = goals.createTracker(input);
-                            goals.selectTracker(created.id);
+                            selectTracker(created.id);
                             setShowArchived(false);
                         } else goals.updateTracker(trackerForm.id, input);
                         setTrackerForm(null);
@@ -242,81 +292,30 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 ? "Every tracker you have is archived. Show archived trackers to review them, or create a new tracker to keep moving."
                                 : "A tracker holds the goals you are working toward. Each period, check in on what you did, what you are working on now, and what comes next."}
                         </p>
-                        <button className={primaryLarge} disabled={!hydrated} onClick={() => setTrackerForm("new")}>Add tracker</button>
+                        {!hasTrackers && <button className={primaryLarge} onClick={() => openTrackerForm("new")}>Add tracker</button>}
                     </div>
                 </section>}
                 {tracker && <>
+                    <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id}>
+                        <GoalSetActions key={tracker.id} trackerId={tracker.id} onImported={selectTracker} />
+                    </div>
                     <section
                         aria-label={tracker.name}
                         className={`overflow-hidden rounded-xl border ${tracker.isArchived ? "border-neutral-800/70 bg-neutral-900/10" : "border-neutral-800 bg-neutral-900/20"}`}
                     >
-                        <div className={`grid grid-cols-1 ${tracker.isArchived ? "" : "lg:grid-cols-[minmax(0,1fr)_19rem]"}`}>
+                        <div className={`grid grid-cols-1 ${tracker.isArchived ? "" : "xl:grid-cols-[minmax(0,1fr)_19rem]"}`}>
                             {/* Identity */}
-                            <div className={`order-1 min-w-0 space-y-4 p-4 sm:p-5 lg:col-start-1 lg:row-start-1 ${tracker.isArchived ? "opacity-80" : ""}`}>
-                                <div ref={trackerActionsRef}>
-                                    <header className="flex items-start gap-3">
-                                        <span aria-hidden="true" className="mt-1.5 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: tracker.color }} />
-                                        <div className="min-w-0 flex-1" title={tracker.purpose || undefined}>
-                                            <div className="flex min-w-0 items-center gap-2">
-                                                <h2 className="sr-only">{tracker.name}</h2>
-                                                <div className="relative min-w-0">
-                                                    <select
-                                                        aria-label="Tracker"
-                                                        className="max-w-full cursor-pointer appearance-none truncate rounded-md bg-transparent py-0.5 pr-7 text-lg font-semibold tracking-tight text-neutral-100 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60"
-                                                        value={tracker.id}
-                                                        onChange={event => {
-                                                            goals.selectTracker(event.target.value);
-                                                            setEditingGoal(null);
-                                                            setPinnedCheckIn(null);
-                                                            setDeckPreview(null);
-                                                            setTrackerActionsOpen(false);
-                                                        }}
-                                                    >
-                                                        {trackers.map(row => <option key={row.id} value={row.id}>{row.name}{row.isArchived ? " (archived)" : ""}</option>)}
-                                                    </select>
-                                                    <span aria-hidden="true" className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-xs text-neutral-500">▾</span>
-                                                </div>
-                                                {tracker.isArchived && <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Archived</span>}
-                                            </div>
-                                            {/* The purpose is available on hover and in Edit tracker rather than costing a line on screen. */}
-                                            {tracker.purpose && <p className="sr-only">{tracker.purpose}</p>}
+                            <div className={`order-1 min-w-0 space-y-4 p-4 sm:p-5 xl:col-start-1 xl:row-start-1 ${tracker.isArchived ? "opacity-80" : ""}`}>
+                                <header className="flex items-start gap-3">
+                                    <span aria-hidden="true" className="mt-1.5 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: tracker.color }} />
+                                    <div className="min-w-0 flex-1" title={tracker.purpose || undefined}>
+                                        <div className="flex min-w-0 items-center gap-2">
+                                            <h2 className="min-w-0 break-words text-lg font-semibold tracking-tight text-neutral-100">{tracker.name}</h2>
+                                            {tracker.isArchived && <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Archived</span>}
                                         </div>
-                                        {tracker.isArchived
-                                            ? <button className={primary} onClick={() => attempt(() => goals.archiveTracker(tracker.id, false))}>Reactivate tracker</button>
-                                            : <button
-                                                type="button"
-                                                className={menuButton}
-                                                aria-label="Tracker actions"
-                                                aria-haspopup="true"
-                                                aria-expanded={trackerActionsOpen}
-                                                aria-controls="tracker-actions-panel"
-                                                onClick={() => setTrackerActionsOpen(open => !open)}
-                                            >···</button>}
-                                    </header>
-                                    {!tracker.isArchived && <div
-                                        id="tracker-actions-panel"
-                                        hidden={!trackerActionsOpen}
-                                        className="mt-3 rounded-lg border border-neutral-800 bg-neutral-950/40 p-3"
-                                    >
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <button className={button} onClick={() => { setTrackerActionsOpen(false); setTrackerForm(tracker); }}>Edit tracker</button>
-                                            <button className={button} onClick={() => {
-                                                setTrackerActionsOpen(false);
-                                                if (window.confirm(`Archive “${tracker.name}”? Its goals and history will be kept.`)) attempt(() => goals.archiveTracker(tracker.id));
-                                            }}>Archive tracker</button>
-                                        </div>
-                                        <div data-goals-slot="goal-set-actions" data-tracker-id={tracker.id} className="mt-3 border-t border-neutral-800 pt-3">
-                                            <GoalSetActions key={tracker.id} trackerId={tracker.id} onImported={newTrackerId => {
-                                                // The component already created the tracker and its goals through the provider.
-                                                goals.selectTracker(newTrackerId);
-                                                setDeckPreview(null);
-                                                setPinnedCheckIn(null);
-                                                setEditingGoal(null);
-                                                setTrackerActionsOpen(false);
-                                            }} />
-                                        </div>
-                                    </div>}
-                                </div>
+                                        {tracker.purpose && <p className="sr-only">{tracker.purpose}</p>}
+                                    </div>
+                                </header>
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-xs text-neutral-300">{tracker.cadence.kind === "monthly-weekday"
                                         ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
@@ -327,7 +326,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 </div>
                             </div>
                             {/* Health */}
-                            <div className="order-3 min-w-0 px-4 pb-4 pt-4 sm:px-5 sm:pb-5 lg:col-start-1 lg:row-start-2 lg:pt-0">
+                            <div className="order-3 min-w-0 px-4 pb-4 pt-4 sm:px-5 sm:pb-5 xl:col-start-1 xl:row-start-2 xl:pt-0">
                                 {tracker.isArchived
                                     ? <p className="text-sm text-neutral-400">This tracker is archived. Its goals and history are kept.</p>
                                     : <div className="space-y-2" data-goals-slot="tracker-health">
@@ -355,8 +354,8 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                     </div>}
                             </div>
                             {/* Period spine: last period settled above, this period live below. */}
-                            {!tracker.isArchived && <div className={`order-2 flex flex-col border-b border-neutral-800 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:border-b-0 lg:border-l ${dueTracker ? "bg-amber-950/10" : "bg-neutral-950/40"}`}>
-                                <div data-goals-slot="deck-entry" data-tracker-id={tracker.id} className="order-3 space-y-3 p-4 sm:p-5 lg:order-1">
+                            {!tracker.isArchived && <div className={`order-2 flex flex-col border-b border-neutral-800 xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:border-b-0 xl:border-l ${dueTracker ? "bg-amber-950/10" : "bg-neutral-950/40"}`}>
+                                <div data-goals-slot="deck-entry" data-tracker-id={tracker.id} className="order-3 space-y-3 p-4 sm:p-5 xl:order-1">
                                     <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-200/70">Last period</h3>
                                     <DeckEntry
                                         trackerId={tracker.id}
@@ -370,7 +369,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                     <span className="h-1 w-1 rounded-full bg-neutral-700" />
                                     <span className="h-px flex-1 bg-neutral-800" />
                                 </div>
-                                <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="order-1 space-y-3 p-4 sm:p-5 lg:order-3">
+                                <div data-goals-slot="check-in-entry" data-tracker-id={tracker.id} className="order-1 space-y-3 p-4 sm:p-5 xl:order-3">
                                     <div className="flex items-baseline justify-between gap-2">
                                         <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-200/80">This period</h3>
                                         {checkInCurrent && <time dateTime={checkInCurrent.periodStart} className="text-xs text-neutral-400">{periodRangeLabel(checkInCurrent)}</time>}
@@ -444,6 +443,8 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 </>}
             </div>
         </main>
+    </div>
+        {drawerVisible && <TrackerDrawer triggerRef={drawerTriggerRef} onClose={closeDrawer}>{rail}</TrackerDrawer>}
         <div data-goals-slot="deck-preview">
             {deckPreview && deckPreview.trackerId === tracker?.id && <DeckPreview
                 key={`${deckPreview.trackerId}:${deckPreview.plan.period.periodStart}:${deckPreview.plan.generatedAt}`}
@@ -453,8 +454,50 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
             />}
         </div>
         <div data-goals-slot="due-nudge"><GoalDueNudge today={today} /></div>
-    </div>;
+    </>;
 };
+
+function TrackerDrawer({ children, triggerRef, onClose }: React.PropsWithChildren<{
+    triggerRef: React.RefObject<HTMLButtonElement | null>;
+    onClose: () => void;
+}>) {
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        closeRef.current?.focus();
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                onClose();
+            }
+            const dialog = dialogRef.current;
+            if (event.key !== "Tab" || !dialog) return;
+            const controls = dialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)");
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            const boundary = event.shiftKey ? first : last;
+            if (document.activeElement === boundary || !dialog.contains(document.activeElement)) {
+                event.preventDefault();
+                (event.shiftKey ? last : first)?.focus();
+            }
+        };
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown);
+            triggerRef.current?.focus({ preventScroll: true });
+        };
+    }, [onClose, triggerRef]);
+
+    return <div ref={dialogRef} id="goal-trackers-drawer" className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="Trackers">
+        <div className="absolute inset-0 bg-black/60" aria-hidden="true" onClick={onClose} />
+        <div className="absolute inset-y-0 left-0 flex w-80 max-w-[85vw] flex-col border-r border-neutral-800 bg-neutral-950 shadow-2xl">
+            <div className="flex justify-end border-b border-neutral-800 px-3 py-2">
+                <button ref={closeRef} type="button" className={button} onClick={onClose}>Close</button>
+            </div>
+            {children}
+        </div>
+    </div>;
+}
 
 function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | null; onSave: (input: NewGoalTrackerInput) => void; onCancel: () => void }) {
     const [name, setName] = useState(tracker?.name ?? "");

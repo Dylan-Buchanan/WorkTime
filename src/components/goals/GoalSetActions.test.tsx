@@ -250,7 +250,7 @@ describe("GoalSetActions", () => {
         expect(calls.createGoal.every(input => input.trackerId === newTrackerId)).toBe(true);
         expect(calls.createGoal.map(input => input.sortOrder)).toEqual([0, 1]);
         expect(calls.createGoal[1].metric).toEqual({ label: "Sessions", target: 8, current: 0, unit: "", source: "manual", overridePinned: false });
-        expect(calls.selected).toEqual([newTrackerId]);
+        expect(calls.selected).toHaveLength(0);
         expect(screen.queryByRole("region", { name: "Import review" })).not.toBeInTheDocument();
         expect(calls.updateTracker).not.toHaveBeenCalled();
         expect(calls.archiveTracker).not.toHaveBeenCalled();

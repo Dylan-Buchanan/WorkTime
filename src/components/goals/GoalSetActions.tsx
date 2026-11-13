@@ -102,7 +102,7 @@ const ImportReview: React.FC<ImportReviewProps> = ({ review, busy, onConfirm, on
  * creates a new tracker: existing trackers are never replaced, merged, or edited.
  */
 export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImported }) => {
-    const { state, createTracker, createGoal, setGoalLifecycle, selectTracker, persist } = useGoals();
+    const { state, createTracker, createGoal, setGoalLifecycle, persist } = useGoals();
     const tracker = state.trackers[trackerId];
     const goals = Object.values(state.goals).filter(goal => goal.trackerId === trackerId);
     const hasGoals = goals.length > 0;
@@ -178,7 +178,6 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
             }
             setReview(null);
             onImported(created.id);
-            selectTracker(created.id);
         } catch (caught) {
             setError(caught instanceof Error && caught.message
                 ? `Could not import the goal set: ${caught.message}`
