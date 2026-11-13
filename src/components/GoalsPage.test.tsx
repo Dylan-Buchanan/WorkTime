@@ -27,7 +27,7 @@ import {
     buildGoalTrackerFixture,
 } from "../lib/goals/testFixtures";
 
-const drag = vi.hoisted(() => ({ end: null as null | ((event: DragEndEvent) => void) }));
+const drag = vi.hoisted(() => ({ goals: null as null | ((event: DragEndEvent) => void), trackers: null as null | ((event: DragEndEvent) => void) }));
 const deckExport = vi.hoisted(() => ({ render: vi.fn(), deliver: vi.fn(), stamp: vi.fn() }));
 vi.mock("../hooks/useMediaQuery");
 vi.mock("../lib/goals/deck/render", () => ({ renderDeck: deckExport.render }));
@@ -45,7 +45,8 @@ vi.mock("../state/GoalContext", async importOriginal => {
 vi.mock("@dnd-kit/core", async importOriginal => {
     const original = await importOriginal<typeof import("@dnd-kit/core")>();
     return { ...original, DndContext: (props: React.ComponentProps<typeof original.DndContext>) => {
-        drag.end = props.onDragEnd ?? null;
+        if (props.id === "tracker-rail") drag.trackers = props.onDragEnd ?? null;
+        else drag.goals = props.onDragEnd ?? null;
         return <original.DndContext {...props} />;
     } };
 });
@@ -60,6 +61,12 @@ async function mount(data = new InMemoryDataAccess(makeAppState()), today?: Loca
 }
 function trackerRow(name: string) {
     return within(screen.getByRole("navigation", { name: "Goal trackers" })).getByRole("button", { name });
+}
+/** Rail row labels in rendered order, including the archived group. */
+function railOrder() {
+    return within(screen.getByRole("navigation", { name: "Goal trackers" }))
+        .getAllByRole("listitem")
+        .map(row => row.querySelector("[id^='tracker-rail-name-']")?.textContent ?? "");
 }
 async function oneTracker() {
     const data = new InMemoryDataAccess(makeAppState());
@@ -108,6 +115,8 @@ const habitMetric = (overrides: Partial<GoalMetric> = {}): GoalMetric => ({
 });
 beforeEach(() => {
     localStorage.clear();
+    drag.goals = null;
+    drag.trackers = null;
     vi.mocked(useMediaQuery).mockReturnValue(true);
     deckExport.render.mockReset().mockResolvedValue({ blob: new Blob(["deck"]), fileName: "Work.pptx" });
     deckExport.deliver.mockReset().mockResolvedValue(undefined);
@@ -639,12 +648,67 @@ describe("GoalsPage", () => {
         await data.saveGoals([tracker], [first, hidden, last], []);
         await mount(data);
         expect(screen.getByRole("button", { name: "Reorder First" })).toBeInTheDocument();
-        await act(async () => { drag.end!({ active: { id: first.id }, over: { id: last.id } } as DragEndEvent); });
+        await act(async () => { drag.goals!({ active: { id: first.id }, over: { id: last.id } } as DragEndEvent); });
         const list = screen.getByLabelText("Goals list");
         expect(within(list).getAllByRole("heading").map(row => row.textContent)).toEqual(["Last", "First"]);
         await waitFor(async () => expect((await data.loadGoals()).goals.find(row => row.id === last.id)?.sortOrder).toBe(0));
         const saved = (await data.loadGoals()).goals.sort((a, b) => a.sortOrder - b.sortOrder);
         expect(saved.map(row => row.id)).toEqual([last.id, hidden.id, first.id]);
+    });
+
+    it("reorders two active trackers from the keyboard and persists the new order", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const work = buildGoalTrackerFixture({ id: "tracker-work", name: "Work", sortOrder: 0 });
+        const life = buildGoalTrackerFixture({ id: "tracker-life", name: "Life", sortOrder: 1 });
+        await data.saveGoals([work, life], [], []);
+        const { user } = await mount(data);
+        expect(railOrder()).toEqual(["Work", "Life"]);
+        // jsdom has no layout, so give each row a vertical rect; the keyboard
+        // coordinate getter then has a row below the picked-up row to find.
+        for (const [index, row] of within(screen.getByRole("navigation", { name: "Goal trackers" })).getAllByRole("listitem").entries()) {
+            const top = index * 60;
+            Object.defineProperty(row, "getBoundingClientRect", {
+                configurable: true,
+                value: () => ({ x: 0, y: top, top, left: 0, right: 200, bottom: top + 48, width: 200, height: 48, toJSON: () => ({}) }),
+            });
+        }
+        const handle = screen.getByRole("button", { name: `Reorder ${work.name}` });
+        act(() => handle.focus());
+        await user.keyboard("[Space]");
+        // dnd-kit attaches its movement listener on the next macrotask.
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+        await user.keyboard("{ArrowDown}");
+        await user.keyboard("[Space]");
+
+        expect(railOrder()).toEqual(["Life", "Work"]);
+        await waitFor(async () => expect((await data.loadGoals()).trackers.sort((a, b) => a.sortOrder - b.sortOrder).map(row => row.id))
+            .toEqual([life.id, work.id]));
+        // Focus follows the moved row, and the content column keeps showing it.
+        expect(handle).toHaveFocus();
+        expect(screen.getByRole("heading", { level: 2, name: work.name })).toBeInTheDocument();
+        expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(work.id);
+    });
+
+    it("keeps archived trackers in a trailing non-sortable group that accepts no drop", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const work = buildGoalTrackerFixture({ id: "tracker-work", name: "Work", sortOrder: 1 });
+        const life = buildGoalTrackerFixture({ id: "tracker-life", name: "Life", sortOrder: 2 });
+        const archived = buildArchivedTrackerFixture({ id: "tracker-archived", name: "Old work", sortOrder: 0 });
+        await data.saveGoals([work, life, archived], [], []);
+        const { user } = await mount(data);
+        expect(railOrder()).toEqual(["Work", "Life"]);
+        const nav = screen.getByRole("navigation", { name: "Goal trackers" });
+        await user.click(within(nav).getByRole("checkbox", { name: "Show archived (1)" }));
+        expect(railOrder()).toEqual(["Work", "Life", "Old work"]);
+        expect(within(nav).getAllByRole("button", { name: /^Reorder / }).map(button => button.getAttribute("aria-label")))
+            .toEqual([`Reorder ${work.name}`, `Reorder ${life.name}`]);
+        expect(within(trackerRow(archived.name).closest("li")!).queryByRole("button", { name: /^Reorder / })).not.toBeInTheDocument();
+
+        await act(async () => { drag.trackers!({ active: { id: life.id }, over: { id: archived.id } } as DragEndEvent); });
+        await act(async () => { drag.trackers!({ active: { id: life.id }, over: null } as DragEndEvent); });
+        expect(railOrder()).toEqual(["Work", "Life", "Old work"]);
+        expect((await data.loadGoals()).trackers.map(row => [row.id, row.sortOrder]).sort())
+            .toEqual([[work.id, 1], [life.id, 2], [archived.id, 0]].sort());
     });
 
     it("shows the due badge with the completed period label, and clears it when that period is built", async () => {

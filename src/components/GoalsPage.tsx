@@ -81,7 +81,11 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     );
     const allTrackers = ordered(Object.values(state.trackers));
     const activeTrackers = allTrackers.filter(row => !row.isArchived);
+    const archivedTrackers = allTrackers.filter(row => row.isArchived);
+    // The rail keeps archived rows in their own trailing group; the content
+    // column keeps resolving its displayed tracker from the flat order.
     const trackers = showArchived ? allTrackers : activeTrackers;
+    const railTrackers = showArchived ? [...activeTrackers, ...archivedTrackers] : activeTrackers;
     const hasTrackers = allTrackers.length > 0;
     const drawerVisible = hasTrackers && !isLg && drawerOpen;
     useEffect(() => {
@@ -207,6 +211,14 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
         const fullOrder = allGoals.map(row => visibleIds.has(row.id) ? moved[index++] : row.id);
         attempt(() => goals.reorderGoals(tracker.id, fullOrder));
     }
+    function reorderTrackerRows(ids: readonly string[]) {
+        attempt(() => {
+            // Selection may be the implicit first-row fallback. Pin what the
+            // content column is showing so a rail reorder never swaps it.
+            if (tracker && state.ui.selectedTrackerId !== tracker.id) goals.selectTracker(tracker.id);
+            goals.reorderTrackers(ids);
+        });
+    }
     function buildDeck(period: GoalPeriod) {
         if (hasHabitMetric && !habits.hydrated) {
             setError(habitsLoadingMessage);
@@ -245,7 +257,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
 
     const showRail = hasTrackers && isLg;
     const rail = <TrackerRail
-        trackers={trackers} selectedId={tracker?.id ?? null} today={today} counts={trackerCounts} hydrated={hydrated}
+        trackers={railTrackers} selectedId={tracker?.id ?? null} today={today} counts={trackerCounts} hydrated={hydrated}
         showArchived={showArchived} archivedCount={allTrackers.length - activeTrackers.length}
         actionsOpen={trackerActionsOpen} onActionsChange={setTrackerActionsOpen}
         onSelect={selectTracker} onNew={() => openTrackerForm("new")} onEdit={openTrackerForm}
@@ -254,6 +266,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
             attempt(() => goals.archiveTracker(row.id, false));
         }}
         onToggleArchived={setShowArchived}
+        onReorder={reorderTrackerRows}
     />;
 
     return <>
@@ -426,7 +439,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                         </select>
                     </label>
                     {allGoals.length > 0 && visible.length === 0 && <p>No {lifecycle} goals.</p>}
-                    <DndContext sensors={sensors} onDragEnd={reorder}>
+                    <DndContext id="goals-list" sensors={sensors} onDragEnd={reorder}>
                         <SortableContext items={visible.map(row => row.id)} strategy={verticalListSortingStrategy}>
                             <div className="space-y-2" aria-label="Goals list">
                                 {visible.map(row => <GoalRow key={row.id} goal={row} consecutiveSlips={slipCount(row.id)} expanded={!!state.ui.expandedGoalIds[row.id]}

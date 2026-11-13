@@ -10,8 +10,12 @@ describe("TrackerDueBadge", () => {
 
     it("renders the neutral badge with the completed period label when due", () => {
         render(<TrackerDueBadge due periodLabel="October 2026" />);
-        expect(screen.getByText(/Deck due/)).toBeInTheDocument();
-        expect(screen.getByText(/October 2026/)).toBeInTheDocument();
+        const badge = screen.getByText(/Deck due/);
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveTextContent("Deck due · October 2026");
+        // The narrow rail must wrap the whole pill to the next line, never
+        // split the label inside the fully-rounded capsule.
+        expect(badge).toHaveClass("whitespace-nowrap");
     });
 
     it("omits the period label when none is provided", () => {

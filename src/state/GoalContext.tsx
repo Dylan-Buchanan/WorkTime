@@ -46,6 +46,7 @@ export interface GoalContextValue {
     updateGoal(id: string, patch: Partial<Omit<Goal, "id" | "trackerId" | "createdAt">>): void;
     setGoalLifecycle(id: string, lifecycle: Goal["lifecycle"]): void;
     reorderGoals(trackerId: string, idsInOrder: readonly string[]): void;
+    reorderTrackers(idsInOrder: readonly string[]): void;
     upsertCheckIns(checkIns: readonly GoalCheckIn[]): void;
     saveCheckIns(checkIns: readonly GoalCheckIn[]): Promise<void>;
     stampBuiltPeriod(trackerId: string, periodStart: LocalDateKey): Promise<void>;
@@ -303,6 +304,25 @@ export const GoalProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const goals = { ...previous.goals };
                 unique.forEach((id, index) => { goals[id] = { ...goals[id], sortOrder: index, updatedAt: new Date().toISOString() }; });
                 return { ...previous, goals };
+            });
+        },
+        reorderTrackers: ids => {
+            const unique = [...new Set(ids)];
+            if (unique.some(id => !stateRef.current.trackers[id])) throw new RangeError("Invalid tracker order");
+            mutate(previous => {
+                const updatedAt = new Date().toISOString();
+                const trackers = { ...previous.trackers };
+                unique.forEach((id, index) => { trackers[id] = { ...trackers[id], sortOrder: index, updatedAt }; });
+                // Omitted rows (archived trackers included) keep their current
+                // relative order, but every sortOrder stays distinct.
+                Object.values(previous.trackers)
+                    .filter(row => !unique.includes(row.id))
+                    .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id))
+                    .forEach((row, offset) => {
+                        const sortOrder = unique.length + offset;
+                        if (trackers[row.id].sortOrder !== sortOrder) trackers[row.id] = { ...trackers[row.id], sortOrder, updatedAt };
+                    });
+                return { ...previous, trackers };
             });
         },
         saveCheckIns: async rows => { upsertCheckIns(rows); await save(); },

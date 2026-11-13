@@ -6,7 +6,7 @@ import { SyncProvider } from "./SyncContext";
 import { TauriCloseProvider } from "./TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
-import { buildGoalTrackerFixture, buildGoalFixture, buildGoalCheckInFixture, buildGoalFixtureSet, buildNaturalKeyDuplicatesFixture } from "../lib/goals/testFixtures";
+import { buildGoalTrackerFixture, buildArchivedTrackerFixture, buildGoalFixture, buildGoalCheckInFixture, buildGoalFixtureSet, buildNaturalKeyDuplicatesFixture } from "../lib/goals/testFixtures";
 import type { Goal, GoalCheckIn, GoalTracker } from "./types";
 import { resolveCadenceAnchorAt } from "../lib/goals/periods";
 import { localDateKey } from "../lib/todos/calendar";
@@ -161,6 +161,72 @@ describe("GoalContext", () => {
         await act(async () => { api.archiveTracker(set.tracker.id, false); api.setGoalLifecycle(first.id, "active"); await api.persist(); });
         expect(api.state.goals[first.id]).toMatchObject({ lifecycle: "active", achievedAt: null, droppedAt: null });
         expect(Object.values(api.state.checkIns)).toHaveLength(set.checkIns.length);
+    });
+
+    it("reorders trackers with dense indices, a deduped input, and a fresh updatedAt", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const first = buildGoalTrackerFixture({ id: "tracker-first", name: "First", sortOrder: 0 });
+        const second = buildGoalTrackerFixture({ id: "tracker-second", name: "Second", sortOrder: 1 });
+        const third = buildGoalTrackerFixture({ id: "tracker-third", name: "Third", sortOrder: 2 });
+        await data.saveGoals([first, second, third], [], []);
+        await mount(data);
+        const save = vi.spyOn(data, "saveGoals");
+        await act(async () => {
+            api.reorderTrackers([third.id, third.id, first.id]);
+            await api.persist();
+        });
+        expect(Object.values(api.state.trackers).sort((a, b) => a.sortOrder - b.sortOrder).map(row => [row.id, row.sortOrder]))
+            .toEqual([[third.id, 0], [first.id, 1], [second.id, 2]]);
+        for (const original of [third, first]) {
+            const row = api.state.trackers[original.id];
+            expect(row.updatedAt).not.toBe(original.updatedAt);
+            expect(Date.parse(row.updatedAt)).toBeGreaterThan(Date.parse(original.updatedAt));
+            expect(row.createdAt).toBe(original.createdAt);
+        }
+        expect(save.mock.calls.length).toBeGreaterThan(0);
+        for (const [trackers] of save.mock.calls) {
+            expect(trackers.map(row => row.id).sort()).toEqual([first.id, second.id, third.id].sort());
+            expect(trackers.map(row => row.sortOrder).sort()).toEqual([0, 1, 2]);
+        }
+    });
+
+    it("rejects an unknown tracker id without changing the order", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const first = buildGoalTrackerFixture({ id: "tracker-first", name: "First", sortOrder: 0 });
+        const second = buildGoalTrackerFixture({ id: "tracker-second", name: "Second", sortOrder: 1 });
+        await data.saveGoals([first, second], [], []);
+        await mount(data);
+        const save = vi.spyOn(data, "saveGoals");
+        expect(() => api.reorderTrackers([second.id, "missing"])).toThrow(RangeError);
+        expect(() => api.reorderTrackers([second.id, "missing"])).toThrow("Invalid tracker order");
+        expect(api.state.trackers[first.id].sortOrder).toBe(0);
+        expect(api.state.trackers[second.id].sortOrder).toBe(1);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it("appends omitted trackers including archived rows in their current relative order", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const first = buildGoalTrackerFixture({ id: "tracker-first", name: "First", sortOrder: 0 });
+        const second = buildGoalTrackerFixture({ id: "tracker-second", name: "Second", sortOrder: 1 });
+        const earlierArchive = buildArchivedTrackerFixture({ id: "tracker-archive-earlier", name: "Archived earlier", sortOrder: 3 });
+        const laterArchive = buildArchivedTrackerFixture({ id: "tracker-archive-later", name: "Archived later", sortOrder: 5 });
+        await data.saveGoals([laterArchive, second, earlierArchive, first], [], []);
+        await mount(data);
+        const save = vi.spyOn(data, "saveGoals");
+        await act(async () => {
+            api.reorderTrackers([second.id, first.id]);
+            await api.persist();
+        });
+        const orderedRows = Object.values(api.state.trackers).sort((a, b) => a.sortOrder - b.sortOrder);
+        expect(orderedRows.map(row => [row.id, row.sortOrder])).toEqual([
+            [second.id, 0], [first.id, 1], [earlierArchive.id, 2], [laterArchive.id, 3],
+        ]);
+        expect(new Set(orderedRows.map(row => row.sortOrder)).size).toBe(4);
+        expect(save.mock.calls.length).toBeGreaterThan(0);
+        for (const [trackers] of save.mock.calls) {
+            expect(trackers.map(row => row.id).sort()).toEqual([first.id, second.id, earlierArchive.id, laterArchive.id].sort());
+            expect(trackers.map(row => row.sortOrder).sort()).toEqual([0, 1, 2, 3]);
+        }
     });
 
     it("upserts by natural key using the latest staged ID while retaining every other check-in", async () => {
