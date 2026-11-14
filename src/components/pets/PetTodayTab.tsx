@@ -16,6 +16,7 @@ import type { NewPetScheduleItemInput, PetNapReflowProposal, PetScheduleEntry } 
 import type { PetNapRecord, PetProfile } from "../../state/types";
 import { usePetActivity } from "../../state/PetActivityContext";
 import { useAppState } from "../../state/AppStateContext";
+import { useCalendarBusy } from "../../state/CalendarBusyContext";
 import { usePets } from "../../state/PetContext";
 import { PetHeroStatus } from "./PetHeroStatus";
 import { PetNapToggle } from "./PetNapToggle";
@@ -40,6 +41,7 @@ export const PetTodayTab: React.FC = () => {
     const pets = usePets();
     const app = useAppState();
     const activity = usePetActivity();
+    const calendar = useCalendarBusy();
     const profile = pets.state.profile;
     const scheduleItems = Object.values(pets.state.scheduleItems);
     const naps = Object.values(pets.state.naps);
@@ -61,16 +63,20 @@ export const PetTodayTab: React.FC = () => {
         ? trainingTagPrompt
         : null;
 
+    // A stable reference between refreshes: the one-second tick recomputes `now`
+    // only and never triggers a calendar fetch.
+    const busyIntervals = calendar.snapshot.intervals;
     const schedule = useMemo(
         () => buildPetSchedule({
             now,
             scheduleItems,
             activityRecords,
             naps,
+            busyIntervals,
             startOfDay: app.state?.settings.start_of_day,
             endOfDay: app.state?.settings.end_of_day,
         }),
-        [now, scheduleItems, activityRecords, naps, app.state?.settings.start_of_day, app.state?.settings.end_of_day],
+        [now, scheduleItems, activityRecords, naps, busyIntervals, app.state?.settings.start_of_day, app.state?.settings.end_of_day],
     );
 
     const overdueEntries = useMemo(
@@ -142,9 +148,11 @@ export const PetTodayTab: React.FC = () => {
         const record = activity.logActivity({
             activityType,
             timestamp: now,
+            // Fulfilment matches the pre-busy anchor, so a log from a moved card
+            // must reference `unshiftedStart`, not the displayed `start`.
             ...(entry?.mode === "fixed-time" ? {
                 scheduleItemId: entry.itemId,
-                scheduleOccurrenceStart: entry.start,
+                scheduleOccurrenceStart: entry.unshiftedStart,
             } : {}),
         });
         if (activityType === "training") setTrainingTagPrompt({ recordId: record.id, skillIds: [] });
@@ -176,6 +184,7 @@ export const PetTodayTab: React.FC = () => {
             scheduleItems,
             activityRecords,
             naps: next,
+            busyIntervals: calendar.snapshot.intervals,
             startOfDay: app.state?.settings.start_of_day,
             endOfDay: app.state?.settings.end_of_day,
         });
@@ -253,6 +262,7 @@ export const PetTodayTab: React.FC = () => {
                                 onToggleExpanded={() => setDeckExpanded((value) => !value)}
                                 onCheck={(entry) => logCareActivity(entry.activityType, entry)}
                                 onRemove={removeScheduleItem}
+                                calendar={calendar}
                             />
                             <PetScheduleItemForm submitLabel="Add schedule item" onAddItem={addScheduleItem} />
                         </>

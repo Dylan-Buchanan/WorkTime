@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PetPage } from "./PetPage";
 import { DataProvider } from "../../state/DataContext";
 import { SyncProvider } from "../../state/SyncContext";
@@ -8,7 +8,9 @@ import { ToastProvider } from "../../state/ToastContext";
 import { PetActivityProvider } from "../../state/PetActivityContext";
 import { PetProvider } from "../../state/PetContext";
 import { AppStateProvider } from "../../state/AppStateContext";
+import { CalendarBusyProvider } from "../../state/CalendarBusyContext";
 import { InMemoryDataAccess } from "../../lib/data/InMemoryDataAccess";
+import type { GoogleCalendarDataAccess } from "../../lib/data/GoogleCalendarDataAccess";
 import { makeAppState } from "../../test/mockTauri";
 import type {
     PetActivityRecord,
@@ -21,6 +23,10 @@ import type {
     PetTrainingSkill,
     PetWeightEntry,
 } from "../../state/types";
+
+// CalendarBusyContext builds its production data access from the Supabase
+// client; the provider tests inject their own access, so the client is unused.
+vi.mock("../../lib/supabase", () => ({ supabase: {} }));
 
 const OWNER = "owner-1";
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -105,6 +111,37 @@ function wrap(data: InMemoryDataAccess) {
                     <ToastProvider>
                         <PetProvider><PetActivityProvider><PetPage /></PetActivityProvider></PetProvider>
                     </ToastProvider>
+                    </AppStateProvider>
+                </SyncProvider>
+            </DataProvider>
+        </TauriCloseProvider>
+    );
+}
+
+type BusyAccess = Pick<GoogleCalendarDataAccess, "fetchBusyIntervals">;
+
+/** A contiguous busy run 14:00–14:30, reported as one healthy source. */
+function busyAccess(): BusyAccess {
+    const access: BusyAccess = { fetchBusyIntervals: vi.fn<BusyAccess["fetchBusyIntervals"]>() };
+    vi.mocked(access.fetchBusyIntervals).mockResolvedValue({
+        intervals: [{ start: at(14).toISOString(), end: at(14, 30).toISOString() }],
+        refreshedAt: NOW.toISOString(),
+        sources: [{ connectionId: "connection-1", accountEmail: null, calendarCount: 1, busyMinutes: 30, errorCode: null }],
+    });
+    return access;
+}
+
+function wrapWithCalendar(data: InMemoryDataAccess, access: BusyAccess) {
+    return (
+        <TauriCloseProvider>
+            <DataProvider dataAccess={data}>
+                <SyncProvider ownerId={OWNER}>
+                    <AppStateProvider>
+                        <CalendarBusyProvider dataAccess={access}>
+                            <ToastProvider>
+                                <PetProvider><PetActivityProvider><PetPage /></PetActivityProvider></PetProvider>
+                            </ToastProvider>
+                        </CalendarBusyProvider>
                     </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
@@ -960,5 +997,58 @@ describe("PetPage", () => {
         const entries: PetWeightEntry[] = await data.loadPetWeightEntries();
         expect(entries).toHaveLength(1);
         expect(entries[0].weight).toBe(4.2);
+    });
+
+    describe("calendar busy placement", () => {
+        async function seedMovedWalk(): Promise<InMemoryDataAccess> {
+            const data = new InMemoryDataAccess(makeAppState());
+            await data.savePetProfile(profileRow());
+            await data.savePetScheduleItems([fixedItem("walk", "playtime", "Walk", "14:00", { flexibility: "flexible" })]);
+            return data;
+        }
+
+        it("moves a flexible fixed-time occurrence inside a busy run to the run end", async () => {
+            const data = await seedMovedWalk();
+            render(wrapWithCalendar(data, busyAccess()));
+
+            const card = (await screen.findByText("Walk")).closest("article")!;
+            expect(within(card).getByText("2:30 PM")).toBeInTheDocument();
+            expect(card).toHaveTextContent("↺ walk +30m — busy 2:00 PM–2:30 PM");
+            expect(card).toHaveTextContent("Moved:");
+        });
+
+        it("logs a moved occurrence against its original time and then shows it fulfilled", async () => {
+            const data = await seedMovedWalk();
+            render(wrapWithCalendar(data, busyAccess()));
+
+            await screen.findByText("Walk");
+            const card = screen.getByText("Walk").closest("article")!;
+            fireEvent.click(within(card).getByRole("button", { name: /Log walk/ }));
+            await waitFor(async () => expect(await data.loadPetActivityRecords()).toEqual([
+                expect.objectContaining({
+                    activityType: "playtime",
+                    timestamp: NOW.toISOString(),
+                    scheduleItemId: "walk",
+                    scheduleOccurrenceStart: at(14).toISOString(),
+                }),
+            ]));
+
+            fireEvent.click(screen.getByRole("button", { name: "Show full day" }));
+            const doneCard = screen.getByText("Walk").closest("article")!;
+            expect(doneCard).toHaveTextContent("done at 3:00 PM");
+            expect(doneCard).not.toHaveTextContent("Moved:");
+        });
+
+        it("does not refetch busy time as the one-second tick advances", async () => {
+            const data = await seedMovedWalk();
+            const access = busyAccess();
+            render(wrapWithCalendar(data, access));
+
+            await screen.findByText("Walk");
+            await waitFor(() => expect(access.fetchBusyIntervals).toHaveBeenCalledTimes(1));
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+            expect(access.fetchBusyIntervals).toHaveBeenCalledTimes(1);
+        });
     });
 });

@@ -25,12 +25,26 @@ export const PetReflowPanel: React.FC<PetReflowPanelProps> = ({ proposal, onConf
             The nap ran {Math.round(proposal.napMinutes)} minutes. Suggested adjustments:
         </p>
         <ul className="mt-2 flex flex-col gap-1">
-            {proposal.changes.map((change) => (
-                <li key={`${change.itemId}-${change.reason}`} className="text-[11px] text-neutral-300">
-                    ↺ {change.label.toLowerCase()} → {formatClock(change.to)}
-                    {change.from ? ` (was ${formatClock(change.from)})` : ""}
-                </li>
-            ))}
+            {proposal.changes.map((change) => {
+                const busyShift = proposal.shifts.find(
+                    (shift) => shift.itemId === change.itemId && shift.reason === "busy",
+                );
+                return (
+                    <li key={`${change.itemId}-${change.reason}`} className="text-[11px] text-neutral-300">
+                        <span className="block">
+                            ↺ {change.label.toLowerCase()} → {formatClock(change.to)}
+                            {change.from ? ` (was ${formatClock(change.from)})` : ""}
+                        </span>
+                        {busyShift && (
+                            <span className="block truncate text-neutral-400">
+                                <span className="sr-only">Then moved: </span>
+                                <span aria-hidden="true">↺ </span>
+                                {busyShift.description}
+                            </span>
+                        )}
+                    </li>
+                );
+            })}
         </ul>
         <div className="mt-3 flex gap-2">
             <button
