@@ -11,7 +11,7 @@ function fixture(): DeckPlan {
     const tracker = buildGoalTrackerFixture({ name: "PRIVATE TRACKER", purpose: "PRIVATE PURPOSE" });
     const goals = Array.from({ length: 6 }, (_, index) => buildGoalFixture({
         id: `goal-${index}`, title: `Goal ${index}`, trackerId: tracker.id, sortOrder: index,
-        notes: "PRIVATE GOAL NOTE", projectId: "PRIVATE PROJECT ID",
+        notes: "PRIVATE GOAL NOTE", projectLink: { mode: "project", projectId: "PRIVATE PROJECT ID" },
         ...(index === 0 ? { metric: { label: "PRIVATE LABEL", unit: "PRIVATE UNIT", current: 3, target: 8, source: "manual" as const, overridePinned: false } } : {}),
     }));
     const checkIns = goals.map((goal, index) => buildGoalCheckInFixture({

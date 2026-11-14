@@ -24,13 +24,14 @@ export interface NewGoalTrackerInput {
     purpose: string;
     cadence: GoalCadence;
     color: string;
+    projectId?: GoalTracker["projectId"];
     cadenceAnchorAt?: LocalDateKey;
 }
 export interface NewGoalInput {
     trackerId: string;
     title: string;
     notes?: string;
-    projectId?: string | null;
+    projectLink?: Goal["projectLink"];
     metric?: GoalMetric | null;
     sortOrder?: number;
 }

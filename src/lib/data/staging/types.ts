@@ -129,7 +129,7 @@ export interface StagedOwnerRecord {
     goalCheckIns: Record<string, GoalCheckIn>;
     goalCheckInUpdatedAt: Record<string, string>;
     goalCheckInTombstones: Record<string, { id: string; deletedAt: string }>;
-    schemaVersion: 10;
+    schemaVersion: typeof STAGING_SCHEMA_VERSION;
     ownerId: string;
     revision: number;
     /** True only after at least one successful remote pull. Never pushes while false. */
@@ -209,7 +209,7 @@ export interface StagedOwnerRecord {
     petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 10 as const;
+export const STAGING_SCHEMA_VERSION = 11 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -664,9 +664,28 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["petNotableEventTombstones", isTombstoneMap],
 ];
 
+function mapStoredRows(rows: unknown, upgrade: (row: unknown) => unknown): unknown {
+    if (!isObject(rows)) return rows;
+    return Object.fromEntries(Object.entries(rows).map(([id, row]) => [id, upgrade(row)]));
+}
+
+function upgradeStoredGoalTracker(row: unknown): unknown {
+    return isObject(row) ? { ...row, projectId: null } : row;
+}
+
+function upgradeStoredGoal(row: unknown): unknown {
+    if (!isObject(row)) return row;
+    const { projectId, ...rest } = row;
+    return { ...rest, projectLink: projectId === null ? { mode: "inherit" } : { mode: "project", projectId } };
+}
+
+function upgradeVersionedGoalRows(rows: unknown, upgrade: (row: unknown) => unknown): unknown {
+    return mapStoredRows(rows, row => isObject(row) ? { ...row, value: upgrade(row.value) } : row);
+}
+
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `10` are accepted; records at the unchanged v1 key migrate in memory
+ * through `11` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -677,6 +696,7 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
  * migration backfills start_of_day in both local state and the sync baseline.
  * The v8 -> v9 migration installs all nine goal fields in both shapes.
  * The v9 -> v10 migration retires the partial-progress map and identifies the live Work window.
+ * The v10 -> v11 migration updates project links in goal rows and their sync baseline.
  */
 export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwnerRecord {
     let parsed: unknown;
@@ -698,7 +718,8 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         parsed.schemaVersion !== 7 &&
         parsed.schemaVersion !== 8 &&
         parsed.schemaVersion !== 9 &&
-        parsed.schemaVersion !== 10
+        parsed.schemaVersion !== 10 &&
+        parsed.schemaVersion !== STAGING_SCHEMA_VERSION
     ) {
         throw new StagingStorageError(
             `Unsupported staging schema version ${String(parsed.schemaVersion)} for owner "${ownerId}" (expected ${STAGING_SCHEMA_VERSION})`,
@@ -866,6 +887,20 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             } };
         }
         record = { ...rest, schemaVersion: 10, state };
+    }
+    if (record.schemaVersion === 10) {
+        const baseline = record.lastSynced;
+        record = {
+            ...record,
+            schemaVersion: 11,
+            goalTrackers: mapStoredRows(record.goalTrackers, upgradeStoredGoalTracker),
+            goals: mapStoredRows(record.goals, upgradeStoredGoal),
+            lastSynced: isObject(baseline) ? {
+                ...baseline,
+                goalTrackers: upgradeVersionedGoalRows(baseline.goalTrackers, upgradeStoredGoalTracker),
+                goals: upgradeVersionedGoalRows(baseline.goals, upgradeStoredGoal),
+            } : baseline,
+        };
     }
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(

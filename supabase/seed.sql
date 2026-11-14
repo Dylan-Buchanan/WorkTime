@@ -475,7 +475,7 @@ on conflict (owner_id, id) do update set
 -- Dates are relative to the reset date rather than fixed calendar dates.
 
 insert into public.goal_trackers (
-    id, owner_id, name, purpose, cadence, cadence_anchor_at, color,
+    id, owner_id, name, purpose, project_id, cadence, cadence_anchor_at, color,
     sort_order, is_archived, last_built_period_start, created_at, updated_at
 )
 select
@@ -483,6 +483,7 @@ select
     owner.owner_id,
     'Weekly review (test)',
     'A ready-to-use tracker for the check-in wizard and deck builder.',
+    '20000000-0000-4000-8000-000000000001',
     jsonb_build_object('kind', 'every-n-weeks', 'weekday', 0, 'intervalWeeks', 1),
     grid.anchor,
     '#6366F1',
@@ -503,6 +504,7 @@ cross join lateral (
 on conflict (owner_id, id) do update set
     name = excluded.name,
     purpose = excluded.purpose,
+    project_id = excluded.project_id,
     cadence = excluded.cadence,
     cadence_anchor_at = excluded.cadence_anchor_at,
     color = excluded.color,
@@ -512,7 +514,7 @@ on conflict (owner_id, id) do update set
     updated_at = now();
 
 insert into public.goals (
-    id, owner_id, tracker_id, title, notes, project_id, metric,
+    id, owner_id, tracker_id, title, notes, project_link_mode, project_id, metric,
     lifecycle, achieved_at, dropped_at, sort_order, created_at, updated_at
 )
 select
@@ -521,7 +523,8 @@ select
     '70000000-0000-4000-8000-000000000001'::uuid,
     seed.title,
     seed.notes,
-    null,
+    seed.project_link_mode,
+    seed.project_id,
     seed.metric,
     'active',
     null,
@@ -535,6 +538,8 @@ from (
             '70000000-0000-4000-8000-000000000002'::uuid,
             'Run a full check-in',
             'Walk every wizard field: status, focus, did, current, plans, and miss reason.',
+            'inherit',
+            null,
             null::jsonb,
             0
         ),
@@ -542,6 +547,8 @@ from (
             '70000000-0000-4000-8000-000000000003'::uuid,
             'Build the first deck',
             'Generate a deck from the completed period and review every slide.',
+            'project',
+            '20000000-0000-4000-8000-000000000002',
             jsonb_build_object(
                 'label', 'Slides reviewed',
                 'current', 2,
@@ -552,7 +559,7 @@ from (
             ),
             1
         )
-) as seed(id, title, notes, metric, sort_order)
+) as seed(id, title, notes, project_link_mode, project_id, metric, sort_order)
 cross join (
     select id as owner_id
     from auth.users
@@ -565,6 +572,7 @@ on conflict (owner_id, id) do update set
     tracker_id = excluded.tracker_id,
     title = excluded.title,
     notes = excluded.notes,
+    project_link_mode = excluded.project_link_mode,
     project_id = excluded.project_id,
     metric = excluded.metric,
     lifecycle = excluded.lifecycle,

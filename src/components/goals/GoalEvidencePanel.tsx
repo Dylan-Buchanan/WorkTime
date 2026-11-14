@@ -38,7 +38,8 @@ function isCurrentPeriod(period: PeriodBounds, today: LocalDateKey): boolean {
 export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, checkIn, period, onChange }) => {
     const pm = usePM();
     const { state: appState } = useAppState();
-    const frozenRef = useRef(goal.projectId === null || checkIn.current !== "");
+    const projectId = goal.projectLink.mode === "project" ? goal.projectLink.projectId : null;
+    const frozenRef = useRef(projectId === null || checkIn.current !== "");
     const lastSeenRef = useRef(checkIn.current);
     const prefilledRef = useRef<string | null>(null);
     const boundPeriodRef = useRef<string | null>(null);
@@ -63,9 +64,9 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
         if (boundPeriodRef.current === period.periodStart) return;
         boundPeriodRef.current = period.periodStart;
         lastSeenRef.current = checkIn.current;
-        frozenRef.current = goal.projectId === null || checkIn.current !== "";
+        frozenRef.current = projectId === null || checkIn.current !== "";
         prefilledRef.current = null;
-    }, [checkIn.current, checkIn.periodStart, goal.projectId, period.periodStart]);
+    }, [checkIn.current, checkIn.periodStart, projectId, period.periodStart]);
 
     // Freeze when the Current value changes from anything other than our own prefill.
     useEffect(() => {
@@ -82,15 +83,15 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
     useEffect(() => {
         if (checkIn.periodStart !== period.periodStart) return;
         if (frozenRef.current || prefilledRef.current !== null) return;
-        if (checkIn.current !== "" || goal.projectId === null) return;
+        if (checkIn.current !== "" || projectId === null) return;
         if (!isCurrentPeriod(period, todayLocalDateKey())) return;
         const text = evidencePrefillText(evidence.inProgress);
         if (!text) return;
         prefilledRef.current = text;
         onChange({ current: text });
-    }, [checkIn.current, checkIn.periodStart, evidence.inProgress, goal.projectId, onChange, period.periodStart, period.periodEnd]);
+    }, [checkIn.current, checkIn.periodStart, evidence.inProgress, projectId, onChange, period.periodStart, period.periodEnd]);
 
-    if (goal.projectId === null) return null;
+    if (projectId === null) return null;
 
     const toggle = (pmTaskId: string, checked: boolean) => {
         const ids = checkIn.evidenceTaskIds;

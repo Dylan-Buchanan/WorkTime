@@ -87,10 +87,11 @@ interface SelectedSuggestion extends EvidenceTaskSuggestion {
  */
 export function buildGoalEvidence(input: EvidenceInput): GoalEvidence {
     const { goal, checkIn, period, projects, pmTasks, backendTasks, logs } = input;
-    if (goal.projectId === null) return emptyEvidence(false);
-    if (!projects.some(project => project.id === goal.projectId)) return emptyEvidence(true);
+    if (goal.projectLink.mode !== "project") return emptyEvidence(false);
+    const { projectId } = goal.projectLink;
+    if (!projects.some(project => project.id === projectId)) return emptyEvidence(true);
 
-    const projectTasks = pmTasks.filter(task => task.projectId === goal.projectId);
+    const projectTasks = pmTasks.filter(task => task.projectId === projectId);
     const window = (input.boundaryInstants ?? defaultBoundaryInstants)(period);
     const localDateOf = input.localDateOf ?? defaultLocalDateOf;
     const acceptedIds = new Set(checkIn.evidenceTaskIds);

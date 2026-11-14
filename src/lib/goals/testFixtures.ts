@@ -23,6 +23,7 @@ export interface GoalTrackerFixtureOverrides {
     id?: string;
     name?: string;
     purpose?: string;
+    projectId?: GoalTracker["projectId"];
     cadence?: GoalCadence;
     cadenceAnchorAt?: LocalDateKey;
     color?: string;
@@ -39,7 +40,7 @@ export interface GoalFixtureOverrides {
     trackerId?: string;
     title?: string;
     notes?: string;
-    projectId?: string | null;
+    projectLink?: Goal["projectLink"];
     metric?: GoalMetric | null;
     lifecycle?: Goal["lifecycle"];
     achievedAt?: string | null;
@@ -83,6 +84,7 @@ export function buildGoalTrackerFixture(overrides: GoalTrackerFixtureOverrides =
     const tracker = createGoalTracker({
         name: overrides.name ?? "Work",
         purpose: overrides.purpose ?? "Ship the release",
+        projectId: overrides.projectId ?? null,
         cadence: overrides.cadence ?? GOALS_FIXTURE_EVERY_N_WEEKS,
         cadenceAnchorAt: overrides.cadenceAnchorAt ?? GOALS_FIXTURE_ANCHOR,
         color: overrides.color ?? "#6366F1",
@@ -99,7 +101,7 @@ export function buildGoalFixture(overrides: GoalFixtureOverrides = {}): Goal {
         trackerId: overrides.trackerId ?? "tracker-work",
         title: overrides.title ?? "Ship the release",
         notes: overrides.notes ?? "",
-        projectId: overrides.projectId ?? null,
+        projectLink: overrides.projectLink,
         metric: overrides.metric ?? null,
         lifecycle: overrides.lifecycle ?? "active",
         achievedAt: overrides.achievedAt ?? null,

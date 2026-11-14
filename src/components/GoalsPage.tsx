@@ -653,7 +653,7 @@ function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onE
         <div className="flex flex-wrap items-center gap-3">
             <button className={button} {...attributes} {...listeners} aria-label={`Reorder ${goal.title}`}>⠿</button>
             <h3 className="flex-1 font-medium">{goal.title}</h3>
-            {goal.projectId !== null && <GoalProjectLink projectId={goal.projectId} />}
+            {goal.projectLink.mode === "project" && <GoalProjectLink projectId={goal.projectLink.projectId} />}
             <GoalStatusBadge lifecycle={goal.lifecycle} />
             <span data-goals-slot="goal-slip" data-goal-id={goal.id}><GoalSlipBadge consecutiveSlips={consecutiveSlips} /></span>
             <button className={button} onClick={onExpand} aria-expanded={expanded}>{expanded ? "Hide details" : "Show details"}</button>
@@ -675,8 +675,9 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
         left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const [title, setTitle] = useState(goal.title);
     const [notes, setNotes] = useState(goal.notes);
-    const [projectId, setProjectId] = useState(goal.projectId ?? "");
-    const missingProject = goal.projectId !== null && !projects.some(project => project.id === goal.projectId);
+    const savedProjectId = goal.projectLink.mode === "project" ? goal.projectLink.projectId : "";
+    const [projectId, setProjectId] = useState(savedProjectId);
+    const missingProject = savedProjectId !== "" && !projects.some(project => project.id === savedProjectId);
     const [metric, setMetric] = useState(goal.metric !== null);
     const [label, setLabel] = useState(goal.metric?.label ?? "");
     const [current, setCurrent] = useState(String(goal.metric?.current ?? 0));
@@ -798,7 +799,10 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
                     if (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and finite current and target values.");
                     nextMetric = { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: !sourceTouched && source === goal.metric?.source ? goal.metric.overridePinned : false };
                 }
-                onSave({ title, notes, projectId: projectId || null, metric: nextMetric });
+                const projectLink: Goal["projectLink"] = projectId === savedProjectId
+                    ? goal.projectLink
+                    : projectId ? { mode: "project", projectId } : { mode: "inherit" };
+                onSave({ title, notes, projectLink, metric: nextMetric });
             } catch (error) {
                 if (created) {
                     // The habit is already stored; keep it selected so a retry never creates a duplicate.
@@ -815,7 +819,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
             <label className="grid gap-1">Goal note<textarea className={control} value={notes} onChange={event => setNotes(event.target.value)} /></label>
             <label className="grid gap-1">Project<select className={control} aria-label="Project" value={projectId} onChange={event => setProjectId(event.target.value)}>
                 <option value="">No project</option>
-                {missingProject && <option value={goal.projectId!}>Missing project</option>}
+                {missingProject && <option value={savedProjectId}>Missing project</option>}
                 {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
             </select></label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={metric} onChange={event => setMetric(event.target.checked)} />Track one metric</label>

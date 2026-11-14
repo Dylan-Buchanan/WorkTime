@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeAppState, makeActiveTimer } from "../../../test/mockTauri";
 import type { Habit, HabitCompletion } from "../../../state/types";
+import { buildGoalCheckInFixture, buildGoalFixture, buildGoalTrackerFixture } from "../../goals/testFixtures";
 import {
     LocalStagingStore,
     STAGING_STORAGE_PREFIX,
@@ -127,6 +128,54 @@ function throwingStorage(): StorageLike {
 }
 
 describe("LocalStagingStore", () => {
+    it.each([9, 10])("upgrades v%i goal links in working rows and the sync baseline", async (schemaVersion) => {
+        const storage = corruptStorage({});
+        const store = new LocalStagingStore(storage);
+        const key = stagingKey(OWNER_A);
+        const tracker = buildGoalTrackerFixture();
+        const linked = buildGoalFixture({ id: "linked", trackerId: tracker.id, projectLink: { mode: "project", projectId: "p1" } });
+        const unlinked = buildGoalFixture({ id: "unlinked", trackerId: tracker.id });
+        const checkIn = buildGoalCheckInFixture({ goalId: linked.id });
+        const { projectId: _projectId, ...legacyTracker } = tracker;
+        const { projectLink: _linkedMode, ...legacyLinked } = linked;
+        const { projectLink: _unlinkedMode, ...legacyUnlinked } = unlinked;
+        const wrapped = <T>(value: T) => ({ value, updatedAt: BASE_TASK.created_at });
+        const baseline = makeBaseline({ goalCheckIns: { [checkIn.id]: wrapped(checkIn) } });
+        await seedInitialized(store, OWNER_A, baseline);
+        storage.setItem(key, JSON.stringify({
+            ...store.read(OWNER_A),
+            schemaVersion,
+            goalTrackers: { [tracker.id]: legacyTracker },
+            goals: { linked: { ...legacyLinked, projectId: "p1" }, unlinked: { ...legacyUnlinked, projectId: null } },
+            goalUpdatedAt: { linked: linked.updatedAt },
+            goalCheckIns: { [checkIn.id]: checkIn },
+            lastSynced: {
+                ...baseline,
+                goalTrackers: { [tracker.id]: wrapped(legacyTracker) },
+                goals: { linked: wrapped({ ...legacyLinked, projectId: null }), unlinked: wrapped({ ...legacyUnlinked, projectId: "p2" }) },
+            },
+        }));
+
+        const migrated = store.read(OWNER_A);
+        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.goalTrackers).toEqual({ [tracker.id]: tracker });
+        expect(migrated.goals).toEqual({ linked, unlinked });
+        expect(migrated.goalCheckIns).toEqual({ [checkIn.id]: checkIn });
+        expect(migrated.goalUpdatedAt).toEqual({ linked: linked.updatedAt });
+        expect(migrated.lastSynced).toEqual({
+            ...baseline,
+            goalTrackers: { [tracker.id]: wrapped(tracker) },
+            goals: {
+                linked: wrapped({ ...linked, projectLink: { mode: "inherit" } }),
+                unlinked: wrapped({ ...unlinked, projectLink: { mode: "project", projectId: "p2" } }),
+            },
+        });
+        expect(JSON.parse(storage.getItem(key)!).schemaVersion).toBe(schemaVersion);
+        const saved = await store.update(OWNER_A, current => current);
+        expect(JSON.parse(storage.getItem(key)!)).toEqual(saved);
+        expect(new LocalStagingStore(storage).read(OWNER_A)).toEqual({ ...migrated, revision: migrated.revision + 1 });
+    });
+
     it.each([undefined, "", "Line one\nLine two"])("reloads legacy and described to-dos: %j", async (description) => {
         const storage = corruptStorage({});
         const store = new LocalStagingStore(storage);
@@ -273,7 +322,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.petActivityRecords).toEqual({});
         expect(migrated.petActivityUpdatedAt).toEqual({});
         expect(migrated.petActivityTombstones).toEqual({});
@@ -315,7 +364,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petProfileTombstone).toBeNull();
@@ -383,7 +432,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petScheduleItems).toEqual({});
@@ -456,7 +505,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.petTrainingSkills).toEqual({});
         expect(migrated.petFixations).toEqual({});
 
@@ -512,7 +561,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.petNotableEvents).toEqual({});
         expect(migrated.petNotableEventUpdatedAt).toEqual({});
         expect(migrated.petNotableEventTombstones).toEqual({});
@@ -688,8 +737,8 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, "{not json");
         expect(() => store.read(OWNER_A)).toThrow(/not valid JSON/);
 
-        // Only numeric literal versions 1 through 10 are accepted.
-        for (const version of [0, 11, 999]) {
+        // Only numeric literal versions 1 through 11 are accepted.
+        for (const version of [0, 12, 999]) {
             window.localStorage.setItem(key, JSON.stringify({ schemaVersion: version, ownerId: OWNER_A }));
             expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
         }
@@ -904,7 +953,7 @@ describe("LocalStagingStore", () => {
         expect(store.pendingCount(OWNER_A)).toBe(2);
     });
 
-    it("round-trips a populated v9 record losslessly through serialize then parse", async () => {
+    it("round-trips a populated staging record losslessly through serialize then parse", async () => {
         const store = new LocalStagingStore(window.localStorage);
         const baseline = makeBaseline({
             habits: { h1: { value: H("h1"), updatedAt: "2026-01-01T00:00:00.000Z" } },
@@ -921,7 +970,7 @@ describe("LocalStagingStore", () => {
         }));
 
         const record = store.read(OWNER_A);
-        expect(record.schemaVersion).toBe(10);
+        expect(record.schemaVersion).toBe(11);
         expect(record.habits.h1.name).toBe("Saved");
         expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
         expect(record.habitCompletions.c1.bucket).toBe("2026-01-02");
@@ -968,7 +1017,7 @@ describe("LocalStagingStore", () => {
         expect(isSyncSnapshot(withActivity({ ...activity, skillIds: ["sit", 1] }))).toBe(false);
     });
 
-    it("migrates v5 records to v10 without retired progress", async () => {
+    it("migrates v5 records to v11 without retired progress", async () => {
         const store = new LocalStagingStore(window.localStorage);
         await seedInitialized(store, OWNER_A);
         const key = stagingKey(OWNER_A);
@@ -977,7 +1026,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.state.tasks.t1).toEqual(BASE_TASK);
         expect(stagingKey(OWNER_A)).toBe(key);
     });
@@ -997,7 +1046,7 @@ describe("LocalStagingStore", () => {
         const migrated = parseStagedOwnerRecord(JSON.stringify(legacy), OWNER_A);
         const expected = { ...legacy };
         delete (expected as Record<string, unknown>)["inProgress" + "Pomodoros"];
-        expect(migrated).toEqual({ ...expected, schemaVersion: 10, state: { ...legacy.state,
+        expect(migrated).toEqual({ ...expected, schemaVersion: 11, state: { ...legacy.state,
             timer: kind === "Work" ? { ...oldTimer, window_started_at: "2026-01-01T00:00:00.000Z" } : oldTimer } });
         expect(migrated.pendingCompletions).toEqual(legacy.pendingCompletions);
         expect(migrated.lastSynced).toEqual(legacy.lastSynced);
@@ -1015,7 +1064,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.state.settings.end_of_day).toBe("22:00");
         expect(migrated.lastSynced?.settings.value?.end_of_day).toBe("22:00");
         expect(store.pendingCount(OWNER_A)).toBe(0);
@@ -1032,7 +1081,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.state.settings.start_of_day).toBe("00:00");
         expect(migrated.lastSynced?.settings.value?.start_of_day).toBe("00:00");
         expect(store.pendingCount(OWNER_A)).toBe(0);
@@ -1057,7 +1106,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(v2));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         expect(migrated.todos).toEqual({});
         expect(migrated.todoUpdatedAt).toEqual({});
         expect(migrated.todoTombstones).toEqual({});
@@ -1067,7 +1116,7 @@ describe("LocalStagingStore", () => {
         expect(migrated.state.tasks.t1).toBeDefined();
     });
 
-    it("migrates a complete v1 record through v10 in memory without changing the storage key", async () => {
+    it("migrates a complete v1 record through v11 in memory without changing the storage key", async () => {
         const store = new LocalStagingStore(window.localStorage);
         // Persist a fully-populated record, then degrade it to the legacy v1
         // shape by stripping the five new top-level fields and both snapshot
@@ -1103,7 +1152,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(degraded));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(10);
+        expect(migrated.schemaVersion).toBe(11);
         // Every legacy value survives the in-memory migration.
         expect(migrated.state.tasks.t1.name).toBe("Legacy task");
         expect(migrated.state.logs).toEqual([{ ...BASE_LOG }]);
@@ -1130,7 +1179,7 @@ describe("LocalStagingStore", () => {
         // One safe staged update stays on schema 8 at the same v1-prefixed key and
         // never creates a worktime:staging:v2:* key.
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "t1" } }));
-        expect(store.read(OWNER_A).schemaVersion).toBe(10);
+        expect(store.read(OWNER_A).schemaVersion).toBe(11);
         const keys: string[] = [];
         for (let i = 0; i < window.localStorage.length; i += 1) keys.push(window.localStorage.key(i) as string);
         expect(keys.filter((candidate) => candidate.startsWith("worktime:staging:"))).toEqual([key]);
@@ -1245,7 +1294,7 @@ describe("log work-window staging compatibility", () => {
             lastSynced: makeBaseline({ logs: Object.fromEntries(logs.map((log) => [log.id, log])) }),
         }));
         const loaded = new LocalStagingStore(storage).read(OWNER_A);
-        expect(loaded.schemaVersion).toBe(10);
+        expect(loaded.schemaVersion).toBe(11);
         expect(loaded.state.logs).toEqual(logs);
         expect(loaded.lastSynced?.logs).toEqual(Object.fromEntries(logs.map((log) => [log.id, log])));
         expect(loaded.state.logs[2]).not.toHaveProperty("work_window_id");

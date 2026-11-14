@@ -37,18 +37,45 @@ describe("goal foundation factories", () => {
     it("creates deterministic defaults with injected time and ids", () => {
         const input = { name: " Work ", cadence: { kind: "every-n-weeks", weekday: 0, intervalWeeks: 2 } as const, cadenceAnchorAt: "2026-11-01" as const };
         const tracker = createGoalTracker(input, now, "tracker");
-        expect(tracker).toMatchObject({ id: "tracker", name: "Work", isArchived: false, lastBuiltPeriodStart: null, createdAt: now.toISOString(), updatedAt: now.toISOString() });
+        expect(tracker).toMatchObject({ id: "tracker", name: "Work", projectId: null, isArchived: false, lastBuiltPeriodStart: null, createdAt: now.toISOString(), updatedAt: now.toISOString() });
         expect(createGoalTracker(input, now, "tracker")).toEqual(tracker);
         const metric = { label: "Distance", target: 10, current: 2, unit: "km", source: "manual" as const, overridePinned: false };
         const goal = createGoal({ trackerId: tracker.id, title: " Run ", metric }, now, "goal");
         metric.current = 5;
-        expect(goal).toMatchObject({ title: "Run", lifecycle: "active", achievedAt: null, droppedAt: null, metric: { current: 2 } });
+        expect(goal).toMatchObject({ title: "Run", projectLink: { mode: "inherit" }, lifecycle: "active", achievedAt: null, droppedAt: null, metric: { current: 2 } });
         const planned = [{ text: "Practice", dueDate: "2026-11-02" as const }];
         const checkIn = createGoalCheckIn({ goalId: goal.id, periodStart: "2026-11-01", planned }, now, "check");
         planned[0].text = "Changed";
         expect(checkIn.planned[0].text).toBe("Practice");
         expect(checkIn).not.toHaveProperty("periodEnd");
         expect(isGoalTracker(tracker) && isGoal(goal) && isGoalCheckIn(checkIn)).toBe(true);
+    });
+
+    it("creates trackers with an optional project and validates stored tracker links", () => {
+        const tracker = createGoalTracker({ name: "Work", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-11-01", projectId: "p1" }, now, "tracker");
+        expect(tracker.projectId).toBe("p1");
+        expect(isGoalTracker(tracker)).toBe(true);
+        for (const projectId of [undefined, "", " \t", 1]) {
+            expect(isGoalTracker({ ...tracker, projectId })).toBe(false);
+        }
+    });
+
+    it("accepts only the fields for each goal project-link mode", () => {
+        const goal = createGoal({ trackerId: "t", title: "x" }, now, "g");
+        for (const projectLink of [{ mode: "inherit" }, { mode: "none" }, { mode: "project", projectId: "p1" }]) {
+            expect(isGoal({ ...goal, projectLink })).toBe(true);
+        }
+        for (const projectLink of [
+            undefined, null, {}, { mode: "other" },
+            { mode: "inherit", projectId: null }, { mode: "none", projectId: undefined },
+            { mode: "none", projectId: "p1" }, { mode: "inherit", extra: true },
+            { mode: "project" }, { mode: "project", projectId: null },
+            { mode: "project", projectId: "" }, { mode: "project", projectId: " \t" },
+            { mode: "project", projectId: "p1", extra: true },
+        ]) {
+            expect(isGoal({ ...goal, projectLink })).toBe(false);
+        }
+        expect(isGoal({ ...goal, projectId: "legacy" })).toBe(false);
     });
     it("rejects invalid dates, metric values and persisted row shapes", () => {
         expect(() => createGoalTracker({ name: "Work", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-02-30" }, now, "t")).toThrow(RangeError);

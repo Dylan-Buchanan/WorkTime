@@ -335,6 +335,7 @@ export interface GoalTracker {
     id: string;
     name: string;
     purpose: string;
+    projectId: string | null;
     cadence: GoalCadence;
     cadenceAnchorAt: LocalDateKey;
     color: string;
@@ -355,12 +356,17 @@ export interface GoalMetric {
     overridePinned: boolean;
 }
 
+export type GoalProjectLink =
+    | { mode: "inherit" }
+    | { mode: "none" }
+    | { mode: "project"; projectId: string };
+
 export interface Goal {
     id: string;
     trackerId: string;
     title: string;
     notes: string;
-    projectId: string | null;
+    projectLink: GoalProjectLink;
     metric: GoalMetric | null;
     lifecycle: "active" | "achieved" | "dropped";
     achievedAt: string | null;

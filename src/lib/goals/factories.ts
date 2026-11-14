@@ -1,4 +1,4 @@
-import type { Goal, GoalCheckIn, GoalMetric, GoalTracker } from "../../state/types";
+import type { Goal, GoalCheckIn, GoalMetric, GoalProjectLink, GoalTracker } from "../../state/types";
 import { localDateFromKey, localDateKey } from "../todos/calendar";
 import { isValidGoalCadence, normalizeGoalCadence } from "./cadence";
 
@@ -22,12 +22,22 @@ export function isGoalMetric(v: unknown): v is GoalMetric {
 }
 export function isGoalTracker(v: unknown): v is GoalTracker {
     return object(v) && base(v) && nonempty(v.name) && text(v.purpose) && !/[\r\n]/.test(v.purpose) &&
+        (v.projectId === null || nonempty(v.projectId)) &&
         isValidGoalCadence(v.cadence) && isGoalDateKey(v.cadenceAnchorAt) && text(v.color) && finite(v.sortOrder) &&
         typeof v.isArchived === "boolean" && (v.lastBuiltPeriodStart === null || isGoalDateKey(v.lastBuiltPeriodStart));
 }
+function isGoalProjectLink(v: unknown): v is GoalProjectLink {
+    if (!object(v)) return false;
+    const keys = Reflect.ownKeys(v);
+    if (!keys.includes("mode")) return false;
+    if (v.mode === "project") {
+        return keys.length === 2 && keys.includes("projectId") && nonempty(v.projectId);
+    }
+    return (v.mode === "inherit" || v.mode === "none") && keys.length === 1 && !("projectId" in v);
+}
 export function isGoal(v: unknown): v is Goal {
     return object(v) && base(v) && nonempty(v.trackerId) && nonempty(v.title) && text(v.notes) &&
-        (v.projectId === null || nonempty(v.projectId)) && (v.metric === null || isGoalMetric(v.metric)) &&
+        !("projectId" in v) && isGoalProjectLink(v.projectLink) && (v.metric === null || isGoalMetric(v.metric)) &&
         (v.lifecycle === "active" || v.lifecycle === "achieved" || v.lifecycle === "dropped") && nullableTimestamp(v.achievedAt) &&
         nullableTimestamp(v.droppedAt) && finite(v.sortOrder);
 }
@@ -40,15 +50,16 @@ export function isGoalCheckIn(v: unknown): v is GoalCheckIn {
 
 export function createGoalTracker(input: Pick<GoalTracker, "name" | "cadence" | "cadenceAnchorAt"> & Partial<Omit<GoalTracker, "id" | "createdAt" | "updatedAt">>, now: Date, id: string): GoalTracker {
     const value: GoalTracker = { purpose: "", color: "", sortOrder: 0, isArchived: false, lastBuiltPeriodStart: null,
-        ...input, id, name: input.name.trim(), cadence: normalizeGoalCadence(input.cadence), createdAt: now.toISOString(), updatedAt: now.toISOString() };
+        ...input, id, name: input.name.trim(), projectId: input.projectId ?? null, cadence: normalizeGoalCadence(input.cadence), createdAt: now.toISOString(), updatedAt: now.toISOString() };
     if (!isGoalTracker(value)) throw new RangeError("Invalid goal tracker");
     return value;
 }
 export function createGoal(input: Pick<Goal, "trackerId" | "title"> & Partial<Omit<Goal, "id" | "createdAt" | "updatedAt">>, now: Date, id: string): Goal {
-    const value: Goal = { notes: "", projectId: null, lifecycle: "active", achievedAt: null, droppedAt: null, sortOrder: 0,
-        ...input, id, title: input.title.trim(), metric: input.metric ? { ...input.metric } : null, createdAt: now.toISOString(), updatedAt: now.toISOString() };
+    const value: Goal = { notes: "", lifecycle: "active", achievedAt: null, droppedAt: null, sortOrder: 0,
+        ...input, id, title: input.title.trim(), projectLink: input.projectLink === undefined ? { mode: "inherit" } : input.projectLink,
+        metric: input.metric ? { ...input.metric } : null, createdAt: now.toISOString(), updatedAt: now.toISOString() };
     if (!isGoal(value)) throw new RangeError("Invalid goal");
-    return value;
+    return { ...value, projectLink: { ...value.projectLink } };
 }
 export function createGoalCheckIn(input: Pick<GoalCheckIn, "goalId" | "periodStart"> & Partial<Omit<GoalCheckIn, "id" | "createdAt" | "updatedAt">>, now: Date, id: string): GoalCheckIn {
     const value: GoalCheckIn = { did: "", current: "", statusPill: "on-track", missReason: "", isFocus: false,

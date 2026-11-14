@@ -115,7 +115,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 10,
+        schemaVersion: 11,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -183,7 +183,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 10,
+        schemaVersion: 11,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,

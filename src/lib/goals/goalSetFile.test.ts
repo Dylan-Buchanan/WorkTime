@@ -35,7 +35,7 @@ function definitionOf(goal: Goal) {
     return {
         title: goal.title,
         notes: goal.notes,
-        projectId: goal.projectId,
+        projectId: goal.projectLink.mode === "project" ? goal.projectLink.projectId : null,
         metric: goal.metric
             ? { label: goal.metric.label, target: goal.metric.target, unit: goal.metric.unit }
             : null,
@@ -81,7 +81,7 @@ function withChange(change: (file: Record<string, unknown>) => void): string {
 describe("goalSetFile serializeGoalSet", () => {
     it("writes canonical key order, two-space indentation, and a trailing newline", () => {
         const tracker = buildGoalTrackerFixture({ name: "Work" });
-        const goal = buildGoalFixture({ id: "goal-one", title: "Ship the release", notes: "Two notes", projectId: "project-1", sortOrder: 0 });
+        const goal = buildGoalFixture({ id: "goal-one", title: "Ship the release", notes: "Two notes", projectLink: { mode: "project", projectId: "project-1" }, sortOrder: 0 });
         const json = serializeGoalSet(tracker, [goal]);
         const expected = [
             "{",
@@ -334,6 +334,24 @@ describe("goalSetFile parseGoalSet", () => {
 });
 
 describe("goalSetFile materializeGoalSet", () => {
+    it("projects goal links into the v1 file format and imports null as inherit", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: "tracker-project" });
+        const goals = [
+            buildGoalFixture({ id: "linked", trackerId: tracker.id, projectLink: { mode: "project", projectId: "p1" }, sortOrder: 0 }),
+            buildGoalFixture({ id: "none", trackerId: tracker.id, projectLink: { mode: "none" }, sortOrder: 1 }),
+            buildGoalFixture({ id: "inherit", trackerId: tracker.id, sortOrder: 2 }),
+        ];
+        const file = parseGoalSet(serializeGoalSet(tracker, goals));
+        expect(file.version).toBe(1);
+        expect(file.tracker).not.toHaveProperty("projectId");
+        expect(file.goals.map(goal => goal.projectId)).toEqual(["p1", null, null]);
+        const imported = materializeGoalSet(file, NOW, ids());
+        expect(imported.tracker.projectId).toBeNull();
+        expect(imported.goals.map(goal => goal.projectLink)).toEqual([
+            { mode: "project", projectId: "p1" }, { mode: "inherit" }, { mode: "inherit" },
+        ]);
+    });
+
     it("exports habit definitions without the link and imports them as manual with zero progress", () => {
         const tracker = buildEveryNWeeksTrackerFixture();
         const goal = buildGoalFixture({ trackerId: tracker.id, metric: { label: "Practice", current: 17, target: 5, unit: "sessions", source: "habit", habitId: "private-habit", overridePinned: false } });

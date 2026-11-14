@@ -222,7 +222,7 @@ export function serializeGoalSet(tracker: GoalTracker, goals: readonly Goal[]): 
             .map(goal => ({
                 title: goal.title,
                 notes: goal.notes,
-                projectId: goal.projectId,
+                projectId: goal.projectLink.mode === "project" ? goal.projectLink.projectId : null,
                 metric: canonicalMetric(goal.metric),
                 lifecycle: goal.lifecycle,
                 sortOrder: goal.sortOrder,
@@ -282,7 +282,7 @@ export function materializeGoalSet(
         trackerId: tracker.id,
         title: goal.title,
         notes: goal.notes,
-        projectId: goal.projectId,
+        projectLink: goal.projectId === null ? { mode: "inherit" } : { mode: "project", projectId: goal.projectId },
         metric: goal.metric
             ? { label: goal.metric.label, target: goal.metric.target, current: 0, unit: goal.metric.unit, source: "manual", overridePinned: false }
             : null,

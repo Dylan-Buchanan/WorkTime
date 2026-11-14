@@ -659,7 +659,7 @@ describe("CheckInWizard", () => {
             logs: [log()],
         }));
         const tracker = buildGoalTrackerFixture();
-        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectLink: { mode: "project", projectId: "project-1" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
             projects: { "project-1": project() },
@@ -692,7 +692,7 @@ describe("CheckInWizard", () => {
     it("shows no evidence panel for an unlinked goal even when project data exists", async () => {
         const data = new InMemoryDataAccess(makeAppState({ tasks: { "app-1": backendTask() } }));
         const tracker = buildGoalTrackerFixture();
-        const goal = buildGoalFixture({ id: "goal-life", trackerId: tracker.id, title: "Life goal", projectId: null });
+        const goal = buildGoalFixture({ id: "goal-life", trackerId: tracker.id, title: "Life goal", projectLink: { mode: "inherit" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
             projects: { "project-1": project() },
@@ -711,7 +711,7 @@ describe("CheckInWizard", () => {
     it("prefills current from In Progress tasks, freezes after an edit, and re-syncs only on refresh", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();
-        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectLink: { mode: "project", projectId: "project-1" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
             projects: { "project-1": project() },
@@ -742,7 +742,7 @@ describe("CheckInWizard", () => {
         vi.setSystemTime(new Date(2026, 10, 2, 12));
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();
-        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectLink: { mode: "project", projectId: "project-1" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
             projects: { "project-1": project() },
@@ -769,7 +769,7 @@ describe("CheckInWizard", () => {
         vi.setSystemTime(new Date(2026, 10, 2, 12));
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();
-        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectLink: { mode: "project", projectId: "project-1" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
             projects: { "project-1": project() },
@@ -994,7 +994,7 @@ describe("CheckInWizard", () => {
         const tracker = buildGoalTrackerFixture();
         const goal = buildGoalFixture({
             id: "goal-habit", trackerId: tracker.id, title: "Practice",
-            projectId: "project-1", metric: habitMetric("habit-1", 3),
+            projectLink: { mode: "project", projectId: "project-1" }, metric: habitMetric("habit-1", 3),
         });
         await data.saveGoals([tracker], [goal], []);
         await data.saveHabits([habit("habit-1")], [habitCompletion("habit-1", "2026-10-18")]);

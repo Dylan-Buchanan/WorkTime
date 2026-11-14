@@ -224,7 +224,7 @@ describe("GoalSetActions", () => {
     it("creates a new tracker and one goal per definition on confirm", async () => {
         const tracker = buildEveryNWeeksTrackerFixture();
         const goals = [
-            buildGoalFixture({ id: "goal-a", trackerId: tracker.id, title: "Ship the release", notes: "Two notes", projectId: "project-1", sortOrder: 0 }),
+            buildGoalFixture({ id: "goal-a", trackerId: tracker.id, title: "Ship the release", notes: "Two notes", projectLink: { mode: "project", projectId: "project-1" }, sortOrder: 0 }),
             buildMetricGoalFixture(tracker.id),
         ];
         const data = await seeded(tracker, goals);
@@ -282,9 +282,9 @@ describe("GoalSetActions", () => {
     it("imports goals unlinked when their project is not on this device and keeps known links", async () => {
         const tracker = buildEveryNWeeksTrackerFixture();
         const goals = [
-            buildGoalFixture({ id: "goal-known", trackerId: tracker.id, title: "Known project", projectId: "project-1", sortOrder: 0 }),
-            buildGoalFixture({ id: "goal-missing-a", trackerId: tracker.id, title: "Missing A", projectId: "project-missing-a", sortOrder: 1 }),
-            buildGoalFixture({ id: "goal-missing-b", trackerId: tracker.id, title: "Missing B", projectId: "project-missing-b", sortOrder: 2 }),
+            buildGoalFixture({ id: "goal-known", trackerId: tracker.id, title: "Known project", projectLink: { mode: "project", projectId: "project-1" }, sortOrder: 0 }),
+            buildGoalFixture({ id: "goal-missing-a", trackerId: tracker.id, title: "Missing A", projectLink: { mode: "project", projectId: "project-missing-a" }, sortOrder: 1 }),
+            buildGoalFixture({ id: "goal-missing-b", trackerId: tracker.id, title: "Missing B", projectLink: { mode: "project", projectId: "project-missing-b" }, sortOrder: 2 }),
         ];
         const data = await seeded(tracker, goals);
         await seedProjects(data, ["project-1"]);
@@ -299,8 +299,9 @@ describe("GoalSetActions", () => {
         await user.click(within(review).getByRole("button", { name: "Create tracker" }));
         await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
 
-        expect(calls.createGoal.map(input => input.projectId)).toEqual(["project-1", null, null]);
-        expect(calls.createdGoals.map(goal => goal.projectId)).toEqual(["project-1", null, null]);
+        const expectedLinks = [{ mode: "project", projectId: "project-1" }, { mode: "inherit" }, { mode: "inherit" }];
+        expect(calls.createGoal.map(input => input.projectLink)).toEqual(expectedLinks);
+        expect(calls.createdGoals.map(goal => goal.projectLink)).toEqual(expectedLinks);
     });
 
     it("preserves achieved and dropped lifecycle when importing", async () => {

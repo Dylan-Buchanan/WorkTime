@@ -78,7 +78,7 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
 
 function input(overrides: Partial<EvidenceInput> = {}): EvidenceInput {
     return {
-        goal: buildGoalFixture({ projectId: "project-1" }),
+        goal: buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } }),
         checkIn: { evidenceTaskIds: [] },
         period: PERIOD,
         projects: [project()],
@@ -191,7 +191,7 @@ describe("buildGoalEvidence", () => {
 
     it("returns empty evidence for an unlinked goal", () => {
         const evidence = buildGoalEvidence(input({
-            goal: buildGoalFixture({ projectId: null }),
+            goal: buildGoalFixture({ projectLink: { mode: "inherit" } }),
             projects: [project()],
         }));
 

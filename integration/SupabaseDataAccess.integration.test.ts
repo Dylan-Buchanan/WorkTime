@@ -1,7 +1,7 @@
 import { createGoalTracker, createGoal, createGoalCheckIn } from "../src/lib/goals/factories";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
 import { defaultAppState } from "../src/lib/engine";
@@ -580,6 +580,100 @@ describe("SupabaseDataAccess transport", () => {
 
 
 describe("goals RPC and RLS", () => {
+    it("seeds goal project links and backfills existing rows without advancing sync stamps", () => {
+        const migration = readFileSync("supabase/migrations/20261114000000_goal_project_links.sql", "utf8");
+        const sql = `begin;
+            create temporary table seeded_goals as
+                select g.id, g.project_id, g.project_link_mode, g.updated_at, t.project_id as tracker_project_id
+                from public.goals g join public.goal_trackers t on t.owner_id = g.owner_id and t.id = g.tracker_id
+                where t.id = '70000000-0000-4000-8000-000000000001';
+            alter table public.goals drop column project_link_mode;
+            alter table public.goal_trackers drop column project_id;
+            ${migration}
+            select json_build_object(
+                'seeded', (select json_agg(json_build_array(project_link_mode, project_id, tracker_project_id) order by id) from seeded_goals),
+                'backfilled', (select json_agg(json_build_array(g.project_link_mode, g.updated_at = s.updated_at, g.project_id is not distinct from s.project_id) order by s.id)
+                    from seeded_goals s join public.goals g using (id)),
+                'validated', (select count(*) from pg_constraint where conrelid = 'public.goals'::regclass
+                    and conname in ('goals_project_link_mode_check', 'goals_project_link_mode_allowed') and convalidated));
+            rollback;`;
+        const result = spawnSync("docker", ["exec", "-i", "supabase_db_worktime", "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], { input: sql, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        const summary = result.stdout.split(/\r?\n/).find(line => line.startsWith("{"));
+        expect(JSON.parse(summary!)).toEqual({
+            seeded: [
+                ["inherit", null, "20000000-0000-4000-8000-000000000001"],
+                ["project", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000001"],
+            ],
+            backfilled: [["inherit", true, true], ["project", true, true]],
+            validated: 2,
+        });
+    });
+
+    it("syncs tracker projects and all goal link modes and rejects inconsistent rows", async () => {
+        user = await createLocalUser();
+        const data = new SupabaseDataAccess(user.client);
+        const tracker = createGoalTracker({ name: "Work", projectId: "p1", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-01-04" }, new Date(T0), crypto.randomUUID());
+        const inherited = createGoal({ trackerId: tracker.id, title: "Inherit" }, new Date(T0), crypto.randomUUID());
+        const unlinked = createGoal({ trackerId: tracker.id, title: "None", projectLink: { mode: "none" } }, new Date(T0), crypto.randomUUID());
+        const linked = createGoal({ trackerId: tracker.id, title: "Override", projectLink: { mode: "project", projectId: "p2" } }, new Date(T0), crypto.randomUUID());
+        const goals = [inherited, unlinked, linked];
+        await data.push(user.userId, { ...emptyPlan(),
+            goalTrackerUpserts: [{ value: tracker, updatedAt: T0 }],
+            goalUpserts: goals.map(value => ({ value, updatedAt: T0 })),
+        });
+        let pulled = await data.pull(user.userId);
+        expect(pulled.goalTrackers[tracker.id].value.projectId).toBe("p1");
+        for (const goal of goals) expect(pulled.goals[goal.id].value.projectLink).toEqual(goal.projectLink);
+
+        const rpc = user.client.rpc.bind(user.client);
+        vi.spyOn(user.client, "rpc").mockImplementationOnce((name, args, options) => {
+            const { project_id: _project, ...legacyTracker } = args!.p_goal_tracker_upserts[0];
+            return rpc(name, { ...args, p_goal_tracker_upserts: [legacyTracker] }, options);
+        });
+        await data.push(user.userId, { ...emptyPlan(), goalTrackerUpserts: [{ value: { ...tracker, name: "Renamed" }, updatedAt: "2026-01-02T00:00:00.000Z" }] });
+        expect((await data.pull(user.userId)).goalTrackers[tracker.id].value).toMatchObject({ name: "Renamed", projectId: "p1" });
+
+        await data.push(user.userId, { ...emptyPlan(),
+            goalTrackerUpserts: [{ value: { ...tracker, projectId: null }, updatedAt: LATER }],
+            goalUpserts: [
+                { value: { ...inherited, projectLink: linked.projectLink }, updatedAt: LATER },
+                { value: { ...linked, projectLink: unlinked.projectLink }, updatedAt: LATER },
+            ],
+        });
+        pulled = await data.pull(user.userId);
+        expect(pulled.goalTrackers[tracker.id].value.projectId).toBeNull();
+        expect(pulled.goals[inherited.id].value.projectLink).toEqual(linked.projectLink);
+        expect(pulled.goals[linked.id].value.projectLink).toEqual(unlinked.projectLink);
+
+        for (const [mode, projectId] of [["inherit", "p1"], ["none", "p1"], ["project", null], ["unknown", null]]) {
+            const response = await user.client.from("goals").update({ project_link_mode: mode, project_id: projectId }).eq("id", linked.id);
+            expect(response.error?.code).toBe("23514");
+        }
+    });
+
+    it("rejects an old client's goal write and rolls back the rest of its sync batch", async () => {
+        user = await createLocalUser();
+        const data = new SupabaseDataAccess(user.client);
+        const tracker = createGoalTracker({ name: "Work", cadence: { kind: "monthly-weekday", weekday: 0 }, cadenceAnchorAt: "2026-01-04" }, new Date(T0), crypto.randomUUID());
+        const goal = createGoal({ trackerId: tracker.id, title: "Override", projectLink: { mode: "project", projectId: "p1" } }, new Date(T0), crypto.randomUUID());
+        const rpc = user.client.rpc.bind(user.client);
+        vi.spyOn(user.client, "rpc").mockImplementationOnce((name, args, options) => {
+            const { project_link_mode: _mode, ...legacyGoal } = args!.p_goal_upserts[0];
+            const { project_id: _project, ...legacyTracker } = args!.p_goal_tracker_upserts[0];
+            return rpc(name, { ...args, p_goal_upserts: [legacyGoal], p_goal_tracker_upserts: [legacyTracker] }, options);
+        });
+        await expect(data.push(user.userId, { ...emptyPlan(),
+            goalTrackerUpserts: [{ value: tracker, updatedAt: T0 }],
+            goalUpserts: [{ value: goal, updatedAt: T0 }],
+            pmState: { value: PM_STATE, updatedAt: T0 },
+        })).rejects.toThrow("GOAL_PROJECT_LINK_MODE_REQUIRED");
+        const pulled = await data.pull(user.userId);
+        expect(pulled.goalTrackers).toEqual({});
+        expect(pulled.goals).toEqual({});
+        expect(pulled.pmState).toEqual({ value: null, updatedAt: null });
+    });
+
     it("replays the actual metric migration while preserving existing rows and a validated check", () => {
         const migration = readFileSync("supabase/migrations/20261101000000_goal_habit_metrics.sql", "utf8");
         const sql = `begin;

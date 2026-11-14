@@ -298,7 +298,7 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                             <label className="grid gap-1">Did
                                 <textarea className={control} aria-label={`Did for ${goal.title}`} value={draft.did} onChange={event => patchDraft(goal.id, { did: event.target.value })} />
                             </label>
-                            {goal.projectId !== null && <GoalEvidencePanel
+                            {goal.projectLink.mode === "project" && <GoalEvidencePanel
                                 key={`${goal.id}:${activePeriod.periodStart}`}
                                 goal={goal}
                                 checkIn={draft}

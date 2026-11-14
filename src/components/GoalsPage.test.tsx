@@ -383,7 +383,7 @@ describe("GoalsPage", () => {
         await user.selectOptions(screen.getByRole("combobox", { name: "Goal status" }), "achieved");
         expect(screen.getByRole("heading", { name: "Learn" })).toBeInTheDocument();
         await waitFor(async () => expect((await data.loadGoals()).goals).toHaveLength(2));
-        expect((await data.loadGoals()).goals.find(row => row.title === "Launch")).toMatchObject({ lifecycle: "active", notes: "", projectId: null });
+        expect((await data.loadGoals()).goals.find(row => row.title === "Launch")).toMatchObject({ lifecycle: "active", notes: "", projectLink: { mode: "inherit" } });
         expect((await data.loadGoals()).goals.find(row => row.title === "Learn")).toMatchObject({ lifecycle: "achieved", notes: "Completed course" });
     });
 
@@ -819,7 +819,7 @@ describe("GoalsPage", () => {
 
     it("renders a project link and a habit reading as two separate links", async () => {
         const { data, tracker } = await oneTracker();
-        const goal = buildGoalFixture({ trackerId: tracker.id, projectId: "project-1", metric: habitMetric({ target: 3 }) });
+        const goal = buildGoalFixture({ trackerId: tracker.id, projectLink: { mode: "project", projectId: "project-1" }, metric: habitMetric({ target: 3 }) });
         await data.saveGoals([tracker], [goal], []);
         await data.saveHabits([habit("habit-read", { name: "Read" })], []);
         await data.savePMState({
@@ -1414,7 +1414,7 @@ describe("GoalsPage", () => {
         save.mockRestore();
     });
 
-    it("round-trips a goal project link through the editor and clears it to null", async () => {
+    it("round-trips a goal project link through the editor and clears it to inherit", async () => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({ id: "goal-linked", trackerId: tracker.id, title: "Ship the release" });
         await data.saveGoals([tracker], [goal], []);
@@ -1430,7 +1430,7 @@ describe("GoalsPage", () => {
         await screen.findByRole("option", { name: "Deep Work" });
         await user.selectOptions(select, "project-1");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
-        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectId).toBe("project-1"));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectLink).toEqual({ mode: "project", projectId: "project-1" }));
         expect(within(screen.getByLabelText(goal.title)).getByText("Deep Work")).toBeInTheDocument();
 
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
@@ -1438,14 +1438,30 @@ describe("GoalsPage", () => {
         await waitFor(() => expect(reopened).toHaveValue("project-1"));
         await user.selectOptions(reopened, "");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
-        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectId).toBeNull());
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectLink).toEqual({ mode: "inherit" }));
         expect(screen.queryByText("Deep Work")).not.toBeInTheDocument();
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
+    it("preserves an explicit none link when editing a goal's title", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, projectLink: { mode: "none" } });
+        await data.saveGoals([{ ...tracker, projectId: "project-1" }], [goal], []);
+        const { user } = await mount(data);
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const title = screen.getByLabelText("Name");
+        await user.clear(title);
+        await user.type(title, "Revised goal");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0]).toMatchObject({
+            title: "Revised goal", projectLink: { mode: "none" },
+        }));
+    });
+
     it("shows a quiet missing-project note instead of an error on a broken goal link", async () => {
         const { data, tracker } = await oneTracker();
-        const goal = buildGoalFixture({ id: "goal-broken", trackerId: tracker.id, title: "Broken link", projectId: "project-gone" });
+        const goal = buildGoalFixture({ id: "goal-broken", trackerId: tracker.id, title: "Broken link", projectLink: { mode: "project", projectId: "project-gone" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
             projects: { "project-1": project() },

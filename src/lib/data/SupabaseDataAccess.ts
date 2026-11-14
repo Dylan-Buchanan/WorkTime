@@ -137,10 +137,13 @@ function petNotableEventRow(value: PetNotableEvent, updatedAt: string) {
 }
 
 function goalTrackerRow(value: GoalTracker, updatedAt: string) {
-    return { id: value.id, name: value.name, purpose: value.purpose, cadence: value.cadence, cadence_anchor_at: value.cadenceAnchorAt, color: value.color, sort_order: value.sortOrder, is_archived: value.isArchived, last_built_period_start: value.lastBuiltPeriodStart, created_at: value.createdAt, updated_at: updatedAt };
+    return { id: value.id, name: value.name, purpose: value.purpose, project_id: value.projectId, cadence: value.cadence, cadence_anchor_at: value.cadenceAnchorAt, color: value.color, sort_order: value.sortOrder, is_archived: value.isArchived, last_built_period_start: value.lastBuiltPeriodStart, created_at: value.createdAt, updated_at: updatedAt };
 }
 function goalRow(value: Goal, updatedAt: string) {
-    return { id: value.id, tracker_id: value.trackerId, title: value.title, notes: value.notes, project_id: value.projectId, metric: value.metric, lifecycle: value.lifecycle, achieved_at: value.achievedAt, dropped_at: value.droppedAt, sort_order: value.sortOrder, created_at: value.createdAt, updated_at: updatedAt };
+    const { projectLink } = value;
+    return { id: value.id, tracker_id: value.trackerId, title: value.title, notes: value.notes, project_link_mode: projectLink.mode,
+        project_id: projectLink.mode === "project" ? projectLink.projectId : null, metric: value.metric, lifecycle: value.lifecycle,
+        achieved_at: value.achievedAt, dropped_at: value.droppedAt, sort_order: value.sortOrder, created_at: value.createdAt, updated_at: updatedAt };
 }
 function goalCheckInRow(value: GoalCheckIn, updatedAt: string) {
     return { id: value.id, goal_id: value.goalId, period_start: value.periodStart, did: value.did, current: value.current, planned: value.planned, status_pill: value.statusPill, miss_reason: value.missReason, is_focus: value.isFocus, evidence_task_ids: value.evidenceTaskIds, created_at: value.createdAt, updated_at: updatedAt };
@@ -386,12 +389,16 @@ export class SupabaseDataAccess implements SyncRemote {
     }
 
     private validateGoalTracker(row: any): GoalTracker {
-        const value = { id: row.id, name: row.name, purpose: row.purpose, cadence: row.cadence, cadenceAnchorAt: row.cadence_anchor_at, color: row.color, sortOrder: row.sort_order, isArchived: row.is_archived, lastBuiltPeriodStart: row.last_built_period_start, createdAt: row.created_at, updatedAt: row.updated_at };
+        const value = { id: row.id, name: row.name, purpose: row.purpose, projectId: row.project_id, cadence: row.cadence, cadenceAnchorAt: row.cadence_anchor_at, color: row.color, sortOrder: row.sort_order, isArchived: row.is_archived, lastBuiltPeriodStart: row.last_built_period_start, createdAt: row.created_at, updatedAt: row.updated_at };
         if (!isGoalTracker(value)) this.fail("goal_trackers", new Error(`invalid row for ${row.id}`));
         return clone(value);
     }
     private validateGoal(row: any): Goal {
-        const value = { id: row.id, trackerId: row.tracker_id, title: row.title, notes: row.notes, projectId: row.project_id, metric: row.metric, lifecycle: row.lifecycle, achievedAt: row.achieved_at, droppedAt: row.dropped_at, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
+        const mode = row.project_link_mode;
+        const projectLink = mode === "project" || row.project_id !== null
+            ? { mode, projectId: row.project_id }
+            : { mode };
+        const value = { id: row.id, trackerId: row.tracker_id, title: row.title, notes: row.notes, projectLink, metric: row.metric, lifecycle: row.lifecycle, achievedAt: row.achieved_at, droppedAt: row.dropped_at, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
         if (!isGoal(value)) this.fail("goals", new Error(`invalid row for ${row.id}`));
         return clone(value);
     }

@@ -160,7 +160,9 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
                     title: goal.title,
                     notes: goal.notes,
                     // A file from another device can name projects that do not exist here.
-                    projectId: goal.projectId !== null && knownProjectIds.has(goal.projectId) ? goal.projectId : null,
+                    projectLink: goal.projectLink.mode === "project" && !knownProjectIds.has(goal.projectLink.projectId)
+                        ? { mode: "inherit" }
+                        : goal.projectLink,
                     metric: goal.metric,
                     sortOrder: goal.sortOrder,
                 });

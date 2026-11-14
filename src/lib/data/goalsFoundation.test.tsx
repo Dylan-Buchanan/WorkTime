@@ -69,12 +69,12 @@ describe("goals staged sync foundation", () => {
         }
         render(<DataProvider dataAccess={data}><Consumer /></DataProvider>);
         await waitFor(() => expect(loaded).toHaveBeenCalledWith({ trackers: [], goals: [], checkIns: [] }));
-        const expected = { ...v8, ...emptyGoals, schemaVersion: 10, lastSynced: { ...snapshot, ...emptyGoals } };
+        const expected = { ...v8, ...emptyGoals, schemaVersion: 11, lastSynced: { ...snapshot, ...emptyGoals } };
         expect(store.read(OWNER)).toEqual(expected);
         // Persist by the ordinary full-set writer, then load from a new store instance.
         await data.saveGoals([], [], []);
         expect(new LocalStagingStore(window.localStorage).read(OWNER)).toEqual({ ...expected, revision: 18 });
-        expect(JSON.parse(window.localStorage.getItem(stagingKey(OWNER))!).schemaVersion).toBe(10);
+        expect(JSON.parse(window.localStorage.getItem(stagingKey(OWNER))!).schemaVersion).toBe(11);
     });
 
     it("stamps changed rows only, clones inputs, isolates owners and rejects backwards built keys atomically", async () => {

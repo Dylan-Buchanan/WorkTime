@@ -123,7 +123,7 @@ async function mount(options: {
             meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
         });
     }
-    const goal = options.goal ?? buildGoalFixture({ projectId: "project-1" });
+    const goal = options.goal ?? buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } });
     const checkIn = options.checkIn ?? buildGoalCheckInFixture({ goalId: goal.id, periodStart: PERIOD.periodStart });
     const view = render(
         <TauriCloseProvider>
@@ -153,7 +153,7 @@ afterEach(() => {
 
 describe("GoalEvidencePanel", () => {
     it("adds and removes PM task ids without touching stale ids or did", async () => {
-        const goal = buildGoalFixture({ id: "goal-ship", projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-ship", projectLink: { mode: "project", projectId: "project-1" } });
         const checkIn = buildGoalCheckInFixture({
             goalId: goal.id,
             periodStart: PERIOD.periodStart,
@@ -191,7 +191,7 @@ describe("GoalEvidencePanel", () => {
     });
 
     it("shows a quiet note for a linked project that no longer exists", async () => {
-        const goal = buildGoalFixture({ projectId: "project-missing" });
+        const goal = buildGoalFixture({ projectLink: { mode: "project", projectId: "project-missing" } });
         await mount({ goal });
 
         expect(await screen.findByText("Linked project no longer exists - evidence is unavailable.")).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe("GoalEvidencePanel", () => {
     });
 
     it("prefills current on first open and freezes after a manual edit until refresh", async () => {
-        const goal = buildGoalFixture({ projectId: "project-1" });
+        const goal = buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } });
         const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: PERIOD.periodStart, current: "" });
         const { user } = await mount({
             goal,
@@ -226,7 +226,7 @@ describe("GoalEvidencePanel", () => {
     });
 
     it("never overwrites a current value present when the panel mounts", async () => {
-        const goal = buildGoalFixture({ projectId: "project-1" });
+        const goal = buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } });
         const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: PERIOD.periodStart, current: "Already typed" });
         await mount({
             goal,
@@ -243,7 +243,7 @@ describe("GoalEvidencePanel", () => {
         ["a past period", { periodStart: "2026-08-02", periodEnd: "2026-08-16" } as PeriodBounds],
         ["a future period", { periodStart: "2026-10-18", periodEnd: "2026-11-01" } as PeriodBounds],
     ])("never prefills %s from today's In Progress tasks", async (_label, period) => {
-        const goal = buildGoalFixture({ projectId: "project-1" });
+        const goal = buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } });
         const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: period.periodStart, current: "" });
         await mount({
             goal,
@@ -258,7 +258,7 @@ describe("GoalEvidencePanel", () => {
     });
 
     it("renders nothing for an unlinked goal", async () => {
-        await mount({ goal: buildGoalFixture({ projectId: null }) });
+        await mount({ goal: buildGoalFixture({ projectLink: { mode: "inherit" } }) });
 
         expect(screen.queryByRole("region", { name: /Evidence/ })).not.toBeInTheDocument();
         expect(screen.queryByRole("heading", { name: "Evidence" })).not.toBeInTheDocument();
