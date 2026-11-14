@@ -94,7 +94,7 @@ interface AppContextShape {
     startTaskWork: (id: string) => Promise<"started" | "joined">;
     subscribeTaskCompletions: (listener: (taskId: string) => void) => () => void;
     subscribeTimerTransitions: (listener: (event: TimerTransitionEvent) => void) => () => void;
-    pauseTimer: () => Promise<void>;
+    pauseTimer: (options?: { expect?: { taskId: string; windowStartedAt: string } }) => Promise<void>;
     resumeTimer: (options?: { handoff?: boolean }) => Promise<void>;
     isPaused: boolean;
     tick: number;
@@ -625,8 +625,11 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         taskCompletionListenersRef.current.add(listener);
         return () => taskCompletionListenersRef.current.delete(listener);
     }, []);
-    const pauseTimer = async () => {
+    const pauseTimer = async (options?: { expect?: { taskId: string; windowStartedAt: string } }) => {
         const before = stateRef.current;
+        const expect = options?.expect;
+        if (expect && (before?.timer?.kind !== "Work" || before.timer.task_id !== expect.taskId ||
+            windowStartedAt(before.timer) !== expect.windowStartedAt)) return;
         if (!before?.timer || before.timer.paused) return;
         let success: { result: EngineResult<unknown>; at: string } | undefined;
         await adoptResult(async () => {
