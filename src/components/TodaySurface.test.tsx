@@ -1,3 +1,5 @@
+import * as completionHooks from "../state/TaskCompletionContext";
+import { TaskCompletionProvider } from "../state/TaskCompletionContext";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -142,10 +144,10 @@ async function renderSurface(options: WrapOptions = {}) {
                     <AppStateProvider>
                         <ProjectManagerProvider>
                             <HabitProvider>
-                                <TodoProvider>
+                                <TodoProvider><TaskCompletionProvider>
                                     <TimerProbe />
                                     <TodaySurface onSelectTask={options.onSelectTask ?? (() => {})} />
-                                </TodoProvider>
+                                </TaskCompletionProvider></TodoProvider>
                             </HabitProvider>
                         </ProjectManagerProvider>
                     </AppStateProvider>
@@ -176,10 +178,10 @@ describe("Today to-do group", () => {
             const data = new InMemoryDataAccess(makeAppState());
             await data.saveTodos([surfaceTodo()], []);
             render(<TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId={OWNER}>
-                <AppStateProvider><ProjectManagerProvider><HabitProvider><TodoProvider>
+                <AppStateProvider><ProjectManagerProvider><HabitProvider><TodoProvider><TaskCompletionProvider>
                     <StateSyncBridge />
                     <TodaySurface onSelectTask={() => {}} />
-                </TodoProvider></HabitProvider></ProjectManagerProvider></AppStateProvider>
+                </TaskCompletionProvider></TodoProvider></HabitProvider></ProjectManagerProvider></AppStateProvider>
             </SyncProvider></DataProvider></TauriCloseProvider>);
             expandSurface();
             fireEvent.click(await screen.findByRole("button", { name: "Start focus on Agenda to-do" }));
@@ -695,39 +697,46 @@ describe("Today work-window handoff", () => {
 });
 
 describe("Today deferred finalize", () => {
-    it("keeps the running Work window and shows the pending hint when checking the task that owns it", async () => {
-        const user = userEvent.setup();
+    it("ends the occupant's window and completes durably when no other PM task exists", async () => {
         const running = appTask("app-running", "Running app task");
+        const windowStartedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+        const data = await renderSurface({
+            tasks: { running: pmTask({ id: "running", title: "Running task", appTaskId: running.id, estimatePomos: 2, dueDate: todayKey() }) },
+            appState: { tasks: { [running.id]: running }, active_task: running.id,
+                timer: makeActiveTimer({ task_id: running.id, started_at: windowStartedAt, window_started_at: windowStartedAt }) },
+        });
+        expandSurface();
+        fireEvent.click(await screen.findByRole("button", { name: "Complete Running task" }));
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.running.status).toBe("Done"));
+        await waitFor(() => expect(data.store.state.tasks[running.id]).toMatchObject({ completed_at: expect.any(String), archived: true }));
+        expect(data.store.state.timer === null || data.store.state.timer.task_id !== running.id).toBe(true);
+        expect(data.store.state.logs.filter(entry => entry.work_window_id === windowStartedAt)).toHaveLength(1);
+        expect(data.store.state.logs[0].duration_minutes).toBeCloseTo(5, 1);
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        fireEvent.click(await screen.findByRole("button", { name: "Done today (1)" }));
+        expect(screen.queryByText("finishing after this pomodoro")).not.toBeInTheDocument();
+    });
+
+    it("keeps and pauses the completed occupant's window when a workable second task exists", async () => {
+        const running = appTask("app-running", "Running app task");
+        const candidate = appTask("app-next", "Next task");
         const windowStartedAt = new Date(Date.now() - 5 * 60_000).toISOString();
         const data = await renderSurface({
             tasks: {
                 running: pmTask({ id: "running", title: "Running task", appTaskId: running.id, estimatePomos: 2, dueDate: todayKey() }),
-            },
-            appState: {
-                tasks: { [running.id]: running },
-                active_task: running.id,
-                timer: makeActiveTimer({ task_id: running.id, window_started_at: windowStartedAt }),
-            },
+                next: pmTask({ id: "next", title: "Next task", appTaskId: candidate.id, estimatePomos: 2 }),
+            }, appState: { tasks: { [running.id]: running, [candidate.id]: candidate }, active_task: running.id,
+                timer: makeActiveTimer({ task_id: running.id, started_at: windowStartedAt, window_started_at: windowStartedAt }) },
         });
+        const finalize = vi.spyOn(data, "finalizeTask");
+        const commit = vi.spyOn(data, "completeTaskKeepingWindow");
         expandSurface();
-        await waitFor(() => expect(screen.getByTestId("timer-task")).toHaveTextContent(running.id));
-
-        await user.click(screen.getByRole("button", { name: "Complete Running task" }));
-
-        const toggle = await screen.findByRole("button", { name: "Done today (1)" });
-        await waitFor(async () => {
-            expect((await data.loadPMState())?.tasks.running.status).toBe("Done");
-        });
-        expect(data.store.state.timer?.task_id).toBe(running.id);
-        expect(data.store.state.timer?.window_started_at).toBe(windowStartedAt);
-        expect(data.store.state.tasks[running.id].completed_at).toBeNull();
-
-        fireEvent.click(toggle);
-        expect(await screen.findByText("finishing after this pomodoro")).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Select Running task" })).toBeInTheDocument();
-        expect(data.store.state.timer?.task_id).toBe(running.id);
-        expect(data.store.state.timer?.window_started_at).toBe(windowStartedAt);
-        expect(data.store.state.tasks[running.id].completed_at).toBeNull();
+        fireEvent.click(await screen.findByRole("button", { name: "Complete Running task" }));
+        await screen.findByRole("dialog", { name: "Switch task" });
+        expect(commit).toHaveBeenCalledWith(running.id);
+        expect(finalize).not.toHaveBeenCalled();
+        expect(data.store.state.timer).toMatchObject({ window_started_at: windowStartedAt, paused: true, task_id: running.id });
+        expect(data.store.state.tasks[running.id]).toMatchObject({ completed_at: expect.any(String), archived: true });
     });
 
     it("finalizes a linked task immediately when it is not running and shows no hint", async () => {
@@ -811,4 +820,18 @@ describe("Today deferred finalize", () => {
         });
         expect(data.store.state.tasks[linked.id].completed_at).toBeNull();
     });
+});
+
+
+it("routes Today PM completion to the controller and reports a rejected sequence", async () => {
+    const completeTask = vi.fn().mockRejectedValue(new Error("Commit unavailable"));
+    const hook = vi.spyOn(completionHooks, "useTaskCompletion").mockReturnValue({ completeTask, completeAppTask: vi.fn(), openSwitchSheet: vi.fn(), busy: false });
+    try {
+        const data = await renderSurface({ tasks: { pa: pmTask({ id: "pa", title: "Controller task", estimatePomos: 2, dueDate: todayKey() }) } });
+        expandSurface();
+        fireEvent.click(await screen.findByRole("button", { name: "Complete Controller task" }));
+        expect(completeTask).toHaveBeenCalledExactlyOnceWith("pa");
+        await waitFor(async () => expect((await data.loadPMState())?.tasks.pa.status).toBe("Done"));
+        expect(await screen.findByRole("status")).toHaveTextContent("Couldn't finish");
+    } finally { hook.mockRestore(); }
 });

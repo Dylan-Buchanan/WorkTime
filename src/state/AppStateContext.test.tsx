@@ -49,6 +49,53 @@ describe("timer transition events", () => {
         return { data, events, app: () => current, ...view };
     }
 
+    it("swallows finalize failure by default and rethrows on request, setting error in both cases", async () => {
+        const c = await setup();
+        const before = structuredClone(c.app().state);
+        vi.spyOn(c.data, "finalizeTask").mockRejectedValue(new Error("Finalize unavailable"));
+        await act(async () => { await expect(c.app().finalizeTask("A")).resolves.toBeUndefined(); });
+        expect(c.app().error).toBe("Finalize unavailable");
+        await act(async () => { await expect(c.app().finalizeTask("A", { rethrow: true })).rejects.toThrow("Finalize unavailable"); });
+        expect(c.app().error).toBe("Finalize unavailable");
+        expect(c.app().state).toEqual(before);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([]);
+    });
+
+    it("adopts owner-safe completion silently, keeps pending empty and preserves the pause for handoff", async () => {
+        const c = await setup();
+        time(3);
+        await act(async () => { await c.app().pauseTimer(); });
+        const paused = structuredClone(c.app().state!.timer);
+        c.events.length = 0;
+        await act(async () => { await c.app().completeTaskKeepingWindow("A"); });
+        expect(c.app().state?.tasks.A).toMatchObject({ completed_at: at(3), archived: true });
+        expect(c.app().state?.timer).toEqual(paused);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([]);
+        time(5);
+        await act(async () => {
+            await c.app().resumeTimer({ handoff: true });
+            await c.app().startTaskWork("B");
+        });
+        expect(c.events).toEqual([
+            { type: "leave", taskId: "A", reason: "switch", at: at(5), windowId: W, pausedAt: at(3) },
+            { type: "enter", taskId: "B", reason: "switch", at: at(5), windowId: W, fromTaskId: "A" },
+        ]);
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+    });
+
+    it("surfaces and rethrows an owner-safe completion failure without transitions or pending entries", async () => {
+        const c = await setup();
+        const before = structuredClone(c.app().state);
+        vi.spyOn(c.data, "completeTaskKeepingWindow").mockRejectedValueOnce(new Error("Completion failed"));
+        await act(async () => { await expect(c.app().completeTaskKeepingWindow("A")).rejects.toThrow("Completion failed"); });
+        expect(c.app().state).toEqual(before);
+        expect(c.app().error).toBe("Completion failed");
+        expect(c.app().pendingFinalizeTaskIds).toEqual([]);
+        expect(c.events).toEqual([]);
+    });
+
     it("publishes pause after its real same-tab revision refresh adopts the committed timer first", async () => {
         const data = new InMemoryDataAccess(makeAppState({
             active_task: "A", timer: makeActiveTimer({ task_id: "A", started_at: W, window_started_at: W, ends_at: at(25) }),

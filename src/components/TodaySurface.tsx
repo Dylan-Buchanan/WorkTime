@@ -17,6 +17,7 @@ import {
 } from "../lib/today";
 import { workStartOccupation } from "../lib/engine";
 import { useSounds } from "../hooks/useSounds";
+import { useTaskCompletion } from "../state/TaskCompletionContext";
 import { WaitingDot } from "./WaitingIndicator";
 
 const CONTENT_ID = "today-surface-content";
@@ -156,8 +157,9 @@ const HabitRow: React.FC<{ habit: TodayHabitEntry; onToggle: (habit: TodayHabitE
 );
 
 export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
-    const { state, startTaskWork, createTask, requestFinalize, pendingFinalizeTaskIds } = useAppState();
+    const { state, startTaskWork, createTask, pendingFinalizeTaskIds } = useAppState();
     const { state: pmState, updateTask } = usePM();
+    const { completeTask } = useTaskCompletion();
     const habitContext = useHabits();
     const todoContext = useOptionalTodos();
     const { play } = useSounds();
@@ -198,10 +200,8 @@ export const TodaySurface: React.FC<TodaySurfaceProps> = ({ onSelectTask }) => {
     const handleCompleteTask = async (task: TodayTaskEntry) => {
         updateTask(task.id, { status: "Done" });
         play("completeTask");
-        const appTaskId = task.appTaskId;
-        if (!appTaskId || !state?.tasks?.[appTaskId]) return;
         try {
-            await requestFinalize(appTaskId);
+            await completeTask(task.id);
         } catch {
             setNotice(`Couldn't finish “${task.title}” on the timer.`);
         }
