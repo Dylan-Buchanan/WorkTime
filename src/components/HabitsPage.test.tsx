@@ -181,6 +181,7 @@ describe("HabitsPage", () => {
 
         await user.click(card().getByRole("button", { name: "Delete" }));
         expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The goal Ship the release uses this habit as its metric."));
+        expect(confirm).toHaveBeenCalledWith(expect.stringContaining("It will be switched to manual tracking."));
         expect(screen.getByText("Morning walk")).toBeInTheDocument();
         expect((await data.loadHabits()).completions).toHaveLength(1);
 
@@ -188,6 +189,99 @@ describe("HabitsPage", () => {
         await user.click(card().getByRole("button", { name: "Delete" }));
         await waitFor(() => expect(screen.queryByText("Morning walk")).not.toBeInTheDocument());
         await waitFor(async () => expect(await data.loadHabits()).toEqual({ habits: [], completions: [] }));
+        await waitFor(async () => {
+            const metric = (await data.loadGoals()).goals[0].metric;
+            expect(metric).toEqual({ label: "Walks", current: 0, target: 5, unit: "days", source: "manual", overridePinned: false });
+            expect(metric !== null && "habitId" in metric).toBe(false);
+        });
+        confirm.mockRestore();
+    });
+
+    it("downgrades every dependent goal, including achieved and dropped ones, and names them all", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const metric = { label: "Walks", current: 0, target: 5, unit: "days", source: "habit" as const, habitId: "morning", overridePinned: false };
+        await data.saveGoals([tracker], [
+            buildGoalFixture({ id: "goal-active", trackerId: tracker.id, title: "Alpha walk", metric, sortOrder: 0 }),
+            buildGoalFixture({
+                id: "goal-achieved", trackerId: tracker.id, title: "Zulu walk", metric, sortOrder: 1,
+                lifecycle: "achieved", achievedAt: "2026-10-12T12:00:00.000Z",
+            }),
+            buildGoalFixture({
+                id: "goal-dropped", trackerId: tracker.id, title: "Middle walk", metric, sortOrder: 2,
+                lifecycle: "dropped", droppedAt: "2026-10-20T12:00:00.000Z",
+            }),
+        ], []);
+        await data.saveHabits([habit("morning", { name: "Morning walk" })], []);
+        const user = userEvent.setup();
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+        render(wrap(data));
+        await screen.findByText("Morning walk");
+        await user.click(within(screen.getByText("Morning walk").closest("article")!).getByRole("button", { name: "Delete" }));
+        await waitFor(() => expect(screen.queryByText("Morning walk")).not.toBeInTheDocument());
+
+        const message = String(confirm.mock.calls[0][0]);
+        expect(message).toContain("The goals Alpha walk, Middle walk and Zulu walk use this habit as their metric.");
+        expect(message).toContain("They will be switched to manual tracking.");
+
+        await waitFor(async () => {
+            const goals = (await data.loadGoals()).goals;
+            expect(goals).toHaveLength(3);
+            for (const goal of goals) {
+                expect(goal.metric).toEqual({ label: "Walks", current: 0, target: 5, unit: "days", source: "manual", overridePinned: false });
+                expect(goal.metric !== null && "habitId" in goal.metric).toBe(false);
+            }
+        });
+        confirm.mockRestore();
+    });
+
+    it("leaves goals untouched when archiving a habit and when deleting a different habit", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const morningMetric = { label: "Walks", current: 0, target: 5, unit: "days", source: "habit" as const, habitId: "morning", overridePinned: false };
+        const eveningMetric = { label: "Walks", current: 0, target: 5, unit: "days", source: "habit" as const, habitId: "evening", overridePinned: false };
+        const otherMetric = { label: "Walks", current: 0, target: 5, unit: "days", source: "habit" as const, habitId: "reading", overridePinned: false };
+        await data.saveGoals([tracker], [
+            buildGoalFixture({ id: "goal-morning", trackerId: tracker.id, title: "Morning goal", metric: morningMetric, sortOrder: 0 }),
+            buildGoalFixture({ id: "goal-evening", trackerId: tracker.id, title: "Evening goal", metric: eveningMetric, sortOrder: 1 }),
+            buildGoalFixture({ id: "goal-other", trackerId: tracker.id, title: "Other goal", metric: otherMetric, sortOrder: 2 }),
+        ], []);
+        await data.saveHabits([
+            habit("morning", { name: "Morning walk" }),
+            habit("evening", { name: "Evening walk", position: 1 }),
+            habit("reading", { name: "Read", position: 2 }),
+        ], []);
+        const user = userEvent.setup();
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+        render(wrap(data));
+        await screen.findByText("Morning walk");
+        await user.click(within(screen.getByText("Morning walk").closest("article")!).getByRole("button", { name: "Archive" }));
+        await waitFor(() => expect(screen.queryByText("Morning walk")).not.toBeInTheDocument());
+
+        // Archiving keeps the link: only deletion downgrades.
+        await waitFor(async () => {
+            const goals = (await data.loadGoals()).goals;
+            expect(goals.find(goal => goal.id === "goal-morning")?.metric).toEqual(morningMetric);
+        });
+
+        await user.click(within(screen.getByText("Evening walk").closest("article")!).getByRole("button", { name: "Delete" }));
+        await waitFor(() => expect(screen.queryByText("Evening walk")).not.toBeInTheDocument());
+
+        const message = String(confirm.mock.calls[0][0]);
+        expect(message).toContain("The goal Evening goal uses this habit as its metric.");
+        expect(message).not.toContain("Morning goal");
+        expect(message).not.toContain("Other goal");
+
+        await waitFor(async () => {
+            const goals = (await data.loadGoals()).goals;
+            const evening = goals.find(goal => goal.id === "goal-evening")?.metric ?? null;
+            expect(evening).toEqual({ label: "Walks", current: 0, target: 5, unit: "days", source: "manual", overridePinned: false });
+            expect(evening !== null && "habitId" in evening).toBe(false);
+            expect(goals.find(goal => goal.id === "goal-morning")?.metric).toEqual(morningMetric);
+            expect(goals.find(goal => goal.id === "goal-other")?.metric).toEqual(otherMetric);
+        });
         confirm.mockRestore();
     });
 

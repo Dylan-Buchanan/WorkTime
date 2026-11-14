@@ -16,6 +16,7 @@ import type { HabitGridCell } from "../lib/habits";
 import type { HabitPeriod } from "../state/HabitContext";
 import { useHabits } from "../state/HabitContext";
 import { useGoals } from "../state/GoalContext";
+import { downgradeHabitMetric } from "../lib/goals/metrics";
 
 const HABIT_COLORS = ["#6366F1", "#EC4899", "#10B981", "#F59E0B", "#3B82F6", "#8B5CF6", "#EF4444", "#14B8A6"];
 const PERIODS: Array<{ value: HabitPeriod; label: string }> = [
@@ -120,16 +121,26 @@ export const HabitsPage: React.FC = () => {
     };
 
     const removeHabit = (habit: Habit) => {
-        const titles = [...new Set(Object.values(goals.state.goals)
-            .filter(goal => goal.metric?.source === "habit" && goal.metric.habitId === habit.id)
-            .map(goal => goal.title))]
+        const dependents = Object.values(goals.state.goals)
+            .filter(goal => goal.metric?.source === "habit" && goal.metric.habitId === habit.id);
+        const titles = [...new Set(dependents.map(goal => goal.title))]
             .sort((left, right) => left.localeCompare(right));
         const linked = titles.length === 0
             ? ""
             : titles.length === 1
-                ? ` The goal ${titles[0]} uses this habit as its metric.`
-                : ` The goals ${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]} use this habit as their metric.`;
+                ? ` The goal ${titles[0]} uses this habit as its metric. It will be switched to manual tracking.`
+                : ` The goals ${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]} use this habit as their metric. They will be switched to manual tracking.`;
         if (window.confirm(`Delete “${habit.name}”? This also deletes its completion history.${linked}`)) {
+            for (const goal of dependents) {
+                if (!goal.metric) continue;
+                try {
+                    goals.updateGoal(goal.id, { metric: downgradeHabitMetric(goal.metric) });
+                } catch (error) {
+                    // A failed goal write degrades to today's missing-habit card,
+                    // which the goal editor can repair. It must not block the delete.
+                    if (!(error instanceof RangeError)) throw error;
+                }
+            }
             deleteHabit(habit.id);
         }
     };

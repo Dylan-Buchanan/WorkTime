@@ -595,6 +595,57 @@ describe("GoalsPage", () => {
         expect(within(picker).getAllByRole("option")).toHaveLength(3);
     });
 
+    it("shows a missing-habit state in the editor and saves a replacement habit", async () => {
+        const { data, tracker } = await oneTracker();
+        const metric = habitMetric({ label: "Read", habitId: "habit-gone" });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([
+            habit("habit-read", { name: "Read 20 minutes" }),
+            habit("habit-walk", { name: "Walk", position: 1 }),
+        ], []);
+        const { user } = await mount(data, "2026-11-02");
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const picker = screen.getByLabelText("Habit");
+        expect(picker).toHaveValue("habit-gone");
+        expect(await screen.findByText("The linked habit is missing. Choose another habit or switch Source to Manual.")).toBeInTheDocument();
+        expect(within(picker).getByRole("option", { name: "Missing habit" })).toBeInTheDocument();
+
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        expect(within(editor).getByRole("alert")).toHaveTextContent("The linked habit is missing.");
+        expect(within(editor).queryByText("Choose a habit for this metric.")).not.toBeInTheDocument();
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual(metric));
+
+        await user.selectOptions(picker, "habit-read");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({
+            label: "Read", current: 0, target: 6, unit: "days", source: "habit", habitId: "habit-read", overridePinned: false,
+        }));
+    });
+
+    it("drops an unresolved habit link by switching its metric source to manual", async () => {
+        const { data, tracker } = await oneTracker();
+        const metric = habitMetric({ label: "Read", habitId: "habit-gone" });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" })], []);
+        const { user } = await mount(data, "2026-11-02");
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(await screen.findByText("The linked habit is missing. Choose another habit or switch Source to Manual.")).toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText("Source"), "manual");
+        expect(screen.queryByText("The linked habit is missing. Choose another habit or switch Source to Manual.")).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+
+        await waitFor(async () => {
+            const saved = (await data.loadGoals()).goals[0].metric;
+            expect(saved).toEqual({ label: "Read", current: 0, target: 6, unit: "days", source: "manual", overridePinned: false });
+            expect(saved !== null && "habitId" in saved).toBe(false);
+        });
+    });
+
     it("moves goals through achieved and dropped and reactivates them without losing history", async () => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({ trackerId: tracker.id });

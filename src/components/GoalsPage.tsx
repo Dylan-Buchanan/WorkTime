@@ -39,6 +39,7 @@ const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
 const habitsLoadingMessage = "Habits are still loading. Try again when they finish.";
+const missingHabitMessage = "The linked habit is missing. Choose another habit or switch Source to Manual.";
 /** Singular/plural words for a habit frequency; the count only ever affects the plural. */
 const HABIT_UNIT_WORDS: Record<HabitFrequency, readonly [string, string]> = {
     daily: ["day", "days"],
@@ -682,9 +683,12 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
     const [error, setError] = useState<string | null>(null);
     // A save attempt escalates the live cadence hint instead of stacking a second message.
     const [attemptedUnreachable, setAttemptedUnreachable] = useState(false);
+    // A stored link that no longer resolves is shown explicitly, not as a blank select.
+    const [attemptedMissingHabit, setAttemptedMissingHabit] = useState(false);
     // Linked habits stay visible even after archiving; only fresh options are active.
     const habitOptions = orderedHabits(habits.state.habits).filter(habit => !habit.isArchived || habit.id === habitId);
     const selectedHabit = habitId ? habits.state.habits[habitId] : undefined;
+    const missingHabit = habits.hydrated && habitId !== "" && selectedHabit === undefined;
     const targetValue = target.trim() === "" ? Number.NaN : Number(target);
     const maxBuckets = selectedHabit ? maxHabitMetricBuckets(cadence, selectedHabit.frequency) : null;
     const unreachable = selectedHabit && maxBuckets !== null && Number.isFinite(targetValue) && targetValue > maxBuckets
@@ -695,6 +699,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
         // A source change never carries the other source's stored reading forward.
         setCurrent("0");
         setSourceTouched(true);
+        setAttemptedMissingHabit(false);
         setSource(next);
         if (next !== "habit") setHabitId("");
     }
@@ -702,6 +707,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
         const next = habits.state.habits[nextId];
         setHabitId(nextId);
         setAttemptedUnreachable(false);
+        setAttemptedMissingHabit(false);
         if (!next) return;
         const previous = habits.state.habits[habitId];
         // Only default the label while it is empty or untouched from the prior habit.
@@ -716,7 +722,15 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
             if (metric && source === "habit") {
                 if (!label.trim() || !target.trim() || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and a finite target value.");
                 const habit = habits.state.habits[habitId];
-                if (!habit) throw new RangeError("Choose a habit for this metric.");
+                if (!habit) {
+                    if (missingHabit) {
+                        // Reuse the visible state as the error instead of stacking a second message.
+                        setError(null);
+                        setAttemptedMissingHabit(true);
+                        return;
+                    }
+                    throw new RangeError("Choose a habit for this metric.");
+                }
                 const max = maxHabitMetricBuckets(cadence, habit.frequency);
                 if (Number(target) > max) {
                     // Reuse the visible hint as the error state; never duplicate the message.
@@ -754,6 +768,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
             {source === "habit" && <>
                 <label className="grid gap-1">Habit<select className={control} value={habitId} onChange={event => chooseHabit(event.target.value)}>
                     <option value="">Select a habit</option>
+                    {missingHabit && <option value={habitId} disabled>Missing habit</option>}
                     {habitOptions.map(habit => {
                         const habitMax = maxHabitMetricBuckets(cadence, habit.frequency);
                         const impossible = Number.isFinite(targetValue) && targetValue > habitMax;
@@ -762,6 +777,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
                         </option>;
                     })}
                 </select></label>
+                {missingHabit && <p role={attemptedMissingHabit ? "alert" : undefined} className={`w-full text-xs ${attemptedMissingHabit ? "font-semibold text-red-300" : "text-amber-300"}`} data-goals-slot="goal-metric-hint">{missingHabitMessage}</p>}
                 {unreachable && <p role={attemptedUnreachable ? "alert" : undefined} className={`w-full text-xs ${attemptedUnreachable ? "font-semibold text-red-300" : "text-amber-300"}`} data-goals-slot="goal-metric-hint">{unreachable}</p>}
                 <p className="w-full text-xs text-neutral-500">Current progress is counted from this habit's completions in each goal period.</p>
             </>}
