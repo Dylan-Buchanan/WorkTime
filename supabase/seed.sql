@@ -682,3 +682,390 @@ on conflict (owner_id, goal_id, period_start) do update set
     evidence_task_ids = excluded.evidence_task_ids,
     created_at = excluded.created_at,
     updated_at = now();
+
+-- Pet test data: an 18-week-old puppy with a routine, five days of care
+-- history, tagged training sessions, active and resolved fixations, weights,
+-- naps, and a notable-event timeline. Dates are relative to the reset date so
+-- the sample always looks current. Stable IDs and upserts keep the block safe
+-- to replay. This file is intended for local `db reset` only.
+
+insert into public.pet_profiles (id, owner_id, name, birth_date, created_at, updated_at)
+select
+    '80000000-0000-4000-8000-000000000001'::uuid,
+    u.id,
+    'Mochi',
+    current_date - 126,
+    now() - interval '126 days',
+    now()
+from auth.users u
+where u.email = 'dbuchananh@gmail.com'
+on conflict (owner_id) do update set
+    id = excluded.id,
+    name = excluded.name,
+    birth_date = excluded.birth_date,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at;
+
+insert into public.pet_schedule_items (
+    id, owner_id, activity_type, label, flexibility, priority, recurrence, is_active, created_at, updated_at
+)
+select
+    seed.id,
+    owner.owner_id,
+    seed.activity_type,
+    seed.label,
+    seed.flexibility,
+    seed.priority,
+    seed.recurrence,
+    seed.is_active,
+    now() - interval '14 days',
+    now()
+from (
+    values
+        (
+            '80000000-0000-4000-8000-000000000101'::uuid,
+            'potty', 'Potty break', 'flexible', 0,
+            jsonb_build_object('mode', 'interval', 'minMinutes', 45, 'maxMinutes', 75),
+            true
+        ),
+        (
+            '80000000-0000-4000-8000-000000000102'::uuid,
+            'feeding', 'Breakfast', 'fixed', 0,
+            jsonb_build_object('mode', 'fixed-time', 'time', '07:30', 'startMinutes', 450, 'endMinutes', 465),
+            true
+        ),
+        (
+            '80000000-0000-4000-8000-000000000103'::uuid,
+            'training', 'Training session', 'flexible', 1,
+            jsonb_build_object('mode', 'fixed-time', 'time', '12:30', 'startMinutes', 750, 'endMinutes', 770),
+            true
+        ),
+        (
+            '80000000-0000-4000-8000-000000000104'::uuid,
+            'playtime', 'Playtime', 'flexible', 2,
+            jsonb_build_object('mode', 'fixed-time', 'time', '16:00', 'startMinutes', 960, 'endMinutes', 990),
+            true
+        ),
+        (
+            '80000000-0000-4000-8000-000000000105'::uuid,
+            'feeding', 'Dinner', 'fixed', 0,
+            jsonb_build_object('mode', 'fixed-time', 'time', '18:30', 'startMinutes', 1110, 'endMinutes', 1125),
+            true
+        )
+) as seed(id, activity_type, label, flexibility, priority, recurrence, is_active)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    activity_type = excluded.activity_type,
+    label = excluded.label,
+    flexibility = excluded.flexibility,
+    priority = excluded.priority,
+    recurrence = excluded.recurrence,
+    is_active = excluded.is_active,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+insert into public.pet_training_skills (id, owner_id, label, notes, status, resolved_at, created_at, updated_at)
+select
+    seed.id,
+    owner.owner_id,
+    seed.label,
+    seed.notes,
+    seed.status,
+    seed.resolved_at,
+    seed.created_at,
+    now()
+from (
+    values
+        (
+            '90000000-0000-4000-8000-000000000001'::uuid,
+            'Sit', 'Lure → hand signal', 'reliable',
+            now() - interval '10 days', now() - interval '50 days'
+        ),
+        (
+            '90000000-0000-4000-8000-000000000002'::uuid,
+            'Recall', 'Long line in the park', 'progressing',
+            null::timestamptz, now() - interval '24 days'
+        ),
+        (
+            '90000000-0000-4000-8000-000000000003'::uuid,
+            'Loose leash', 'Still distracted by squirrels', 'introduced',
+            null::timestamptz, now() - interval '9 days'
+        ),
+        (
+            '90000000-0000-4000-8000-000000000004'::uuid,
+            'Settle on mat', 'Calms down after ~5 minutes', 'reliable',
+            now() - interval '3 days', now() - interval '21 days'
+        )
+) as seed(id, label, notes, status, resolved_at, created_at)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    label = excluded.label,
+    notes = excluded.notes,
+    status = excluded.status,
+    resolved_at = excluded.resolved_at,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+insert into public.pet_fixations (id, owner_id, label, notes, resolved_at, resolution_note, created_at, updated_at)
+select
+    seed.id,
+    owner.owner_id,
+    seed.label,
+    seed.notes,
+    seed.resolved_at,
+    seed.resolution_note,
+    seed.created_at,
+    now()
+from (
+    values
+        (
+            'a0000000-0000-4000-8000-000000000001'::uuid,
+            'Chasing the vacuum', 'Barks at the robot vacuum every morning',
+            null::timestamptz, '', now() - interval '12 days'
+        ),
+        (
+            'a0000000-0000-4000-8000-000000000002'::uuid,
+            'Biting the leash', 'Worse when excited on the way to the park',
+            null::timestamptz, '', now() - interval '5 days'
+        ),
+        (
+            'a0000000-0000-4000-8000-000000000003'::uuid,
+            'Chewing shoes', 'Only the left ones, naturally',
+            now() - interval '18 days', 'Grew out of it once the teething phase passed', now() - interval '45 days'
+        )
+) as seed(id, label, notes, resolved_at, resolution_note, created_at)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    label = excluded.label,
+    notes = excluded.notes,
+    resolved_at = excluded.resolved_at,
+    resolution_note = excluded.resolution_note,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+insert into public.pet_notable_events (id, owner_id, title, notes, occurred_at, created_at, updated_at)
+select
+    seed.id,
+    owner.owner_id,
+    seed.title,
+    seed.notes,
+    seed.occurred_at,
+    seed.occurred_at,
+    now()
+from (
+    values
+        (
+            'b0000000-0000-4000-8000-000000000001'::uuid,
+            'First night home', 'Cried for ten minutes, then slept through',
+            date_trunc('day', now()) - interval '70 days' + interval '12 hours'
+        ),
+        (
+            'b0000000-0000-4000-8000-000000000002'::uuid,
+            'First successful potty outside', 'Three days of treats finally paid off',
+            date_trunc('day', now()) - interval '63 days' + interval '12 hours'
+        ),
+        (
+            'b0000000-0000-4000-8000-000000000003'::uuid,
+            'Met the neighbour''s dog', 'Polite sniff, one play bow, no barking',
+            date_trunc('day', now()) - interval '42 days' + interval '12 hours'
+        ),
+        (
+            'b0000000-0000-4000-8000-000000000004'::uuid,
+            'First walk around the block', 'Managed the whole loop without a carry',
+            date_trunc('day', now()) - interval '35 days' + interval '12 hours'
+        ),
+        (
+            'b0000000-0000-4000-8000-000000000005'::uuid,
+            'First reliable sit', 'Hand signal from across the kitchen',
+            date_trunc('day', now()) - interval '14 days' + interval '12 hours'
+        )
+) as seed(id, title, notes, occurred_at)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    title = excluded.title,
+    notes = excluded.notes,
+    occurred_at = excluded.occurred_at,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+insert into public.pet_weight_entries (id, owner_id, measured_at, weight, created_at, updated_at)
+select
+    seed.id,
+    owner.owner_id,
+    date_trunc('day', now()) - (seed.days_ago || ' days')::interval + interval '8 hours',
+    seed.weight,
+    date_trunc('day', now()) - (seed.days_ago || ' days')::interval + interval '8 hours',
+    now()
+from (
+    values
+        ('e0000000-0000-4000-8000-000000000001'::uuid, 42, 3.1::double precision),
+        ('e0000000-0000-4000-8000-000000000002'::uuid, 28, 4.4::double precision),
+        ('e0000000-0000-4000-8000-000000000003'::uuid, 14, 5.9::double precision),
+        ('e0000000-0000-4000-8000-000000000004'::uuid, 2, 7.2::double precision)
+) as seed(id, days_ago, weight)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    measured_at = excluded.measured_at,
+    weight = excluded.weight,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+insert into public.pet_nap_records (id, owner_id, started_at, ended_at, created_at, updated_at)
+select
+    seed.id,
+    owner.owner_id,
+    seed.started_at,
+    seed.ended_at,
+    seed.started_at,
+    now()
+from (
+    values
+        (
+            'd0000000-0000-4000-8000-000000000001'::uuid,
+            date_trunc('day', now()) - interval '1 day' + interval '9 hours 30 minutes',
+            date_trunc('day', now()) - interval '1 day' + interval '10 hours 15 minutes'
+        ),
+        (
+            'd0000000-0000-4000-8000-000000000002'::uuid,
+            date_trunc('day', now()) - interval '1 day' + interval '13 hours 15 minutes',
+            date_trunc('day', now()) - interval '1 day' + interval '14 hours 5 minutes'
+        ),
+        (
+            'd0000000-0000-4000-8000-000000000003'::uuid,
+            date_trunc('day', now()) + interval '10 hours',
+            date_trunc('day', now()) + interval '10 hours 40 minutes'
+        ),
+        (
+            'd0000000-0000-4000-8000-000000000004'::uuid,
+            date_trunc('day', now()) + interval '14 hours 10 minutes',
+            date_trunc('day', now()) + interval '14 hours 55 minutes'
+        )
+) as seed(id, started_at, ended_at)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+where seed.ended_at <= now()
+on conflict (owner_id, id) do update set
+    started_at = excluded.started_at,
+    ended_at = excluded.ended_at,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+-- Five days of care history. Training sessions carry skill tags so the
+-- Training tab shows per-skill session counts, and the recent-session list has
+-- enough rows to scroll. All rows are anchored to completed prior days.
+insert into public.pet_activity_records (
+    id, owner_id, activity_type, occurred_at, duration_minutes, skill_ids,
+    schedule_item_id, schedule_occurrence_start, created_at, updated_at
+)
+select
+    md5('pet-activity-history-' || history.days_ago || '-' || seed.slot)::uuid,
+    owner.owner_id,
+    seed.activity_type,
+    date_trunc('day', now()) - (history.days_ago || ' days')::interval + seed.at,
+    case
+        when seed.activity_type = 'training' then
+            case history.days_ago when 6 then 15 when 4 then 20 when 2 then 12 else 18 end::double precision
+        else seed.duration_minutes
+    end,
+    case
+        when seed.activity_type <> 'training' then null
+        when history.days_ago = 6 then '["90000000-0000-4000-8000-000000000001", "90000000-0000-4000-8000-000000000002"]'::jsonb
+        when history.days_ago = 4 then '["90000000-0000-4000-8000-000000000001", "90000000-0000-4000-8000-000000000004"]'::jsonb
+        when history.days_ago = 2 then '["90000000-0000-4000-8000-000000000002", "90000000-0000-4000-8000-000000000003"]'::jsonb
+        else '["90000000-0000-4000-8000-000000000001", "90000000-0000-4000-8000-000000000002", "90000000-0000-4000-8000-000000000003"]'::jsonb
+    end,
+    null::uuid,
+    null::timestamptz,
+    date_trunc('day', now()) - (history.days_ago || ' days')::interval + seed.at,
+    now()
+from (
+    values (6), (4), (2), (1)
+) as history(days_ago)
+cross join (
+    values
+        ('feeding-am', 'feeding', interval '7 hours 30 minutes', null::double precision),
+        ('potty-am', 'potty', interval '8 hours 10 minutes', null::double precision),
+        ('training', 'training', interval '12 hours 30 minutes', null::double precision),
+        ('potty-mid', 'potty', interval '13 hours', null::double precision),
+        ('playtime', 'playtime', interval '16 hours', 25::double precision),
+        ('potty-pm', 'potty', interval '17 hours 10 minutes', null::double precision),
+        ('feeding-pm', 'feeding', interval '18 hours 30 minutes', null::double precision)
+) as seed(slot, activity_type, at, duration_minutes)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    activity_type = excluded.activity_type,
+    occurred_at = excluded.occurred_at,
+    duration_minutes = excluded.duration_minutes,
+    skill_ids = excluded.skill_ids,
+    schedule_item_id = excluded.schedule_item_id,
+    schedule_occurrence_start = excluded.schedule_occurrence_start,
+    created_at = excluded.created_at,
+    updated_at = now();
+
+-- Recent rows for the current day. They are all `now() - interval` so they are
+-- never future-stamped, and the newest potty record anchors the interval item.
+insert into public.pet_activity_records (
+    id, owner_id, activity_type, occurred_at, duration_minutes, skill_ids,
+    schedule_item_id, schedule_occurrence_start, created_at, updated_at
+)
+select
+    md5('pet-activity-today-' || seed.slot)::uuid,
+    owner.owner_id,
+    seed.activity_type,
+    now() - seed.ago,
+    seed.duration_minutes,
+    seed.skill_ids,
+    null::uuid,
+    null::timestamptz,
+    now() - seed.ago,
+    now()
+from (
+    values
+        ('potty-recent', 'potty', interval '30 minutes', null::double precision, null::jsonb),
+        ('potty-earlier', 'potty', interval '3 hours', null::double precision, null::jsonb),
+        ('feeding', 'feeding', interval '5 hours', null::double precision, null::jsonb),
+        ('training', 'training', interval '2 hours', 15::double precision,
+            '["90000000-0000-4000-8000-000000000002", "90000000-0000-4000-8000-000000000003"]'::jsonb),
+        ('playtime', 'playtime', interval '90 minutes', 20::double precision, null::jsonb)
+) as seed(slot, activity_type, ago, duration_minutes, skill_ids)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+on conflict (owner_id, id) do update set
+    activity_type = excluded.activity_type,
+    occurred_at = excluded.occurred_at,
+    duration_minutes = excluded.duration_minutes,
+    skill_ids = excluded.skill_ids,
+    schedule_item_id = excluded.schedule_item_id,
+    schedule_occurrence_start = excluded.schedule_occurrence_start,
+    created_at = excluded.created_at,
+    updated_at = now();
