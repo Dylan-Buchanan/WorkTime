@@ -233,9 +233,10 @@ export interface PetScheduleItem {
 
 /** Local persisted dedup marker for one resolved pet schedule occurrence. */
 export interface PetReminderMark {
-    /** Stable occurrence identity: schedule item id plus its resolved due time. */
+    /** Stable occurrence identity: schedule item id plus its pre-reflow occurrenceStart. */
     id: string;
     itemId: string;
+    /** ISO occurrenceStart before any nap, post-wake or busy reflow. */
     dueAt: string;
     remindedAt: string;
 }
