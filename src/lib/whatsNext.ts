@@ -75,6 +75,118 @@ export function isWhatsNextCandidate(task: PMTask | undefined, input: {
 }
 
 /**
+ * Availability classification for the switch flow.
+ *
+ * The "anything" set is `pmTasks` minus the occupant (`id === currentOccupantId`),
+ * minus `isArchived`, minus `status === "Done"`. Eligibility always comes from
+ * `isWhatsNextCandidate`, so the classifier can never widen or narrow the
+ * candidate set. Every task in that set either passes the predicate (workable,
+ * never counted) or is counted in exactly ONE bucket: the first reason it matches
+ * in `WHATS_NEXT_EXCLUSION_PRECEDENCE`:
+ *
+ * 1. "backend-closed"       linked backend task has `completed_at` or `archived`
+ * 2. "blocked"              PM `status === "Blocked"`
+ * 3. "waiting"              `waitingOf(task) !== null`
+ * 4. "project-not-workable" project exists and `isProjectWorkableOnDate` rejects the reference date
+ *
+ * Dominant reason = the bucket with the highest count; ties are broken by that
+ * same precedence order, so "blocked" beats "waiting". It stays null when
+ * `hasWorkable` is true or when every count is zero.
+ */
+export type WhatsNextExclusionReason = "backend-closed" | "blocked" | "waiting" | "project-not-workable";
+
+/** Per-task bucket precedence AND dominant-reason tie-break order. First match wins. */
+export const WHATS_NEXT_EXCLUSION_PRECEDENCE: readonly WhatsNextExclusionReason[] = [
+    "backend-closed",
+    "blocked",
+    "waiting",
+    "project-not-workable",
+];
+
+export interface WhatsNextAvailability {
+    /** Some non-occupant PM task that is !isArchived && status !== "Done". */
+    hasAnything: boolean;
+    /** Some non-occupant PM task passes `isWhatsNextCandidate`. */
+    hasWorkable: boolean;
+    /** Rejected "anything" tasks, exactly one bucket each. */
+    counts: Readonly<Record<WhatsNextExclusionReason, number>>;
+    /** Null when `hasWorkable` or when every count is 0. */
+    dominantReason: WhatsNextExclusionReason | null;
+}
+
+/** True when the task matches that single exclusion reason, judged in isolation. */
+function matchesExclusionReason(reason: WhatsNextExclusionReason, task: PMTask, input: {
+    backendTasks: Readonly<Record<string, Task>>;
+    projects: Readonly<Record<string, Project>>;
+    reference: Date;
+}): boolean {
+    switch (reason) {
+        case "backend-closed": {
+            const backend = task.appTaskId ? input.backendTasks[task.appTaskId] : undefined;
+            return Boolean(backend?.completed_at || backend?.archived);
+        }
+        case "blocked":
+            return task.status === "Blocked";
+        case "waiting":
+            return waitingOf(task) !== null;
+        case "project-not-workable": {
+            const project = task.projectId ? input.projects[task.projectId] : undefined;
+            return Boolean(project && !isProjectWorkableOnDate(project, input.reference));
+        }
+    }
+}
+
+/**
+ * Separates "nothing workable right now" from "nothing else at all" for the
+ * completion flow. Pure: the supplied reference is the only clock and array
+ * order never changes the result.
+ */
+export function classifyWhatsNextAvailability(input: {
+    pmTasks: readonly PMTask[];
+    backendTasks: Readonly<Record<string, Task>>;
+    projects: Readonly<Record<string, Project>>;
+    currentOccupantId: string | null;
+    reference: Date;
+}): WhatsNextAvailability {
+    const counts: Record<WhatsNextExclusionReason, number> = {
+        "backend-closed": 0,
+        "blocked": 0,
+        "waiting": 0,
+        "project-not-workable": 0,
+    };
+    let hasAnything = false;
+    let hasWorkable = false;
+
+    for (const pmTask of input.pmTasks) {
+        if (input.currentOccupantId !== null && pmTask.id === input.currentOccupantId) continue;
+        if (pmTask.isArchived || pmTask.status === "Done") continue;
+
+        hasAnything = true;
+        if (isWhatsNextCandidate(pmTask, input)) {
+            hasWorkable = true;
+            continue;
+        }
+
+        // The predicate only rejects the four reasons below, so a match exists.
+        const reason = WHATS_NEXT_EXCLUSION_PRECEDENCE.find((candidate) => matchesExclusionReason(candidate, pmTask, input));
+        if (reason !== undefined) counts[reason] += 1;
+    }
+
+    let dominantReason: WhatsNextExclusionReason | null = null;
+    if (!hasWorkable) {
+        let highest = 0;
+        for (const reason of WHATS_NEXT_EXCLUSION_PRECEDENCE) {
+            if (counts[reason] > highest) {
+                highest = counts[reason];
+                dominantReason = reason;
+            }
+        }
+    }
+
+    return { hasAnything, hasWorkable, counts, dominantReason };
+}
+
+/**
  * Own candidate collector: the shared projection collector stays the scope
  * definition for Today and the projected-finish card, and this one adds
  * ranking-only exclusions and an un-estimated tail.
