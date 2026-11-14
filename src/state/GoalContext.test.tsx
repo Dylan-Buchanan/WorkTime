@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, waitFor } from "@testing-library/react";
 import { GOAL_UI_STORAGE_KEY, GoalProvider, useGoals, type GoalContextValue } from "./GoalContext";
 import { DataProvider } from "./DataContext";
@@ -8,9 +8,6 @@ import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
 import { buildGoalTrackerFixture, buildArchivedTrackerFixture, buildGoalFixture, buildGoalCheckInFixture, buildGoalFixtureSet, buildNaturalKeyDuplicatesFixture } from "../lib/goals/testFixtures";
 import type { Goal, GoalCheckIn, GoalTracker } from "./types";
-import { resolveCadenceAnchorAt } from "../lib/goals/periods";
-import { localDateKey } from "../lib/todos/calendar";
-import type { LocalDateKey } from "../lib/todos/types";
 import type { SyncOptions, SyncResult } from "../lib/data/DataAccess";
 
 let api: GoalContextValue;
@@ -62,6 +59,7 @@ class ControlledData extends InMemoryDataAccess {
 }
 
 beforeEach(() => { localStorage.clear(); });
+afterEach(() => { vi.useRealTimers(); });
 
 describe("GoalContext", () => {
     it("does not seed or save a slice before sync initialization", async () => {
@@ -115,22 +113,27 @@ describe("GoalContext", () => {
     });
 
     it("resolves creation and reset anchors, rejects arbitrary anchors and runtime stamp patches, and preserves history", async () => {
+        vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 10, 29, 12) });
         const { data, set } = await seeded();
         await mount(data);
-        const date = localDateKey(new Date()) as LocalDateKey;
-        const cadence = { kind: "monthly-weekday", weekday: 5 } as const;
+        const cadence = { kind: "monthly-weekday", weekday: 0 } as const;
+        const input = { name: "Life", purpose: "", cadence, color: "" };
         await act(async () => {
-            const created = api.createTracker({ name: "Life", purpose: "", cadence, color: "" });
-            expect(created.cadenceAnchorAt).toBe(resolveCadenceAnchorAt(cadence, date));
+            const created = api.createTracker(input);
+            expect(created.cadenceAnchorAt).toBe("2026-11-29");
             expect(created.sortOrder).toBe(set.tracker.sortOrder + 1);
-            expect(() => api.createTracker({ name: "Bad", purpose: "", color: "", cadence, cadenceAnchorAt: "2020-01-01" })).toThrow(RangeError);
+            expect(api.createTracker({ ...input, cadenceAnchorAt: "2027-01-03" }).cadenceAnchorAt).toBe("2027-01-03");
+            expect(api.createTracker({ ...input, cadenceAnchorAt: "2026-05-31" }).cadenceAnchorAt).toBe("2026-05-31");
+            expect(() => api.createTracker({ ...input, cadenceAnchorAt: "2026-11-22" })).toThrow(RangeError);
+            expect(() => api.createTracker({ ...input, cadenceAnchorAt: "2026-02-30" })).toThrow(RangeError);
+            expect(() => api.createTracker({ ...input, cadence: { ...cadence, weekday: 7 } as never, cadenceAnchorAt: "2026-11-29" })).toThrow(RangeError);
             expect(() => api.updateTracker(set.tracker.id, { cadenceAnchorAt: "2020-01-01" })).toThrow(RangeError);
             expect(() => api.updateTracker(set.tracker.id, { lastBuiltPeriodStart: "2026-11-01" } as never)).toThrow("Use stampBuiltPeriod");
             await api.stampBuiltPeriod(set.tracker.id, "2026-11-01");
             api.updateTracker(set.tracker.id, { cadence });
             await api.persist();
         });
-        expect(api.state.trackers[set.tracker.id].cadenceAnchorAt).toBe(resolveCadenceAnchorAt(cadence, date));
+        expect(api.state.trackers[set.tracker.id].cadenceAnchorAt).toBe("2026-11-29");
         expect(api.state.trackers[set.tracker.id].lastBuiltPeriodStart).toBe("2026-11-01");
         expect(Object.values(api.state.checkIns)).toEqual(expect.arrayContaining(set.checkIns));
     });

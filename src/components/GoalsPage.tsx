@@ -11,13 +11,13 @@ import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency,
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
 import { maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
-import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type GoalPeriod } from "../lib/goals/periods";
+import { daysUntil, dueState, firstPeriod, firstPeriodCandidates, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type FirstPeriodCandidate, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { MISSING_PROJECT_LABEL, resolveGoalProject, resolveTrackerProjectId } from "../lib/goals/projectLink";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
 import type { DeckPlan } from "../lib/goals/deck/types";
 import { initiateBlobDownload } from "../lib/goals/deck/delivery";
-import { localDateKey } from "../lib/todos/calendar";
+import { localDateFromKey, localDateKey } from "../lib/todos/calendar";
 import type { LocalDateKey } from "../lib/todos/types";
 import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
 import { CheckInWizard } from "./goals/CheckInWizard";
@@ -34,6 +34,9 @@ import { TrackerDueBadge } from "./goals/TrackerDueBadge";
 import { TrackerRail } from "./goals/TrackerRail";
 
 const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const firstPeriodDate = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" });
+const nominalMonth = new Intl.DateTimeFormat("en-US", { month: "long" });
+const weekIntervalLabel = (weeks: number) => `${weeks} ${weeks === 1 ? "week" : "weeks"}`;
 const control = "rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs";
 const button = `${control} hover:bg-neutral-800 disabled:opacity-50`;
 const primary = "rounded bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-indigo-500";
@@ -300,6 +303,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 {error && <p role="alert" className="text-red-300">{error}</p>}
                 {trackerForm && <TrackerForm key={typeof trackerForm === "string" ? trackerForm : trackerForm.id}
                     tracker={typeof trackerForm === "string" ? null : trackerForm}
+                    today={today}
                     onCancel={() => setTrackerForm(null)}
                     onSave={input => {
                         if (trackerForm === "new") {
@@ -344,7 +348,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-xs text-neutral-300">{tracker.cadence.kind === "monthly-weekday"
                                         ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
-                                        : `Every ${tracker.cadence.intervalWeeks} ${tracker.cadence.intervalWeeks === 1 ? "week" : "weeks"} on ${weekdays[tracker.cadence.weekday]}`}</span>
+                                        : `Every ${weekIntervalLabel(tracker.cadence.intervalWeeks)} on ${weekdays[tracker.cadence.weekday]}`}</span>
                                     {tracker.projectId !== null && <span data-goals-slot="tracker-project" data-tracker-id={tracker.id}
                                         className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1">
                                         <ProjectLink projectId={tracker.projectId} />
@@ -528,7 +532,7 @@ function TrackerDrawer({ children, triggerRef, onClose }: React.PropsWithChildre
     </div>;
 }
 
-function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | null; onSave: (input: NewGoalTrackerInput) => void; onCancel: () => void }) {
+function TrackerForm({ tracker, today, onSave, onCancel }: { tracker: GoalTracker | null; today: LocalDateKey; onSave: (input: NewGoalTrackerInput) => void; onCancel: () => void }) {
     const pm = usePM();
     const projects = orderedProjects(pm.state.projects);
     const [name, setName] = useState(tracker?.name ?? "");
@@ -537,15 +541,33 @@ function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | nul
     const [kind, setKind] = useState<GoalCadence["kind"]>(tracker?.cadence.kind ?? "every-n-weeks");
     const [weekday, setWeekday] = useState<Weekday>(tracker?.cadence.weekday ?? 0);
     const [interval, setInterval] = useState(String(tracker?.cadence.kind === "every-n-weeks" ? tracker.cadence.intervalWeeks : 1));
+    const [selectedStart, setSelectedStart] = useState("");
     const [color, setColor] = useState(tracker?.color || "#6366f1");
     const [error, setError] = useState<string | null>(null);
+    const rule: GoalCadence = kind === "monthly-weekday" ? { kind, weekday } : { kind, weekday, intervalWeeks: Number(interval) };
+    let candidates: FirstPeriodCandidate[] = [];
+    let candidateError: RangeError | null = null;
+    if (!tracker) {
+        try {
+            candidates = firstPeriodCandidates(rule, today);
+        } catch (error) {
+            if (!(error instanceof RangeError)) throw error;
+            candidateError = error;
+        }
+    }
+    const selected = candidates.find(candidate => candidate.periodStart === selectedStart) ?? candidates[0];
+
     return <form aria-label={tracker ? "Edit tracker" : "New tracker"} className="flex flex-wrap items-end gap-3 rounded border border-neutral-800 p-4" onSubmit={event => {
         event.preventDefault();
         try {
             if (!name.trim()) throw new RangeError("Give this tracker a name.");
             if (/[\r\n]/.test(purpose)) throw new RangeError("Purpose must be one line.");
-            const cadence = normalizeGoalCadence(kind === "monthly-weekday" ? { kind, weekday } : { kind, weekday, intervalWeeks: Number(interval) });
-            onSave({ name, purpose, cadence, color, projectId: projectId || null });
+            if (candidateError) throw candidateError;
+            const cadence = normalizeGoalCadence(rule);
+            onSave({
+                name, purpose, cadence, color, projectId: projectId || null,
+                ...(selected && { cadenceAnchorAt: selected.periodStart }),
+            });
         } catch (error) { setError(errorMessage(error)); }
     }}>
         <label className="grid gap-1">Tracker name<input className={control} autoFocus value={name} onChange={event => setName(event.target.value)} /></label>
@@ -554,14 +576,35 @@ function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | nul
             <option value="">No project</option>
             {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
         </select></label>
-        <label className="grid gap-1">Cadence<select className={control} value={kind} onChange={event => setKind(event.target.value as typeof kind)}>
+        <label className="grid gap-1">Cadence<select className={control} value={kind} onChange={event => {
+            setKind(event.target.value as typeof kind);
+            setSelectedStart("");
+        }}>
             <option value="every-n-weeks">Every N weeks</option><option value="monthly-weekday">Monthly weekday</option>
         </select></label>
-        {kind === "every-n-weeks" && <label className="grid gap-1">Every N weeks<input className={`${control} w-24`} type="number" min="1" step="1" value={interval} onChange={event => setInterval(event.target.value)} /></label>}
-        <label className="grid gap-1">Weekday<select className={control} value={weekday} onChange={event => setWeekday(Number(event.target.value) as Weekday)}>
+        {kind === "every-n-weeks" && <label className="grid gap-1">Every N weeks<input className={`${control} w-24`} type="number" min="1" step="1" value={interval} onChange={event => {
+            setInterval(event.target.value);
+            setSelectedStart("");
+        }} /></label>}
+        <label className="grid gap-1">Weekday<select className={control} value={weekday} onChange={event => {
+            setWeekday(Number(event.target.value) as Weekday);
+            setSelectedStart("");
+        }}>
             {weekdays.map((day, index) => <option key={day} value={index}>{day}</option>)}
         </select></label>
+        {!tracker && <label className="grid gap-1">First period<select className={control} value={selected?.periodStart ?? ""} disabled={!selected} onChange={event => setSelectedStart(event.target.value)}>
+            {candidates.map(({ periodStart, period }) => <option key={periodStart} value={periodStart}>
+                {firstPeriodDate.format(localDateFromKey(periodStart))}
+                {kind === "monthly-weekday" && ` · ${nominalMonth.format(localDateFromKey(`${period.monthKey}-01`))}`}
+                {periodStart === today && " (today)"}
+            </option>)}
+        </select></label>}
         <label className="grid gap-1">Color<input type="color" value={color} onChange={event => setColor(event.target.value)} /></label>
+        {selected && <p className="w-full text-xs text-neutral-400">
+            {periodRangeLabel(selected.period)} · later periods follow {rule.kind === "monthly-weekday"
+                ? `on the first ${weekdays[weekday]} of each month`
+                : `every ${weekIntervalLabel(rule.intervalWeeks)}`}
+        </p>}
         <p className="w-full text-xs text-neutral-500">Goals inherit this tracker’s project unless they override it.</p>
         {kind === "monthly-weekday" && <p className="w-full text-neutral-400">First selected weekday of each month; when the 1st is Monday or Tuesday, use the matching weekday on or before the 1st.</p>}
         {error && <p role="alert" className="w-full text-red-300">{error}</p>}

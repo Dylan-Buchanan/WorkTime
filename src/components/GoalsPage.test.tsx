@@ -167,6 +167,7 @@ describe("GoalsPage", () => {
     });
 
     it("has a clean empty state and creates multiple trackers using both validated cadence variants", async () => {
+        vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 10, 25, 12) });
         const { user, data } = await mount();
         expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
         expect(screen.getByText(/A tracker holds the goals you are working toward/)).toBeInTheDocument();
@@ -182,6 +183,7 @@ describe("GoalsPage", () => {
         fireEvent.change(screen.getByLabelText("Color"), { target: { value: "#123456" } });
         await user.click(screen.getByRole("button", { name: "Create tracker" }));
         expect(await screen.findByRole("heading", { name: "Work" })).toBeInTheDocument();
+        expect(screen.getByText(/First period started on/)).toHaveTextContent("2026-11-25");
         expect(screen.getByPlaceholderText("Add your first goal")).toBeInTheDocument();
         expect(screen.getByText(/Review what you did/)).toBeInTheDocument();
         expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
@@ -194,10 +196,52 @@ describe("GoalsPage", () => {
         await user.click(screen.getByRole("button", { name: "Create tracker" }));
         await waitFor(async () => expect((await data.loadGoals()).trackers).toHaveLength(2));
         const saved = await data.loadGoals();
-        expect(saved.trackers.find(row => row.name === "Work")).toMatchObject({ purpose: "Ship useful things", cadence: { kind: "every-n-weeks", weekday: 3, intervalWeeks: 3 }, color: "#123456" });
+        expect(saved.trackers.find(row => row.name === "Work")).toMatchObject({
+            purpose: "Ship useful things",
+            cadence: { kind: "every-n-weeks", weekday: 3, intervalWeeks: 3 },
+            cadenceAnchorAt: "2026-11-25",
+            color: "#123456",
+        });
         expect(saved.trackers.find(row => row.name === "Life")?.cadence).toEqual({ kind: "monthly-weekday", weekday: 5 });
         await user.click(trackerRow("Work"));
         expect(screen.getByRole("heading", { name: "Work" })).toBeInTheDocument();
+    });
+
+    it("previews three first-period choices, resets the choice on cadence edits, and saves a later start", async () => {
+        vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 10, 29, 12) });
+        const { user, data, rerender } = await mount();
+        await user.click(screen.getByRole("button", { name: "Add tracker" }));
+        const picker = screen.getByLabelText("First period");
+        expect(within(picker).getAllByRole("option").map(option => option.textContent)).toEqual([
+            "Sun, Nov 29 (today)", "Sun, Dec 6", "Sun, Dec 13",
+        ]);
+        expect(picker).toHaveValue("2026-11-29");
+        await user.selectOptions(picker, "2026-12-06");
+        await user.selectOptions(screen.getByLabelText("Cadence"), "monthly-weekday");
+        expect(picker).toHaveValue("2026-11-29");
+        expect(within(picker).getByRole("option", { name: "Sun, Nov 29 · December (today)" })).toBeInTheDocument();
+        expect(screen.getByText("Nov 29, 2026 – Jan 2, 2027 · later periods follow on the first Sunday of each month")).toBeInTheDocument();
+
+        await user.selectOptions(screen.getByLabelText("Cadence"), "every-n-weeks");
+        await user.selectOptions(picker, "2026-12-06");
+        fireEvent.change(screen.getByLabelText("Every N weeks"), { target: { value: "2" } });
+        expect(picker).toHaveValue("2026-11-29");
+        await user.selectOptions(picker, "2026-12-06");
+        await user.selectOptions(screen.getByLabelText("Weekday"), "1");
+        expect(picker).toHaveValue("2026-11-30");
+        await user.selectOptions(screen.getByLabelText("Weekday"), "0");
+        await user.selectOptions(picker, "2026-12-06");
+        expect(screen.getByText("Dec 6 – Dec 19, 2026 · later periods follow every 2 weeks")).toBeInTheDocument();
+
+        await user.type(screen.getByLabelText("Tracker name"), "Winter");
+        await user.click(screen.getByRole("button", { name: "Create tracker" }));
+        expect(screen.getByText(/No open period\. First period starts on/)).toHaveTextContent("2026-12-06");
+        expect(screen.getByRole("button", { name: "Period not open" })).toBeDisabled();
+        await waitFor(async () => expect((await data.loadGoals()).trackers).toEqual([
+            expect.objectContaining({ name: "Winter", cadenceAnchorAt: "2026-12-06", lastBuiltPeriodStart: null }),
+        ]));
+        rerender(tree(data, "2026-12-06"));
+        expect(screen.getByText(/First period started on/)).toHaveTextContent("2026-12-06");
     });
 
     it("shows a distinct empty state when every tracker is archived", async () => {
@@ -332,6 +376,7 @@ describe("GoalsPage", () => {
         const { user } = await mount(data);
         await user.click(screen.getByRole("button", { name: `Actions for ${tracker.name}` }));
         await user.click(screen.getByRole("button", { name: "Edit tracker" }));
+        expect(screen.queryByLabelText("First period")).not.toBeInTheDocument();
         await user.clear(screen.getByLabelText("Tracker name"));
         await user.click(screen.getByRole("button", { name: "Save tracker" }));
         expect(screen.getByRole("alert")).toHaveTextContent("Give this tracker a name");
@@ -1726,11 +1771,12 @@ describe("GoalsPage", () => {
     });
 
     it("selects an imported tracker and clears the deck preview, pinned check-in, and goal edit", async () => {
+        vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 25, 12) });
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture({ cadenceAnchorAt: "2026-10-04" });
         const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
         await data.saveGoals([tracker], [goal], []);
-        const { user, container } = await mount(data, "2026-10-20");
+        const { user, container } = await mount(data);
         const slot = () => container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         const wizard = () => container.querySelector('[data-goals-slot="check-in-wizard"]') as HTMLElement;
         const preview = () => container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
@@ -1756,6 +1802,8 @@ describe("GoalsPage", () => {
         await waitFor(() => expect(slot().getAttribute("data-tracker-id")).not.toBe(tracker.id));
         const created = (await data.loadGoals()).trackers.find(row => row.id !== tracker.id)!;
         expect(created).toBeDefined();
+        expect(created.cadenceAnchorAt).toBe("2026-10-25");
+        expect(screen.getByText(/First period started on/)).toHaveTextContent("2026-10-25");
         expect(slot()).toHaveAttribute("data-tracker-id", created.id);
         expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(created.id);
         expect(screen.getByRole("navigation", { name: "Goal trackers" }).querySelector("[aria-current=true]")).toHaveTextContent(created.name);

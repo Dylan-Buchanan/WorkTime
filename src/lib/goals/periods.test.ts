@@ -3,6 +3,7 @@ import {
     daysUntil,
     dueState,
     firstPeriod,
+    firstPeriodCandidates,
     goalGrid,
     listPeriods,
     mostRecentCompletedPeriod,
@@ -11,7 +12,6 @@ import {
     periodLabel,
     periodRangeLabel,
     previousPeriod,
-    resolveCadenceAnchorAt,
 } from "./periods";
 import type { GoalGridInput, GoalPeriod } from "./periods";
 import type { GoalCadence } from "../../state/types";
@@ -19,28 +19,46 @@ import type { LocalDateKey } from "../todos/types";
 import { addLocalDays, localDateAtNoon, localDateFromKey, localDateKey } from "../todos/calendar";
 import { buildGoalTrackerFixture, buildMonthlyWeekdayTrackerFixture } from "./testFixtures";
 
-describe("resolveCadenceAnchorAt", () => {
+describe("firstPeriodCandidates", () => {
     it.each<[GoalCadence, LocalDateKey, LocalDateKey]>([
         [{ kind: "every-n-weeks", weekday: 0, intervalWeeks: 2 }, "2026-10-01", "2026-10-04"],
-        [{ kind: "every-n-weeks", weekday: 0, intervalWeeks: 2 }, "2026-10-04", "2026-10-11"],
+        [{ kind: "every-n-weeks", weekday: 0, intervalWeeks: 2 }, "2026-10-04", "2026-10-04"],
         [{ kind: "every-n-weeks", weekday: 3, intervalWeeks: 1 }, "2026-12-31", "2027-01-06"],
         [{ kind: "monthly-weekday", weekday: 0 }, "2026-09-20", "2026-10-04"],
-        [{ kind: "monthly-weekday", weekday: 0 }, "2026-11-01", "2026-11-29"],
-        [{ kind: "monthly-weekday", weekday: 0 }, "2026-11-29", "2027-01-03"],
+        [{ kind: "monthly-weekday", weekday: 0 }, "2026-11-01", "2026-11-01"],
+        [{ kind: "monthly-weekday", weekday: 0 }, "2026-11-29", "2026-11-29"],
         // Monday and Tuesday triggers both snap backwards; equality stays on the 1st.
         [{ kind: "monthly-weekday", weekday: 0 }, "2026-05-20", "2026-05-31"],
         [{ kind: "monthly-weekday", weekday: 1 }, "2026-05-31", "2026-06-01"],
-        [{ kind: "monthly-weekday", weekday: 1 }, "2026-06-01", "2026-07-06"],
+        [{ kind: "monthly-weekday", weekday: 1 }, "2026-06-01", "2026-06-01"],
         [{ kind: "monthly-weekday", weekday: 2 }, "2026-11-30", "2026-12-01"],
         [{ kind: "monthly-weekday", weekday: 5 }, "2026-11-20", "2026-11-27"],
         [{ kind: "monthly-weekday", weekday: 0 }, "2026-12-31", "2027-01-03"],
-    ])("resolves %j strictly after %s to %s", (rule, after, expected) => {
-        expect(resolveCadenceAnchorAt(rule, after)).toBe(expected);
+    ])("finds the first candidate for %j on or after %s at %s", (rule, from, expected) => {
+        expect(firstPeriodCandidates(rule, from, 1).map(candidate => candidate.periodStart)).toEqual([expected]);
     });
 
-    it("validates the rule and date rather than inventing an anchor", () => {
-        expect(() => resolveCadenceAnchorAt({ kind: "every-n-weeks", weekday: 0, intervalWeeks: 0 }, "2026-10-01")).toThrow(RangeError);
-        expect(() => resolveCadenceAnchorAt({ kind: "monthly-weekday", weekday: 0 }, "2026-02-30")).toThrow(RangeError);
+    it("offers the same three weekly start dates for either interval and previews each phase", () => {
+        const weekly = firstPeriodCandidates({ kind: "every-n-weeks", weekday: 0, intervalWeeks: 1 }, "2026-10-04");
+        const biweekly = firstPeriodCandidates(EVERY_TWO_SUNDAYS, "2026-10-04");
+        const starts = ["2026-10-04", "2026-10-11", "2026-10-18"];
+        expect(weekly.map(candidate => candidate.periodStart)).toEqual(starts);
+        expect(biweekly.map(candidate => candidate.periodStart)).toEqual(starts);
+        expect(weekly[1].period.periodEnd).toBe("2026-10-18");
+        expect(biweekly[1].period).toEqual({ periodStart: "2026-10-11", periodEnd: "2026-10-25", monthKey: "2026-10" });
+    });
+
+    it("preserves nominal months for snapped candidates across a year boundary", () => {
+        expect(firstPeriodCandidates(MONTHLY_SUNDAY, "2026-11-29")).toEqual([
+            { periodStart: "2026-11-29", period: { periodStart: "2026-11-29", periodEnd: "2027-01-03", monthKey: "2026-12" } },
+            { periodStart: "2027-01-03", period: { periodStart: "2027-01-03", periodEnd: "2027-01-31", monthKey: "2027-01" } },
+            { periodStart: "2027-01-31", period: { periodStart: "2027-01-31", periodEnd: "2027-02-28", monthKey: "2027-02" } },
+        ]);
+    });
+
+    it("rejects invalid rules and dates", () => {
+        expect(() => firstPeriodCandidates({ kind: "every-n-weeks", weekday: 0, intervalWeeks: 0 }, "2026-10-01")).toThrow(RangeError);
+        expect(() => firstPeriodCandidates(MONTHLY_SUNDAY, "2026-02-30")).toThrow(RangeError);
     });
 });
 
@@ -93,8 +111,10 @@ describe("goal period grid", () => {
         expectPeriodLength(first, 7);
     });
 
-    it("starts strictly after the creation date even when creation lands on a boundary", () => {
-        expect(firstPeriod(buildGrid({ createdOn: "2026-10-04" })).periodStart).toBe("2026-10-18");
+    it("opens the first period on the creation date when it is the boundary", () => {
+        const grid = buildGrid({ createdOn: "2026-10-04" });
+        expect(firstPeriod(grid).periodStart).toBe("2026-10-04");
+        expect(dueState(grid, "2026-10-04")).toMatchObject({ kind: "not-due", current: firstPeriod(grid), mostRecentCompleted: null });
     });
 
     it("uses the later of the creation floor and the saved anchor as the floor", () => {
@@ -160,14 +180,13 @@ describe("monthly period boundaries", () => {
         expectPeriodLength(first, 42);
     });
 
-    it("resolves a Monday-first month to the 1st but still starts after a creation on it", () => {
+    it("opens a Monday-first period on the 1st when created that day", () => {
         const grid = buildGrid({
             cadence: { kind: "monthly-weekday", weekday: 1 },
             cadenceAnchorAt: "2026-06-01",
             createdOn: "2026-06-01",
         });
-        expect(resolveCadenceAnchorAt({ kind: "monthly-weekday", weekday: 1 }, "2026-05-31")).toBe("2026-06-01");
-        expect(firstPeriod(grid)).toEqual({ periodStart: "2026-07-06", periodEnd: "2026-08-03", monthKey: "2026-07" });
+        expect(firstPeriod(grid)).toEqual({ periodStart: "2026-06-01", periodEnd: "2026-07-06", monthKey: "2026-06" });
     });
 
     it("maps snapped-backward late-month dates to the next nominal period", () => {

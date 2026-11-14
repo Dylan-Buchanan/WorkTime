@@ -18,6 +18,10 @@ export interface PeriodBounds {
 export interface GoalPeriod extends PeriodBounds {
     readonly monthKey: GoalMonthKey;
 }
+export interface FirstPeriodCandidate {
+    readonly periodStart: LocalDateKey;
+    readonly period: GoalPeriod;
+}
 export interface GoalGridInput {
     readonly cadence: GoalCadence;
     readonly cadenceAnchorAt: LocalDateKey;
@@ -83,20 +87,6 @@ function monthlyBoundary(year: number, month: number, weekday: Weekday): Date {
     return addLocalDays(first, shift);
 }
 
-export function resolveCadenceAnchorAt(rule: GoalCadence, after: LocalDateKey): LocalDateKey {
-    const cadence = normalizeGoalCadence(rule);
-    const date = localDateFromKey(after);
-    if (cadence.kind === "every-n-weeks") {
-        const days = (cadence.weekday - date.getDay() + 7) % 7 || 7;
-        return dateKey(addLocalDays(date, days));
-    }
-    // Include adjacent nominal months: next month's boundary can precede its 1st.
-    for (let month = date.getMonth() - 1; ; month += 1) {
-        const boundary = dateKey(monthlyBoundary(date.getFullYear(), month, cadence.weekday));
-        if (boundary > after) return boundary;
-    }
-}
-
 function weeklyPeriod(strideDays: number, start: Date): GoalPeriod {
     const periodStart = dateKey(start);
     return {
@@ -114,6 +104,42 @@ function monthlyPeriod(year: number, month: number, weekday: Weekday): GoalPerio
         periodEnd: dateKey(monthlyBoundary(next.year, next.month, weekday)),
         monthKey: monthKeyOf(nominal.year, nominal.month),
     };
+}
+
+export function firstPeriodCandidates(rule: GoalCadence, from: LocalDateKey, count = 3): FirstPeriodCandidate[] {
+    const cadence = normalizeGoalCadence(rule);
+    const date = parseKey(from);
+    if (!Number.isSafeInteger(count) || count < 0) throw new RangeError("Invalid first period candidate count");
+
+    if (cadence.kind === "every-n-weeks") {
+        const days = (cadence.weekday - date.getDay() + 7) % 7;
+        // Each matching weekday can set the phase, regardless of the period length.
+        return Array.from({ length: count }, (_, index) => {
+            const period = weeklyPeriod(cadence.intervalWeeks * 7, addLocalDays(date, days + index * 7));
+            return { periodStart: period.periodStart, period };
+        });
+    }
+
+    const candidates: FirstPeriodCandidate[] = [];
+    const year = date.getFullYear();
+    for (let month = date.getMonth() - 1; candidates.length < count; month += 1) {
+        if (compareLocalDates(monthlyBoundary(year, month, cadence.weekday), date) >= 0) {
+            const period = monthlyPeriod(year, month, cadence.weekday);
+            candidates.push({ periodStart: period.periodStart, period });
+        }
+    }
+    return candidates;
+}
+
+export function isCadenceOccurrence(rule: GoalCadence, key: LocalDateKey): boolean {
+    const cadence = normalizeGoalCadence(rule);
+    const date = parseKey(key);
+    if (cadence.kind === "every-n-weeks") return date.getDay() === cadence.weekday;
+
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    return compareLocalDates(date, monthlyBoundary(year, month, cadence.weekday)) === 0
+        || compareLocalDates(date, monthlyBoundary(year, month + 1, cadence.weekday)) === 0;
 }
 
 function weeklyBoundaryAfter(anchor: Date, strideDays: number, target: Date): Date {
@@ -196,9 +222,8 @@ export function goalGrid(tracker: GoalTracker): GoalGridInput {
 export function firstPeriod(grid: GoalGridInput): GoalPeriod {
     const cadence = normalizeGoalCadence(grid.cadence);
     const anchor = parseKey(grid.cadenceAnchorAt);
-    const firstAfterCreation = boundaryAfter(cadence, anchor, grid.createdOn).periodStart;
-    const floor = compareKeys(firstAfterCreation, grid.cadenceAnchorAt) >= 0
-        ? firstAfterCreation
+    const floor = compareLocalDates(parseKey(grid.createdOn), anchor) >= 0
+        ? grid.createdOn
         : grid.cadenceAnchorAt;
     return boundaryOnOrAfter(cadence, anchor, floor);
 }

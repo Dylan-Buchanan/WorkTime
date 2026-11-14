@@ -5,7 +5,7 @@ import type { Goal, GoalCadence, GoalCheckIn, GoalMetric, GoalTracker } from "./
 import type { LocalDateKey } from "../lib/todos/types";
 import { localDateKey } from "../lib/todos/calendar";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
-import { resolveCadenceAnchorAt } from "../lib/goals/periods";
+import { firstPeriodCandidates, isCadenceOccurrence } from "../lib/goals/periods";
 import { createGoal as makeGoal, createGoalTracker, isGoal, isGoalCheckIn, isGoalDateKey, isGoalTracker } from "../lib/goals/factories";
 
 export const GOAL_UI_STORAGE_KEY = "goals_state_v1";
@@ -241,8 +241,10 @@ export const GoalProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     const createTracker: GoalContextValue["createTracker"] = input => {
         const now = new Date();
-        const anchor = resolveCadenceAnchorAt(input.cadence, today(now));
-        if (input.cadenceAnchorAt !== undefined && input.cadenceAnchorAt !== anchor) throw new RangeError("Cadence anchor must match the creation boundary");
+        const { cadenceAnchorAt: anchor = firstPeriodCandidates(input.cadence, today(now), 1)[0].periodStart } = input;
+        if (input.cadenceAnchorAt !== undefined && !isCadenceOccurrence(input.cadence, anchor)) {
+            throw new RangeError("Cadence anchor must be a cadence occurrence");
+        }
         const sortOrder = Math.max(-1, ...Object.values(stateRef.current.trackers).map(row => row.sortOrder)) + 1;
         const tracker = createGoalTracker({ ...input, cadenceAnchorAt: anchor, sortOrder }, now, crypto.randomUUID());
         mutate(previous => ({ ...previous, trackers: { ...previous.trackers, [tracker.id]: tracker } }));
@@ -254,7 +256,7 @@ export const GoalProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!previous) throw new RangeError("Unknown goal tracker");
         const cadence = normalizeGoalCadence(patch.cadence ?? previous.cadence);
         const changed = !same(cadence, previous.cadence);
-        const anchor = changed ? resolveCadenceAnchorAt(cadence, today(new Date())) : previous.cadenceAnchorAt;
+        const anchor = changed ? firstPeriodCandidates(cadence, today(new Date()), 1)[0].periodStart : previous.cadenceAnchorAt;
         if (patch.cadenceAnchorAt !== undefined && patch.cadenceAnchorAt !== anchor) throw new RangeError("Cadence anchor must match the rule boundary");
         const row: GoalTracker = { ...previous, ...patch, name: (patch.name ?? previous.name).trim(), cadence, cadenceAnchorAt: anchor, id, createdAt: previous.createdAt, updatedAt: new Date().toISOString() };
         if (!isGoalTracker(row)) throw new RangeError("Invalid goal tracker");

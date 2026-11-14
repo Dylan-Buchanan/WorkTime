@@ -11,7 +11,7 @@ import {
     serializeGoalSet,
     type GoalSetFile,
 } from "./goalSetFile";
-import { resolveCadenceAnchorAt } from "./periods";
+import { goalGrid, periodAt } from "./periods";
 import {
     GOALS_FIXTURE_EVERY_N_WEEKS,
     GOALS_FIXTURE_MONTHLY,
@@ -24,7 +24,7 @@ import {
     buildMonthlyWeekdayTrackerFixture,
 } from "./testFixtures";
 
-const NOW = new Date("2026-11-02T09:30:00.000Z");
+const NOW = new Date(2026, 10, 2, 12);
 const TODAY = "2026-11-02" as const;
 
 function ids(prefix = "new"): () => string {
@@ -244,7 +244,7 @@ describe("goalSetFile parseGoalSet", () => {
         expect(file.tracker.cadence).not.toHaveProperty("intervalWeeks");
         const materialized = materializeGoalSet(file, NOW, ids("monthly"), {});
         expect(materialized.tracker.cadence).toEqual(GOALS_FIXTURE_MONTHLY);
-        expect(materialized.tracker.cadenceAnchorAt).toBe(resolveCadenceAnchorAt(GOALS_FIXTURE_MONTHLY, TODAY));
+        expect(materialized.tracker.cadenceAnchorAt).toBe("2026-11-29");
     });
 
     it("preserves array order rather than sorting on import", () => {
@@ -439,7 +439,7 @@ describe("goalSetFile materializeGoalSet", () => {
         const materialized = materializeGoalSet(file, NOW, ids("fresh"), {});
 
         expect(materialized.tracker.id).toBe("fresh-1");
-        expect(materialized.tracker.cadenceAnchorAt).toBe(resolveCadenceAnchorAt(GOALS_FIXTURE_EVERY_N_WEEKS, TODAY));
+        expect(materialized.tracker.cadenceAnchorAt).toBe("2026-11-08");
         expect(materialized.tracker.createdAt).toBe(NOW.toISOString());
 
         const [activeGoal, achievedGoal, droppedGoal] = materialized.goals;
@@ -451,6 +451,17 @@ describe("goalSetFile materializeGoalSet", () => {
         expect(materialized.goals.map(goal => goal.sortOrder)).toEqual([0, 1, 2]);
         expect(materialized.goals.map(goal => goal.id)).toEqual(["fresh-2", "fresh-3", "fresh-4"]);
         expect(materialized.goals.every(goal => goal.trackerId === "fresh-1")).toBe(true);
+    });
+
+    it("opens a period immediately when imported on a snapped monthly boundary", () => {
+        const tracker = buildMonthlyWeekdayTrackerFixture();
+        const file = parseGoalSet(serializeGoalSet(tracker, [buildGoalFixture({ trackerId: tracker.id })], {}));
+        const materialized = materializeGoalSet(file, new Date(2026, 10, 29, 12), ids(), {});
+
+        expect(materialized.tracker.cadenceAnchorAt).toBe("2026-11-29");
+        expect(periodAt(goalGrid(materialized.tracker), "2026-11-29")).toMatchObject({
+            periodStart: "2026-11-29", monthKey: "2026-12",
+        });
     });
 
     it("clones cadence, metric, and the goal array instead of sharing the file", () => {

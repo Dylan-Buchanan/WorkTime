@@ -3,7 +3,7 @@ import type { LocalDateKey } from "../todos/types";
 import { localDateKey } from "../todos/calendar";
 import { sanitizeDownloadFileName } from "./deck/delivery";
 import { createGoal, createGoalTracker, isGoalDateKey } from "./factories";
-import { resolveCadenceAnchorAt } from "./periods";
+import { firstPeriodCandidates } from "./periods";
 
 export const GOAL_SET_FORMAT = "worktime.goal-set" as const;
 export const GOAL_SET_VERSION = 2 as const;
@@ -327,7 +327,7 @@ export function materializeGoalSet(
         name: definition.tracker.name,
         purpose: definition.tracker.purpose,
         cadence,
-        cadenceAnchorAt: resolveCadenceAnchorAt(cadence, validatedLocalDateKey(now)),
+        cadenceAnchorAt: firstPeriodCandidates(cadence, validatedLocalDateKey(now), 1)[0].periodStart,
         color: definition.tracker.color,
         projectId: trackerProjectId,
     }, now, nextId());
