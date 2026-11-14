@@ -162,3 +162,68 @@ describe("applyNapReflow", () => {
         expect(() => applyNapReflow(items, proposalFor(items), new Date(Number.NaN))).toThrow(RangeError);
     });
 });
+
+describe("nap reflow calendar busy preview", () => {
+    const ended = nap("short", at(13, 30), at(14));
+    const walk = item("walk", "playtime", "flexible", { mode: "fixed-time", time: "14:15", startMinutes: 855, endMinutes: 855 });
+    const input = { nap: ended, now: at(14), scheduleItems: [walk], activityRecords: [], naps: [ended] };
+
+    it("keeps label punctuation out of the composed busy cause", () => {
+        const proposal = proposeNapReflow({ ...input, scheduleItems: [{ ...walk, label: "Walk — outside" }],
+            busyIntervals: [{ start: at(14, 30), end: at(15) }] });
+        expect(proposal.shifts[0].description).toBe("walk — outside +45m — nap 1:30 PM–2:00 PM; busy 2:30 PM–3:00 PM");
+    });
+
+    it("previews total nap plus busy displacement but applies only the nap delta", () => {
+        const before = structuredClone(input);
+        const baseline = proposeNapReflow(input);
+        const proposal = proposeNapReflow({ ...input, busyIntervals: [{ start: at(14, 30), end: at(15) }] });
+        expect(proposal.changes).toEqual(baseline.changes);
+        expect(proposal.changes).toEqual([{ itemId: "walk", activityType: "playtime", label: "Walk", from: at(14, 15), to: at(14, 45), deltaMinutes: 30, reason: "nap" }]);
+        expect(proposal.shifts).toEqual([{ itemId: "walk", activityType: "playtime", label: "Walk", deltaMinutes: 45, reason: "busy",
+            description: "walk +45m — nap 1:30 PM–2:00 PM; busy 2:30 PM–3:00 PM" }]);
+        expect(applyNapReflow(input.scheduleItems, proposal, at(14, 1))[0].recurrence).toEqual({ mode: "fixed-time", time: "14:45", startMinutes: 885, endMinutes: 885 });
+        expect(input).toEqual(before);
+    });
+
+    it("keeps absent, empty and out-of-day busy proposals identical to the legacy proposal", () => {
+        const expected = { nap: ended, napMinutes: 30,
+            changes: [{ itemId: "walk", activityType: "playtime", label: "Walk", from: at(14, 15), to: at(14, 45), deltaMinutes: 30, reason: "nap" }],
+            shifts: [{ itemId: "walk", activityType: "playtime", label: "Walk", deltaMinutes: 30, reason: "nap", description: "walk +30m — nap 1:30 PM–2:00 PM" }] };
+        expect(proposeNapReflow(input)).toEqual(expected);
+        expect(proposeNapReflow({ ...input, busyIntervals: [] })).toEqual(expected);
+        expect(proposeNapReflow({ ...input, busyIntervals: [{ start: at(23), end: at(23, 30) }] })).toEqual(expected);
+    });
+
+    it("uses the same sequential placement as the schedule after nap changes", () => {
+        const second = item("training", "training", "flexible", { mode: "fixed-time", time: "14:25", startMinutes: 865, endMinutes: 895 });
+        const first = { ...walk, recurrence: { mode: "fixed-time" as const, time: "14:15", startMinutes: 855, endMinutes: 885 } };
+        const busyIntervals = [{ start: at(14, 30), end: at(15) }];
+        const proposal = proposeNapReflow({ ...input, scheduleItems: [first, second], busyIntervals });
+        const applied = applyNapReflow([first, second], proposal, at(14));
+        const schedule = buildPetSchedule({ ...input, scheduleItems: applied, busyIntervals });
+        expect(proposal.changes.map((change) => change.deltaMinutes)).toEqual([30, 30]);
+        expect(proposal.shifts.map((shift) => [shift.reason, shift.deltaMinutes])).toEqual([["busy", 45], ["busy", 65]]);
+        expect(schedule.entries.map((entry) => [entry.start, entry.end])).toEqual([[at(15), at(15, 30)], [at(15, 30), at(16)]]);
+    });
+
+    it("composes interval previews using the proposal nap without writing busy displacement", () => {
+        const potty = item("potty", "potty", "flexible", { mode: "interval", minMinutes: 30, maxMinutes: 90 });
+        const napRecord = nap("morning", at(10, 30), at(11));
+        const intervalInput = { nap: napRecord, now: at(11), scheduleItems: [potty], activityRecords: [activity("anchor", at(10))], naps: [napRecord] };
+        const baseline = proposeNapReflow(intervalInput);
+        const proposal = proposeNapReflow({ ...intervalInput, busyIntervals: [{ start: at(11), end: at(11, 20) }] });
+        expect(proposal.changes).toEqual(baseline.changes);
+        expect(proposal.shifts).toEqual([{ itemId: "potty", activityType: "potty", label: "Potty", deltaMinutes: 50, reason: "busy",
+            description: "potty +50m — nap 10:30 AM–11:00 AM; busy 11:00 AM–11:20 AM" }]);
+        expect(applyNapReflow([potty], proposal, at(11))).toEqual([potty]);
+    });
+
+    it("keeps a nap-only preview for blocked or unaffected occurrences", () => {
+        const proposal = proposeNapReflow({ ...input, busyIntervals: [{ start: at(7), end: at(8) }] });
+        expect(proposal).toEqual(proposeNapReflow(input));
+        const longWalk = { ...walk, recurrence: { mode: "fixed-time" as const, time: "14:15", startMinutes: 855, endMinutes: 885 } };
+        const blockedInput = { ...input, scheduleItems: [longWalk], endOfDay: "15:00" };
+        expect(proposeNapReflow({ ...blockedInput, busyIntervals: [{ start: at(14, 30), end: at(16) }] })).toEqual(proposeNapReflow(blockedInput));
+    });
+});
