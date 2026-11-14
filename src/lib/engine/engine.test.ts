@@ -3,6 +3,7 @@ import { workOccupantKey } from "../pm/workStart";
 import type { ActiveTimer, AppStateData, PomodoroLogEntry, Settings, Task } from "../../state/types";
 import {
     archiveTask,
+    completeTaskKeepingWindow,
     completeTimer,
     createTask,
     DEFAULT_SETTINGS,
@@ -263,6 +264,125 @@ describe("deferred finalize safety", () => {
         expect(result.state.tasks.t1).toMatchObject({ completed_at: at(100).toISOString(), archived: true });
         expect(result.state.active_task).toBeNull();
         expect(state).toEqual(before);
+    });
+});
+
+describe("owner-safe completion", () => {
+    it.each([false, true])("commits the Work owner and leaves the window untouched when paused is %s", paused => {
+        const state = stateWithTask();
+        state.timer = timer({
+            window_started_at: T0.toISOString(),
+            accumulated_secs: paused ? 300 : 0,
+            paused,
+            paused_remaining_secs: paused ? 1200 : 0,
+        });
+        const before = structuredClone(state);
+        const originalTimer = structuredClone(state.timer);
+
+        const result = completeTaskKeepingWindow(state, "t1", at(300));
+
+        expect(result.value).toMatchObject({ completed_at: at(300).toISOString(), archived: true });
+        expect(result.state.active_task).toBeNull();
+        expect(result.state.timer).toEqual(originalTimer);
+        expect(result.state.tasks.t1).toEqual({ ...before.tasks.t1, completed_at: at(300).toISOString(), archived: true });
+        expect(result.state.logs).toEqual(before.logs);
+        expect(state).toEqual(before);
+    });
+
+    it("appends no log and leaves completed and cycle counters unchanged", () => {
+        const state = stateWithTask();
+        state.tasks.t1.completed_pomodoros = 1.5;
+        state.current_cycle_pomodoros = 2;
+        state.logs.push({
+            id: "previous-log", task_id: "t1", duration_minutes: 25, finished_at: at(-600).toISOString(),
+            was_break: false, break_skipped: false, work_window_id: T0.toISOString(),
+        });
+        state.timer = timer({ window_started_at: T0.toISOString() });
+        const before = structuredClone(state);
+
+        const result = completeTaskKeepingWindow(state, "t1", at(300));
+
+        expect(result.state.logs).toEqual(before.logs);
+        expect(result.state.logs).toHaveLength(1);
+        expect(result.state.tasks.t1.completed_pomodoros).toBe(1.5);
+        expect(result.state.current_cycle_pomodoros).toBe(2);
+        expect(state).toEqual(before);
+    });
+
+    it("keeps the first completed_at when called twice", () => {
+        const state = stateWithTask();
+        state.timer = timer({ window_started_at: T0.toISOString() });
+        const before = structuredClone(state);
+
+        const first = completeTaskKeepingWindow(state, "t1", at(300));
+        const second = completeTaskKeepingWindow(first.state, "t1", at(600));
+
+        expect(second.value.completed_at).toBe(at(300).toISOString());
+        expect(second.state.tasks.t1).toEqual(first.state.tasks.t1);
+        expect(second.state.tasks.t1.archived).toBe(true);
+        expect(second.state.active_task).toBeNull();
+        expect(second.state.timer).toEqual(before.timer);
+    });
+
+    it("matches the non-owner finalizeTask outcome for a task that does not own the window", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.active_task = "t2";
+        state.timer = timer({ task_id: "t2", window_started_at: T0.toISOString() });
+        const before = structuredClone(state);
+
+        const kept = completeTaskKeepingWindow(state, "t1", at(600));
+        const finalized = finalizeTask(state, "t1", at(600), "unused-finalize-log");
+
+        expect(kept.value).toEqual(finalized.value);
+        expect(kept.state).toEqual(finalized.state);
+        expect(kept.state.timer).toEqual(before.timer);
+        expect(kept.state.logs).toEqual(before.logs);
+        expect(state).toEqual(before);
+    });
+
+    it.each(["ShortBreak", "LongBreak"] as const)("leaves a %s timer untouched", kind => {
+        const state = stateWithTask();
+        state.timer = timer({ kind, planned_secs: 300, ends_at: at(300).toISOString() });
+        const before = structuredClone(state);
+
+        const result = completeTaskKeepingWindow(state, "t1", at(100));
+
+        expect(result.state.timer).toEqual(before.timer);
+        expect(result.state.tasks.t1).toMatchObject({ completed_at: at(100).toISOString(), archived: true });
+        expect(result.state.active_task).toBeNull();
+        expect(state).toEqual(before);
+    });
+
+    it("rejects an unknown task id without touching state", () => {
+        const state = stateWithTask();
+        const before = structuredClone(state);
+
+        expect(() => completeTaskKeepingWindow(state, "missing", T0)).toThrow(/Task not found/);
+        expect(state).toEqual(before);
+    });
+
+    it("hands the remaining window to the next task with exactly one log", () => {
+        const state = stateWithTask();
+        state.tasks.t2 = task("t2");
+        state.timer = timer({ window_started_at: T0.toISOString() });
+
+        const completed = completeTaskKeepingWindow(state, "t1", at(300));
+        const switched = setActiveTask(completed.state, "t2", at(300), "log-handoff");
+
+        expect(switched.state.logs).toHaveLength(1);
+        expect(switched.state.logs.filter(log => log.work_window_id === T0.toISOString())).toHaveLength(1);
+        expect(switched.state.logs[0]).toMatchObject({
+            id: "log-handoff", task_id: "t1", duration_minutes: 5,
+            finished_at: at(300).toISOString(), was_break: false, break_skipped: false,
+            work_window_id: T0.toISOString(),
+        });
+        expect(switched.state.timer).toMatchObject({
+            task_id: "t2", planned_secs: 1200, accumulated_secs: 0,
+            started_at: at(300).toISOString(), ends_at: at(1500).toISOString(),
+            window_started_at: T0.toISOString(),
+        });
+        expect(switched.state.active_task).toBe("t2");
     });
 });
 
