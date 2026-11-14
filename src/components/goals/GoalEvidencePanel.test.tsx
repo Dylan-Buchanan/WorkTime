@@ -10,8 +10,8 @@ import { SyncProvider } from "../../state/SyncContext";
 import { TauriCloseProvider } from "../../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../../test/mockTauri";
-import { buildGoalCheckInFixture, buildGoalFixture } from "../../lib/goals/testFixtures";
-import type { Goal, GoalCheckIn, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
+import { buildGoalCheckInFixture, buildGoalFixture, buildGoalTrackerFixture } from "../../lib/goals/testFixtures";
+import type { Goal, GoalCheckIn, GoalTracker, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
 import type { PeriodBounds } from "../../lib/goals/periods";
 
 const PERIOD: PeriodBounds = { periodStart: "2026-10-04", periodEnd: "2026-10-18" };
@@ -80,12 +80,20 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
     };
 }
 
-function Harness({ goal, initial, period }: { goal: Goal; initial: GoalCheckIn; period: PeriodBounds }) {
+function Harness({ goal, tracker, nextTracker, initial, period }: {
+    goal: Goal;
+    tracker: GoalTracker;
+    nextTracker?: GoalTracker;
+    initial: GoalCheckIn;
+    period: PeriodBounds;
+}) {
     const [checkIn, setCheckIn] = useState(initial);
+    const [activeTracker, setActiveTracker] = useState(tracker);
     const [tick, setTick] = useState(0);
     return <div>
         <GoalEvidencePanel
             goal={goal}
+            tracker={activeTracker}
             checkIn={checkIn}
             period={period}
             onChange={patch => setCheckIn(previous => ({ ...previous, ...patch }))}
@@ -97,11 +105,14 @@ function Harness({ goal, initial, period }: { goal: Goal; initial: GoalCheckIn; 
         <button type="button" onClick={() => setCheckIn(previous => ({ ...previous, current: "Handwritten" }))}>manual edit</button>
         <button type="button" onClick={() => setCheckIn(previous => ({ ...previous, current: "" }))}>clear current</button>
         <button type="button" onClick={() => setTick(value => value + 1)}>rerender</button>
+        {nextTracker && <button type="button" onClick={() => setActiveTracker(nextTracker)}>switch tracker</button>}
     </div>;
 }
 
 async function mount(options: {
     goal?: Goal;
+    tracker?: GoalTracker;
+    nextTracker?: GoalTracker;
     checkIn?: GoalCheckIn;
     period?: PeriodBounds;
     projects?: Project[];
@@ -124,6 +135,7 @@ async function mount(options: {
         });
     }
     const goal = options.goal ?? buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } });
+    const tracker = options.tracker ?? buildGoalTrackerFixture({ projectId: null });
     const checkIn = options.checkIn ?? buildGoalCheckInFixture({ goalId: goal.id, periodStart: PERIOD.periodStart });
     const view = render(
         <TauriCloseProvider>
@@ -131,7 +143,13 @@ async function mount(options: {
                 <SyncProvider ownerId="evidence-panel-owner">
                     <AppStateProvider>
                         <ProjectManagerProvider>
-                            <Harness goal={goal} initial={checkIn} period={options.period ?? PERIOD} />
+                            <Harness
+                                goal={goal}
+                                tracker={tracker}
+                                nextTracker={options.nextTracker}
+                                initial={checkIn}
+                                period={options.period ?? PERIOD}
+                            />
                         </ProjectManagerProvider>
                     </AppStateProvider>
                 </SyncProvider>
@@ -255,6 +273,87 @@ describe("GoalEvidencePanel", () => {
 
         expect(await screen.findByText("In Progress: Alpha")).toBeInTheDocument();
         expect(screen.getByTestId("current").textContent).toBe("");
+    });
+
+    it("renders evidence for a goal that inherits the tracker project", async () => {
+        const goal = buildGoalFixture({ projectLink: { mode: "inherit" } });
+        const tracker = buildGoalTrackerFixture({ projectId: "project-1" });
+        await mount({ goal, tracker });
+
+        expect(await screen.findByRole("heading", { name: "Evidence" })).toBeInTheDocument();
+        expect(await screen.findByRole("checkbox", { name: /Ship the release/ })).toBeInTheDocument();
+    });
+
+    it("renders nothing when the goal inherits from a project-less tracker", async () => {
+        const goal = buildGoalFixture({ projectLink: { mode: "inherit" } });
+        await mount({ goal, tracker: buildGoalTrackerFixture({ projectId: null }) });
+
+        expect(screen.queryByRole("region", { name: /Evidence/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: "Evidence" })).not.toBeInTheDocument();
+    });
+
+    it("renders nothing for an explicit no-project goal even when the tracker has a project", async () => {
+        const goal = buildGoalFixture({ projectLink: { mode: "none" } });
+        await mount({ goal, tracker: buildGoalTrackerFixture({ projectId: "project-1" }) });
+
+        expect(screen.queryByRole("region", { name: /Evidence/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: "Evidence" })).not.toBeInTheDocument();
+    });
+
+    it("keeps an overriding goal on its own project regardless of the tracker", async () => {
+        const goal = buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } });
+        await mount({ goal, tracker: buildGoalTrackerFixture({ projectId: "project-2" }) });
+
+        expect(await screen.findByRole("checkbox", { name: /Ship the release/ })).toBeInTheDocument();
+    });
+
+    it("re-baselines the prefill when the resolved project changes mid-period", async () => {
+        const goal = buildGoalFixture({ projectLink: { mode: "inherit" } });
+        const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: PERIOD.periodStart, current: "" });
+        const { user } = await mount({
+            goal,
+            tracker: buildGoalTrackerFixture({ projectId: "project-1" }),
+            nextTracker: buildGoalTrackerFixture({ projectId: "project-2" }),
+            checkIn,
+            projects: [project(), project({ id: "project-2", name: "Other" })],
+            pmTasks: [
+                pmTask({ id: "pm-a", title: "Alpha", projectId: "project-1", status: "In Progress", appTaskId: undefined }),
+                pmTask({ id: "pm-b", title: "Beta", projectId: "project-2", status: "In Progress", appTaskId: undefined }),
+            ],
+            backendTasks: [],
+        });
+
+        await waitFor(() => expect(screen.getByTestId("current")).toHaveTextContent("Alpha"));
+        expect(screen.getByText("In Progress: Alpha")).toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "switch tracker" }));
+
+        await waitFor(() => expect(screen.getByTestId("current")).toHaveTextContent("Beta"));
+        expect(screen.getByText("In Progress: Beta")).toBeInTheDocument();
+    });
+
+    it("keeps a manual Current edit when the resolved project changes", async () => {
+        const goal = buildGoalFixture({ projectLink: { mode: "inherit" } });
+        const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: PERIOD.periodStart, current: "" });
+        const { user } = await mount({
+            goal,
+            tracker: buildGoalTrackerFixture({ projectId: "project-1" }),
+            nextTracker: buildGoalTrackerFixture({ projectId: "project-2" }),
+            checkIn,
+            projects: [project(), project({ id: "project-2", name: "Other" })],
+            pmTasks: [
+                pmTask({ id: "pm-a", title: "Alpha", projectId: "project-1", status: "In Progress", appTaskId: undefined }),
+                pmTask({ id: "pm-b", title: "Beta", projectId: "project-2", status: "In Progress", appTaskId: undefined }),
+            ],
+            backendTasks: [],
+        });
+
+        await waitFor(() => expect(screen.getByTestId("current")).toHaveTextContent("Alpha"));
+        await user.click(screen.getByRole("button", { name: "manual edit" }));
+        await user.click(screen.getByRole("button", { name: "switch tracker" }));
+
+        expect(screen.getByTestId("current")).toHaveTextContent("Handwritten");
+        expect(screen.getByText("In Progress: Beta")).toBeInTheDocument();
     });
 
     it("renders nothing for an unlinked goal", async () => {

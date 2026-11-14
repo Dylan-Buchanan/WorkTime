@@ -13,6 +13,7 @@ import {
     type GoalPeriod,
 } from "../../lib/goals/periods";
 import { isGoalIncludedInPeriod, normalizeCheckInHistory, slipSummary, unmetPlannedItems } from "../../lib/goals/slips";
+import { resolveGoalProject } from "../../lib/goals/projectLink";
 import { useGoals } from "../../state/GoalContext";
 import { CheckInStatusBadge } from "./GoalStatusBadge";
 import { GoalEvidencePanel } from "./GoalEvidencePanel";
@@ -268,6 +269,7 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                     const unmet = previous ? unmetPlannedItems(previous, draft) : [];
                     const minimized = minimizedGoalIds.has(goal.id);
                     const bodyId = `check-in-goal-${goal.id}`;
+                    const resolvedProjectId = resolveGoalProject(goal, tracker).projectId;
                     return <article key={goal.id} aria-label={goal.title} className="space-y-2 rounded border border-neutral-800 bg-neutral-900/30 p-3">
                         <div className="flex flex-wrap items-center gap-2">
                             <h3 className="flex-1 font-medium">{goal.title}</h3>
@@ -298,9 +300,10 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
                             <label className="grid gap-1">Did
                                 <textarea className={control} aria-label={`Did for ${goal.title}`} value={draft.did} onChange={event => patchDraft(goal.id, { did: event.target.value })} />
                             </label>
-                            {goal.projectLink.mode === "project" && <GoalEvidencePanel
+                            {resolvedProjectId !== null && <GoalEvidencePanel
                                 key={`${goal.id}:${activePeriod.periodStart}`}
                                 goal={goal}
+                                tracker={tracker}
                                 checkIn={draft}
                                 period={activePeriod}
                                 onChange={patch => patchDraft(goal.id, patch)}

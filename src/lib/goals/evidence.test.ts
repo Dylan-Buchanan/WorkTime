@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
 import type { PeriodBounds } from "./periods";
-import { buildGoalFixture } from "./testFixtures";
+import { buildGoalFixture, buildGoalTrackerFixture } from "./testFixtures";
 import {
     buildGoalEvidence,
     evidencePrefillText,
@@ -79,6 +79,7 @@ function log(overrides: Partial<PomodoroLogEntry> = {}): PomodoroLogEntry {
 function input(overrides: Partial<EvidenceInput> = {}): EvidenceInput {
     return {
         goal: buildGoalFixture({ projectLink: { mode: "project", projectId: "project-1" } }),
+        tracker: buildGoalTrackerFixture({ projectId: "project-1" }),
         checkIn: { evidenceTaskIds: [] },
         period: PERIOD,
         projects: [project()],
@@ -189,19 +190,60 @@ describe("buildGoalEvidence", () => {
         expect(evidence.inProgress.map(item => item.pmTaskId)).toEqual(["pm-progress"]);
     });
 
-    it("returns empty evidence for an unlinked goal", () => {
-        const evidence = buildGoalEvidence(input({
+    it("returns empty evidence for a no-project or project-less inherited goal", () => {
+        const none = buildGoalEvidence(input({
+            goal: buildGoalFixture({ projectLink: { mode: "none" } }),
+            projects: [project()],
+        }));
+        const inherited = buildGoalEvidence(input({
             goal: buildGoalFixture({ projectLink: { mode: "inherit" } }),
+            tracker: buildGoalTrackerFixture({ projectId: null }),
             projects: [project()],
         }));
 
-        expect(evidence).toEqual({
+        expect(none).toEqual({
             completedTasks: [],
             inProgress: [],
             completedTaskCount: 0,
             hoursMinutes: 0,
             brokenProject: false,
         });
+        expect(inherited).toEqual(none);
+    });
+
+    it("selects evidence through an inheriting goal's tracker project", () => {
+        const evidence = buildGoalEvidence(input({
+            goal: buildGoalFixture({ projectLink: { mode: "inherit" } }),
+            tracker: buildGoalTrackerFixture({ projectId: "project-1" }),
+        }));
+
+        expect(evidence.completedTasks.map(item => item.pmTaskId)).toEqual(["pm-1"]);
+        expect(evidence.completedTaskCount).toBe(1);
+        expect(evidence.brokenProject).toBe(false);
+    });
+
+    it("lets an explicit goal project override the tracker project", () => {
+        const evidence = buildGoalEvidence(input({
+            goal: buildGoalFixture({ projectLink: { mode: "project", projectId: "project-2" } }),
+            tracker: buildGoalTrackerFixture({ projectId: "project-1" }),
+            projects: [project(), project({ id: "project-2", name: "Other" })],
+            pmTasks: [pmTask({ id: "pm-1", projectId: "project-2", appTaskId: "app-1" })],
+        }));
+
+        expect(evidence.completedTasks.map(item => item.pmTaskId)).toEqual(["pm-1"]);
+        expect(evidence.hoursMinutes).toBe(0);
+        expect(evidence.brokenProject).toBe(false);
+    });
+
+    it("flags a dangling project resolved through inheritance", () => {
+        const evidence = buildGoalEvidence(input({
+            goal: buildGoalFixture({ projectLink: { mode: "inherit" } }),
+            tracker: buildGoalTrackerFixture({ projectId: "project-missing" }),
+            projects: [project()],
+        }));
+
+        expect(evidence.brokenProject).toBe(true);
+        expect(evidence.completedTasks).toEqual([]);
     });
 
     it("flags a missing project and still accepts archived projects as valid links", () => {

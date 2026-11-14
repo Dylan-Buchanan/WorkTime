@@ -1,8 +1,9 @@
-import type { Goal, GoalCheckIn, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
+import type { Goal, GoalCheckIn, GoalTracker, PMTask, PomodoroLogEntry, Project, Task } from "../../state/types";
 import type { LocalDateKey } from "../todos/types";
 import { localDateFromKey, localDateKey, localDateParts } from "../todos/calendar";
 import { isGoalDateKey } from "./factories";
 import type { PeriodBounds } from "./periods";
+import { resolveGoalProject } from "./projectLink";
 
 export interface EvidenceTaskSuggestion {
     readonly pmTaskId: string;
@@ -30,6 +31,7 @@ export interface EvidenceWindowInstants {
 export type EvidenceBoundaryConverter = (period: PeriodBounds) => EvidenceWindowInstants;
 export interface EvidenceInput {
     readonly goal: Goal;
+    readonly tracker: GoalTracker;
     readonly checkIn: Pick<GoalCheckIn, "evidenceTaskIds">;
     readonly period: PeriodBounds;
     readonly projects: readonly Project[];
@@ -86,9 +88,9 @@ interface SelectedSuggestion extends EvidenceTaskSuggestion {
  * selector never throws for those gaps. Suggestion content is title-only.
  */
 export function buildGoalEvidence(input: EvidenceInput): GoalEvidence {
-    const { goal, checkIn, period, projects, pmTasks, backendTasks, logs } = input;
-    if (goal.projectLink.mode !== "project") return emptyEvidence(false);
-    const { projectId } = goal.projectLink;
+    const { goal, tracker, checkIn, period, projects, pmTasks, backendTasks, logs } = input;
+    const { projectId } = resolveGoalProject(goal, tracker);
+    if (projectId === null) return emptyEvidence(false);
     if (!projects.some(project => project.id === projectId)) return emptyEvidence(true);
 
     const projectTasks = pmTasks.filter(task => task.projectId === projectId);

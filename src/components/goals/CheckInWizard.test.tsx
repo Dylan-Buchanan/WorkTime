@@ -689,9 +689,30 @@ describe("CheckInWizard", () => {
         });
     });
 
+    it("shows evidence for a goal that inherits the tracker project", async () => {
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { "app-1": backendTask() },
+            logs: [log()],
+        }));
+        const tracker = buildGoalTrackerFixture({ projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release", projectLink: { mode: "inherit" } });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: { "pm-1": pmTask() },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        expect(await within(card).findByRole("checkbox", { name: /^Evidence Ship the release for/ })).toBeInTheDocument();
+        expect(within(card).getByRole("heading", { name: "Evidence" })).toBeInTheDocument();
+    });
+
     it("shows no evidence panel for an unlinked goal even when project data exists", async () => {
         const data = new InMemoryDataAccess(makeAppState({ tasks: { "app-1": backendTask() } }));
-        const tracker = buildGoalTrackerFixture();
+        const tracker = buildGoalTrackerFixture({ projectId: null });
         const goal = buildGoalFixture({ id: "goal-life", trackerId: tracker.id, title: "Life goal", projectLink: { mode: "inherit" } });
         await data.saveGoals([tracker], [goal], []);
         await data.savePMState({
@@ -706,6 +727,24 @@ describe("CheckInWizard", () => {
         expect(within(card).queryByRole("region", { name: /Evidence/ })).not.toBeInTheDocument();
         expect(within(card).queryByRole("checkbox", { name: /^Evidence/ })).not.toBeInTheDocument();
         expect(screen.queryByText(/only tasks finalized through the timer/)).not.toBeInTheDocument();
+    });
+
+    it("shows no evidence panel for an explicit no-project goal even when the tracker has a project", async () => {
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { "app-1": backendTask() } }));
+        const tracker = buildGoalTrackerFixture({ projectId: "project-1" });
+        const goal = buildGoalFixture({ id: "goal-life", trackerId: tracker.id, title: "Life goal", projectLink: { mode: "none" } });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState({
+            projects: { "project-1": project() },
+            tasks: { "pm-1": pmTask() },
+            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
+        });
+        const period = periodFor(tracker, "2026-10-20");
+        await mountWizard(data, tracker.id, period, vi.fn());
+
+        const card = await screen.findByRole("article", { name: goal.title });
+        expect(within(card).queryByRole("region", { name: /Evidence/ })).not.toBeInTheDocument();
+        expect(within(card).queryByRole("checkbox", { name: /^Evidence/ })).not.toBeInTheDocument();
     });
 
     it("prefills current from In Progress tasks, freezes after an edit, and re-syncs only on refresh", async () => {

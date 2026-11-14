@@ -393,7 +393,17 @@ For any T3/T4 epic, run adversarial reviews **early and again before release**:
 7. Run the final gate ladder from a clean tree.
 8. Merge to the default branch `--no-ff`, then push both refs through
    `Invoke-Gate.ps1 -PushRef`. Keep the epic branch until production has run
-   once.
+   once. **Close the issues with this commit.** The final merge commit's message
+   must end with one `Closes #<n>` line for **every issue completed in the
+   epic** (one per line, or comma-separated as `Closes #1, Closes #2`; GitHub
+   needs the keyword repeated for each issue). Build the list from the
+   issues whose lanes were merged and verified, and leave out anything
+   deferred, dropped, or only partly done. The merge reaches the default
+   branch on push, so GitHub closes every listed issue automatically. Lane
+   commits keep the `(#<n>)` reference form and do not use `Closes`, so
+   nothing closes early from an epic branch. If the final commit is instead
+   a fast-forward or a delegated child's commit, put the same `Closes` lines
+   in the commit that lands on the default branch.
 9. **Clean up.** `Remove-Lane.ps1 -MergedInto <default branch> -DeleteBranch`
    for every lane, including reviewer lanes, then delete the epic's run
    directories under `%TEMP%\orch-runs`. Don't use plain `git worktree remove`:

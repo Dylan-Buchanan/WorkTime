@@ -1,15 +1,17 @@
 import React, { useEffect, useRef } from "react";
-import type { Goal, GoalCheckIn } from "../../state/types";
+import type { Goal, GoalCheckIn, GoalTracker } from "../../state/types";
 import type { LocalDateKey } from "../../lib/todos/types";
 import type { PeriodBounds } from "../../lib/goals/periods";
 import { localDateKey } from "../../lib/todos/calendar";
 import { isGoalDateKey } from "../../lib/goals/factories";
 import { buildGoalEvidence, evidencePrefillText, formatEvidenceHours } from "../../lib/goals/evidence";
+import { resolveGoalProject } from "../../lib/goals/projectLink";
 import { usePM } from "../../state/ProjectManagerContext";
 import { useAppState } from "../../state/AppStateContext";
 
 export interface GoalEvidencePanelProps {
     goal: Goal;
+    tracker: GoalTracker;
     checkIn: GoalCheckIn;
     period: PeriodBounds;
     onChange: (patch: Partial<Pick<GoalCheckIn, "did" | "current" | "evidenceTaskIds">>) => void;
@@ -29,23 +31,27 @@ function isCurrentPeriod(period: PeriodBounds, today: LocalDateKey): boolean {
 }
 
 /**
- * Read-only project evidence for one goal card. Suggestions are explicit
- * accept/reject checkboxes; the Current prefill is written once on first open of
- * the current period, and frozen after any manual edit (Refresh is the only later
- * re-sync). Callers key the panel by goal and period so those refs reset on a
- * period switch; past and future periods never auto-prefill.
+ * Read-only project evidence for one goal card. The effective project comes from
+ * the shared resolver, so an inheriting goal follows its tracker. Suggestions are
+ * explicit accept/reject checkboxes; the Current prefill is written once on first
+ * open of the current period, and frozen after any manual edit (Refresh is the
+ * only later re-sync). Callers key the panel by goal and period so those refs
+ * reset on a period switch; past and future periods never auto-prefill.
  */
-export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, checkIn, period, onChange }) => {
+export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, tracker, checkIn, period, onChange }) => {
     const pm = usePM();
     const { state: appState } = useAppState();
-    const projectId = goal.projectLink.mode === "project" ? goal.projectLink.projectId : null;
+    const { projectId } = resolveGoalProject(goal, tracker);
     const frozenRef = useRef(projectId === null || checkIn.current !== "");
     const lastSeenRef = useRef(checkIn.current);
     const prefilledRef = useRef<string | null>(null);
     const boundPeriodRef = useRef<string | null>(null);
+    const resolvedProjectRef = useRef(projectId);
+    const overwritablePrefillRef = useRef<string | null>(null);
 
     const evidence = buildGoalEvidence({
         goal,
+        tracker,
         checkIn,
         period,
         projects: Object.values(pm.state.projects),
@@ -63,10 +69,26 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
         if (checkIn.periodStart !== period.periodStart) return;
         if (boundPeriodRef.current === period.periodStart) return;
         boundPeriodRef.current = period.periodStart;
+        resolvedProjectRef.current = projectId;
+        overwritablePrefillRef.current = null;
         lastSeenRef.current = checkIn.current;
         frozenRef.current = projectId === null || checkIn.current !== "";
         prefilledRef.current = null;
     }, [checkIn.current, checkIn.periodStart, projectId, period.periodStart]);
+
+    // The tracker project can change mid-period (a tracker edit or a sync), and
+    // the wizard keeps this panel mounted by goal and period. Re-baseline so the
+    // new project's In Progress tasks replace this panel's own earlier prefill;
+    // a hand-edited Current still freezes.
+    useEffect(() => {
+        if (resolvedProjectRef.current === projectId) return;
+        const replacesOwnPrefill = prefilledRef.current !== null && checkIn.current === prefilledRef.current;
+        resolvedProjectRef.current = projectId;
+        lastSeenRef.current = checkIn.current;
+        frozenRef.current = projectId === null || (checkIn.current !== "" && !replacesOwnPrefill);
+        prefilledRef.current = null;
+        overwritablePrefillRef.current = replacesOwnPrefill ? checkIn.current : null;
+    }, [checkIn.current, projectId]);
 
     // Freeze when the Current value changes from anything other than our own prefill.
     useEffect(() => {
@@ -83,11 +105,14 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
     useEffect(() => {
         if (checkIn.periodStart !== period.periodStart) return;
         if (frozenRef.current || prefilledRef.current !== null) return;
-        if (checkIn.current !== "" || projectId === null) return;
+        const replacingOwnPrefill = overwritablePrefillRef.current !== null && checkIn.current === overwritablePrefillRef.current;
+        if (checkIn.current !== "" && !replacingOwnPrefill) return;
+        if (projectId === null) return;
         if (!isCurrentPeriod(period, todayLocalDateKey())) return;
         const text = evidencePrefillText(evidence.inProgress);
-        if (!text) return;
+        if (!text && !replacingOwnPrefill) return;
         prefilledRef.current = text;
+        overwritablePrefillRef.current = null;
         onChange({ current: text });
     }, [checkIn.current, checkIn.periodStart, evidence.inProgress, projectId, onChange, period.periodStart, period.periodEnd]);
 
@@ -106,6 +131,7 @@ export const GoalEvidencePanel: React.FC<GoalEvidencePanelProps> = ({ goal, chec
         const text = evidencePrefillText(evidence.inProgress);
         prefilledRef.current = text;
         lastSeenRef.current = text;
+        overwritablePrefillRef.current = null;
         // An explicit refresh is the only write path after the first manual edit.
         frozenRef.current = true;
         onChange({ current: text });
