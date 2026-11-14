@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PMTask, Project, Task } from "../state/types";
-import { PRIORITY_RANK, rankWhatsNext } from "./whatsNext";
+import { PRIORITY_RANK, WHATS_NEXT_EXCLUSION_PRECEDENCE, classifyWhatsNextAvailability, isWhatsNextCandidate, rankWhatsNext } from "./whatsNext";
 
 // Wednesday 12 August 2026; the local week ends on Sunday 16 August.
 const REFERENCE = new Date(2026, 7, 12, 9, 30);
@@ -478,4 +478,254 @@ it("keeps a malformed waiting object eligible through normalization", () => {
     const malformed = { type: "robot", since: REFERENCE.toISOString() } as unknown as PMTask["waiting"];
     const result = rank({ pmTasks: [pmTask({ waiting: malformed, estimatePomos: 1 })] });
     expect(result.top.map(c => c.task.id)).toEqual(["pm-task"]);
+});
+
+function classify(overrides: {
+    pmTasks: readonly PMTask[];
+    backendTasks?: Readonly<Record<string, Task>>;
+    projects?: Readonly<Record<string, Project>>;
+    currentOccupantId?: string | null;
+    reference?: Date;
+}) {
+    return classifyWhatsNextAvailability({
+        pmTasks: overrides.pmTasks,
+        backendTasks: overrides.backendTasks ?? {},
+        projects: overrides.projects ?? {},
+        currentOccupantId: overrides.currentOccupantId ?? null,
+        reference: overrides.reference ?? REFERENCE,
+    });
+}
+
+describe("switch availability classification", () => {
+    // Saturday 15 August 2026: a project scheduled Friday only is not workable.
+    const SATURDAY = new Date(2026, 7, 15, 9, 30);
+    const FRIDAY_ONLY = project({ id: "friday-only", workableDays: [5] });
+    const FRIDAY_ONLY_PROJECTS: Readonly<Record<string, Project>> = { [FRIDAY_ONLY.id]: FRIDAY_ONLY };
+    const OCCUPANT_ID = "occupant";
+
+    const EMPTY_COUNTS = {
+        "backend-closed": 0,
+        blocked: 0,
+        waiting: 0,
+        "project-not-workable": 0,
+    };
+
+    function waitingTask(overrides: Partial<PMTask> = {}): PMTask {
+        return pmTask({ waiting: { type: "person", since: "2026-08-14T09:00:00.000Z" }, ...overrides });
+    }
+
+    it("publishes the frozen reason precedence", () => {
+        expect(WHATS_NEXT_EXCLUSION_PRECEDENCE).toEqual([
+            "backend-closed",
+            "blocked",
+            "waiting",
+            "project-not-workable",
+        ]);
+    });
+
+    it("reports nothing at all when only the occupant exists", () => {
+        const result = classify({
+            pmTasks: [pmTask({ id: OCCUPANT_ID })],
+            currentOccupantId: OCCUPANT_ID,
+        });
+
+        expect(result).toEqual({
+            hasAnything: false,
+            hasWorkable: false,
+            counts: EMPTY_COUNTS,
+            dominantReason: null,
+        });
+    });
+
+    it("reports nothing at all when every other task is archived or Done", () => {
+        const result = classify({
+            pmTasks: [
+                pmTask({ id: OCCUPANT_ID }),
+                pmTask({ id: "done", status: "Done" }),
+                pmTask({ id: "archived", isArchived: true }),
+            ],
+            currentOccupantId: OCCUPANT_ID,
+        });
+
+        expect(result).toEqual({
+            hasAnything: false,
+            hasWorkable: false,
+            counts: EMPTY_COUNTS,
+            dominantReason: null,
+        });
+    });
+
+    it("reports tasks that exist but are only in projects not workable on the reference date", () => {
+        const result = classify({
+            pmTasks: [
+                pmTask({ id: OCCUPANT_ID }),
+                pmTask({ id: "a", projectId: FRIDAY_ONLY.id }),
+                pmTask({ id: "b", projectId: FRIDAY_ONLY.id }),
+            ],
+            projects: FRIDAY_ONLY_PROJECTS,
+            currentOccupantId: OCCUPANT_ID,
+            reference: SATURDAY,
+        });
+
+        expect(result.hasAnything).toBe(true);
+        expect(result.hasWorkable).toBe(false);
+        expect(result.counts).toEqual({ ...EMPTY_COUNTS, "project-not-workable": 2 });
+        expect(result.dominantReason).toBe("project-not-workable");
+    });
+
+    it("matches the contract worked example (A..F plus the occupant O)", () => {
+        const result = classify({
+            pmTasks: [
+                pmTask({ id: "a", status: "Blocked", projectId: FRIDAY_ONLY.id }),
+                pmTask({ id: "b", waiting: { type: "agent", since: "2026-08-14T09:00:00.000Z" } }),
+                pmTask({ id: "c", projectId: FRIDAY_ONLY.id }),
+                pmTask({ id: "d", projectId: FRIDAY_ONLY.id }),
+                pmTask({ id: "e", status: "Done" }),
+                pmTask({ id: "f", isArchived: true }),
+                pmTask({ id: OCCUPANT_ID }),
+            ],
+            projects: FRIDAY_ONLY_PROJECTS,
+            currentOccupantId: OCCUPANT_ID,
+            reference: SATURDAY,
+        });
+
+        expect(result).toEqual({
+            hasAnything: true,
+            hasWorkable: false,
+            counts: {
+                "backend-closed": 0,
+                blocked: 1,
+                waiting: 1,
+                "project-not-workable": 2,
+            },
+            dominantReason: "project-not-workable",
+        });
+    });
+
+    it("counts a task matching several filters once, in the first matching bucket", () => {
+        const completed = backendTask({ id: "completed-app", completed_at: "2026-08-14T10:00:00.000Z" });
+        const result = classify({
+            pmTasks: [
+                pmTask({
+                    id: "multi",
+                    status: "Blocked",
+                    projectId: FRIDAY_ONLY.id,
+                    appTaskId: completed.id,
+                    waiting: { type: "person", since: "2026-08-14T09:00:00.000Z" },
+                }),
+            ],
+            backendTasks: { [completed.id]: completed },
+            projects: FRIDAY_ONLY_PROJECTS,
+            reference: SATURDAY,
+        });
+
+        expect(result.counts).toEqual({ ...EMPTY_COUNTS, "backend-closed": 1 });
+        expect(result.dominantReason).toBe("backend-closed");
+        expect(Object.values(result.counts).reduce((total, count) => total + count, 0)).toBe(1);
+    });
+
+    it("breaks a dominant-reason tie by precedence order", () => {
+        const result = classify({
+            pmTasks: [
+                pmTask({ id: "blocked", status: "Blocked" }),
+                waitingTask({ id: "waiting" }),
+            ],
+        });
+
+        expect(result.counts).toEqual({ ...EMPTY_COUNTS, blocked: 1, waiting: 1 });
+        expect(result.dominantReason).toBe("blocked");
+    });
+
+    it("reports availability and no dominant reason when a workable candidate exists", () => {
+        const result = classify({
+            pmTasks: [
+                pmTask({ id: OCCUPANT_ID }),
+                pmTask({ id: "blocked", status: "Blocked" }),
+                pmTask({ id: "workable" }),
+            ],
+            currentOccupantId: OCCUPANT_ID,
+        });
+
+        expect(result.hasAnything).toBe(true);
+        expect(result.hasWorkable).toBe(true);
+        expect(result.dominantReason).toBeNull();
+        expect(result.counts).toEqual({ ...EMPTY_COUNTS, blocked: 1 });
+    });
+
+    const mixedTasks: readonly PMTask[] = [
+        pmTask({ id: OCCUPANT_ID }),
+        pmTask({ id: "workable" }),
+        pmTask({ id: "blocked", status: "Blocked" }),
+        waitingTask({ id: "waiting" }),
+        pmTask({ id: "off-schedule", projectId: FRIDAY_ONLY.id }),
+        pmTask({ id: "done", status: "Done" }),
+        pmTask({ id: "archived", isArchived: true }),
+    ];
+
+    it("does not depend on pmTasks order", () => {
+        const forward = classify({
+            pmTasks: mixedTasks,
+            projects: FRIDAY_ONLY_PROJECTS,
+            currentOccupantId: OCCUPANT_ID,
+            reference: SATURDAY,
+        });
+        const reversed = classify({
+            pmTasks: [...mixedTasks].reverse(),
+            projects: FRIDAY_ONLY_PROJECTS,
+            currentOccupantId: OCCUPANT_ID,
+            reference: SATURDAY,
+        });
+
+        expect(reversed).toEqual(forward);
+    });
+
+    it("agrees with isWhatsNextCandidate on every task in a mixed sample", () => {
+        const input = {
+            pmTasks: mixedTasks,
+            backendTasks: {},
+            projects: FRIDAY_ONLY_PROJECTS,
+            currentOccupantId: OCCUPANT_ID,
+            reference: SATURDAY,
+        };
+        const result = classifyWhatsNextAvailability(input);
+
+        const anything = mixedTasks.filter((task) => task.id !== OCCUPANT_ID && !task.isArchived && task.status !== "Done");
+        const accepted = anything.filter((task) => isWhatsNextCandidate(task, input));
+        const rejected = anything.filter((task) => !isWhatsNextCandidate(task, input));
+        const counted = Object.values(result.counts).reduce((total, count) => total + count, 0);
+
+        // An accepted task is never counted, and every rejected task is counted once.
+        expect(counted).toBe(rejected.length);
+        expect(counted + accepted.length).toBe(anything.length);
+        expect(result.hasAnything).toBe(anything.length > 0);
+        expect(result.hasWorkable).toBe(accepted.length > 0);
+    });
+
+    it("is driven by the supplied reference, not the wall clock", () => {
+        const tasks: readonly PMTask[] = [pmTask({ id: "friday-task", projectId: FRIDAY_ONLY.id })];
+        // Friday 14 August 2026 23:59:59 versus Saturday 15 August 2026 00:00:01.
+        const justBeforeMidnight = classify({
+            pmTasks: tasks,
+            projects: FRIDAY_ONLY_PROJECTS,
+            reference: new Date(2026, 7, 14, 23, 59, 59),
+        });
+        const justAfterMidnight = classify({
+            pmTasks: tasks,
+            projects: FRIDAY_ONLY_PROJECTS,
+            reference: new Date(2026, 7, 15, 0, 0, 1),
+        });
+
+        expect(justBeforeMidnight).toEqual({
+            hasAnything: true,
+            hasWorkable: true,
+            counts: EMPTY_COUNTS,
+            dominantReason: null,
+        });
+        expect(justAfterMidnight).toEqual({
+            hasAnything: true,
+            hasWorkable: false,
+            counts: { ...EMPTY_COUNTS, "project-not-workable": 1 },
+            dominantReason: "project-not-workable",
+        });
+    });
 });
