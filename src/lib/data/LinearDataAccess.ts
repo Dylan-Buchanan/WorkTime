@@ -169,6 +169,10 @@ function isIssue(value: unknown): value is LinearIssuePayload {
         && Number.isInteger(issue.priority)
         && issue.priority >= 0
         && issue.priority <= 4
+        // The Edge Function may predate the estimate field, so absence is valid.
+        && (issue.estimate === undefined
+            || issue.estimate === null
+            || (typeof issue.estimate === "number" && Number.isFinite(issue.estimate)))
         && !!state && typeof state === "object"
         && typeof (state as Record<string, unknown>).name === "string";
 }

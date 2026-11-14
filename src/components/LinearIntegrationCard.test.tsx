@@ -38,14 +38,14 @@ const newIssue = {
     state: { name: "In Progress" },
 };
 
-function fakeAccess(settings: LinearSettings | null = connected) {
+function fakeAccess(settings: LinearSettings | null = connected, issues: unknown[] = [newIssue]) {
     return {
         loadSettings: vi.fn().mockResolvedValue(settings),
         connect: vi.fn().mockResolvedValue(undefined),
         updatePreferences: vi.fn().mockResolvedValue(undefined),
         disconnect: vi.fn().mockResolvedValue(undefined),
         sync: vi.fn().mockResolvedValue({
-            issues: [newIssue],
+            issues,
             states: ["Backlog", "In Progress", "Done"],
             truncated: false,
             syncedAt: "2026-10-26T12:00:00.000Z",
@@ -149,6 +149,23 @@ describe("LinearIntegrationCard", () => {
         expect(options).not.toHaveProperty("estimatePomos");
         expect(await screen.findByLabelText("Linear sync result")).toHaveTextContent("Created 1");
         expect(screen.getByText(/Last synced:/)).not.toHaveTextContent("Never");
+    });
+
+    it("shows and forwards an estimated issue's pomodoro count", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess(connected, [{ ...newIssue, estimate: 3 }]);
+        const createTask = vi.fn().mockResolvedValue(createdTask("New issue"));
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync now" }));
+        const dialog = await screen.findByRole("dialog", { name: "Linear sync preview" });
+        expect(within(dialog).getByText("8 pomodoros")).toBeInTheDocument();
+
+        await user.click(within(dialog).getByRole("button", { name: "Create 1 task" }));
+        await waitFor(() => expect(createTask).toHaveBeenCalledWith("New issue", expect.objectContaining({
+            estimatePomos: 8,
+            tags: ["linear:ENG-123"],
+        })));
     });
 
     it("shows discovered state names as toggleable hints", async () => {

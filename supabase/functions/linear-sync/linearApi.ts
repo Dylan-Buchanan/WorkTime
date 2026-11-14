@@ -10,7 +10,7 @@ export const LINEAR_SYNC_QUERY = `query WorkTimeLinearSync(
 ) {
     issues(first: $first, after: $issuesAfter, filter: $issueFilter, includeArchived: false)
         @include(if: $fetchIssues) {
-        nodes { id identifier title description url dueDate priority state { name } }
+        nodes { id identifier title description url dueDate priority estimate state { name } }
         pageInfo { hasNextPage endCursor }
     }
     states: workflowStates(first: $first, after: $statesAfter, filter: $stateFilter, includeArchived: false)
@@ -33,6 +33,8 @@ export interface LinearIssuePayload {
     url: string;
     dueDate: string | null;
     priority: number;
+    /** The team's estimate scale value; `null` when the issue is unestimated. */
+    estimate: number | null;
     state: { name: string };
 }
 export interface LinearSyncResult { issues: LinearIssuePayload[]; states: string[]; truncated: boolean; }
@@ -69,6 +71,12 @@ function requiredString(value: unknown): string {
 function nullableString(value: unknown): string | null {
     if (value === null || typeof value === "string") return value;
     throw invalidResponse();
+}
+
+function optionalNumber(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "number" || !Number.isFinite(value)) throw invalidResponse();
+    return value;
 }
 
 function retryAfterSeconds(response: Response): number | undefined {
@@ -155,6 +163,7 @@ function mapIssue(value: unknown): LinearIssuePayload {
         url: requiredString(value.url),
         dueDate: nullableString(value.dueDate),
         priority: value.priority,
+        estimate: optionalNumber(value.estimate),
         state: { name: requiredString(value.state.name) },
     };
 }

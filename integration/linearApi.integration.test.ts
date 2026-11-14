@@ -11,7 +11,7 @@ function issue(overrides: Record<string, unknown> = {}) {
     return {
         id: "issue-1", identifier: "ENG-1", title: "Sync issues", description: "Details",
         url: "https://linear.app/example/issue/ENG-1/sync-issues", dueDate: "2026-10-30", priority: 2,
-        state: { name: "In Progress" }, ...overrides,
+        estimate: 3, state: { name: "In Progress" }, ...overrides,
     };
 }
 
@@ -37,7 +37,7 @@ describe("Linear API client", () => {
             expect(new Headers(init?.headers).get("Content-Type")).toBe("application/json");
             const body = JSON.parse(String(init?.body));
             expect(body.query).toBe(LINEAR_SYNC_QUERY);
-            expect(body.query).not.toMatch(/\bestimate\b/);
+            expect(body.query).toMatch(/\bestimate\b/);
             expect(body.query).toContain("states: workflowStates");
             expect(body.query).toContain("includeArchived: false");
             expect(body.variables).toEqual({
@@ -52,6 +52,17 @@ describe("Linear API client", () => {
             issues: [issue()], states: ["In Progress", "Todo"], truncated: false,
         });
         expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("maps a null or absent estimate to null", async () => {
+        const fetcher = async () => json({ data: data({ issues: connection([
+            issue({ estimate: null }),
+            issue({ id: "issue-2", identifier: "ENG-2", estimate: undefined }),
+        ]) }) });
+
+        const result = await fetchLinearIssues(settings, fetcher);
+
+        expect(result.issues.map((mapped) => mapped.estimate)).toEqual([null, null]);
     });
 
     it("paginates issues and workflow states independently and deduplicates both", async () => {
@@ -195,9 +206,19 @@ describe("Linear API client", () => {
     it.each([
         {}, { data: null }, { errors: {}, data: data() }, { data: data({ states: null }) },
         { data: data({ issues: connection([issue({ priority: 8 })]) }) },
+        { data: data({ issues: connection([issue({ estimate: "3" })]) }) },
+        { data: data({ issues: connection([issue({ estimate: { value: 3 } })]) }) },
         { data: data({ issues: connection([issue({ state: null })]) }) },
         { data: data({ issues: { nodes: [], pageInfo: { hasNextPage: "false", endCursor: null } } }) },
     ])("rejects malformed payload %#", async (body) => {
         await expect(fetchLinearIssues(settings, async () => json(body))).rejects.toMatchObject({ code: "LINEAR_INVALID_RESPONSE" });
+    });
+
+    it("rejects a non-finite estimate", async () => {
+        const payload = JSON.stringify({ data: data() }).replace('"estimate":3', '"estimate":1e999');
+        await expect(fetchLinearIssues(settings, async () => new Response(payload, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+        }))).rejects.toMatchObject({ code: "LINEAR_INVALID_RESPONSE" });
     });
 });

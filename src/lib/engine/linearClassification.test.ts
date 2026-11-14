@@ -9,6 +9,7 @@ import {
     normalizeLinearUrl,
     type LinearIssuePayload,
 } from "./linearClassification";
+import { buildShortcutTaskProposal, type ShortcutStoryPayload } from "./shortcutClassification";
 
 function task(id: string, overrides: Partial<PMTask> = {}): PMTask {
     return {
@@ -40,6 +41,24 @@ function issue(identifier: string, overrides: Partial<LinearIssuePayload> = {}):
         dueDate: "2026-08-20",
         priority: 2,
         state: { name: "In Progress" },
+        ...overrides,
+    };
+}
+
+function story(id: number, overrides: Partial<ShortcutStoryPayload> = {}): ShortcutStoryPayload {
+    return {
+        id,
+        app_url: `https://app.shortcut.com/worktime/story/${id}`,
+        name: `Story ${id}`,
+        description: `Description ${id}`,
+        estimate: 3,
+        deadline: "2026-08-20",
+        workflow_state_id: 1,
+        status_name: "In Development",
+        completed: false,
+        archived: false,
+        story_type: "feature",
+        labels: [],
         ...overrides,
     };
 }
@@ -128,7 +147,7 @@ describe("linear issue classification", () => {
         expect(linearPriorityToTaskPriority(9)).toBe("Medium");
     });
 
-    it("builds a Backlog proposal with a tag-first identity and no estimate", () => {
+    it("builds a Backlog proposal with a tag-first identity and no estimate for an unestimated issue", () => {
         const proposal = buildLinearTaskProposal(issue("ENG-123", {
             title: "Ship the import",
             description: "Review the Linear slice.",
@@ -150,6 +169,32 @@ describe("linear issue classification", () => {
             relatedTo: [],
         });
         expect(proposal).not.toHaveProperty("estimatePomos");
+    });
+
+    it("maps an estimate through the shared point-to-pomodoro table", () => {
+        expect(buildLinearTaskProposal(issue("ENG-1", { estimate: 3 })).estimatePomos).toBe(8);
+        expect(buildLinearTaskProposal(issue("ENG-1", { estimate: 0 })).estimatePomos).toBe(1);
+    });
+
+    it("passes estimates outside the table through unchanged", () => {
+        expect(buildLinearTaskProposal(issue("ENG-1", { estimate: 13 })).estimatePomos).toBe(13);
+        expect(buildLinearTaskProposal(issue("ENG-1", { estimate: 21 })).estimatePomos).toBe(21);
+        expect(buildLinearTaskProposal(issue("ENG-1", { estimate: 4.5 })).estimatePomos).toBe(4.5);
+    });
+
+    it.each([0, 1, 2, 3, 4, 5, 6, 13, 21, 32, 64, 4.5])(
+        "matches the Shortcut conversion for %s points",
+        (points) => {
+            expect(buildLinearTaskProposal(issue("ENG-1", { estimate: points })).estimatePomos)
+                .toBe(buildShortcutTaskProposal(story(1, { estimate: points })).estimatePomos);
+        },
+    );
+
+    it("omits estimatePomos when the estimate is null or absent", () => {
+        expect(buildLinearTaskProposal(issue("ENG-1", { estimate: null }))).not.toHaveProperty("estimatePomos");
+        const withoutEstimate = issue("ENG-1");
+        delete withoutEstimate.estimate;
+        expect(buildLinearTaskProposal(withoutEstimate)).not.toHaveProperty("estimatePomos");
     });
 
     it("omits a null or malformed due date", () => {

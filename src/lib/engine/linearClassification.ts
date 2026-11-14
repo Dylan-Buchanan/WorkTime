@@ -1,5 +1,6 @@
 import type { PMTask, TaskPriority, TaskStatus } from "../../state/types";
 import { normalizeTaskDueDate } from "../taskDueDate";
+import { shortcutPointsToPomodoros } from "./shortcutClassification";
 
 /** The slim issue shape returned by the linear-sync Edge Function. */
 export interface LinearIssuePayload {
@@ -10,15 +11,22 @@ export interface LinearIssuePayload {
     url: string;
     dueDate: string | null;
     priority: number;
+    /**
+     * The team's estimate scale value, or `null`/absent when unestimated.
+     *
+     * Optional because a frontend deploy can land before the Edge Function is
+     * redeployed, and such a function omits the field entirely.
+     */
+    estimate?: number | null;
     state: { name: string };
 }
 
 /**
  * The PMTask fields needed by the preview and the existing createTask path.
  *
- * Linear does not expose an estimate in the sync payload, so `estimatePomos` is
- * never set here. `createTask` still assigns its own fallback estimate to the
- * persisted timer/PM task today; this proposal deliberately carries none.
+ * `estimatePomos` is set only when the issue has a numeric estimate, using the
+ * same point→pomodoro conversion as Shortcut. Unestimated issues carry none, so
+ * `createTask` keeps applying its own fallback target.
  */
 export interface LinearTaskProposal {
     title: string;
@@ -26,6 +34,7 @@ export interface LinearTaskProposal {
     status: TaskStatus;
     priority: TaskPriority;
     dueDate?: string;
+    estimatePomos?: number;
     description: string;
     tags: string[];
     links: string[];
@@ -111,6 +120,11 @@ export function buildLinearTaskProposal(
         status: "Backlog",
         priority: linearPriorityToTaskPriority(issue.priority),
         ...(dueDate !== undefined ? { dueDate } : {}),
+        // A strict null/undefined check preserves an explicit zero estimate,
+        // which the shared table converts to one pomodoro.
+        ...(issue.estimate !== null && issue.estimate !== undefined
+            ? { estimatePomos: shortcutPointsToPomodoros(issue.estimate) }
+            : {}),
         description: issue.description,
         // Tag first so a re-import is recognised even if the URL slug changed.
         tags: [linearIssueTag(issue.identifier)],

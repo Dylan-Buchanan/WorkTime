@@ -225,9 +225,6 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
         let created = 0;
         try {
             for (const proposal of preview.proposals) {
-                // `createTask` still assigns its own fallback estimate to the
-                // persisted timer/PM task; the Linear proposal deliberately
-                // carries none because the sync payload exposes no estimate.
                 const { title, ...options } = proposal;
                 await createTask(title, options);
                 created += 1;
@@ -565,6 +562,7 @@ function ProposalPreview({
             </label>
             <div className="mt-2 flex flex-wrap gap-2 text-[9px] text-neutral-400">
                 <span>{proposal.priority} priority</span>
+                {proposal.estimatePomos !== undefined && <span>{proposal.estimatePomos} pomodoros</span>}
                 {proposal.dueDate && <span>Due {proposal.dueDate}</span>}
                 <span>{proposal.tags[0]}</span>
             </div>

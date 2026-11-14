@@ -59,7 +59,13 @@ const SHORTCUT_POINTS_TO_POMODOROS: Readonly<Record<number, number>> = {
     5: 12,
 };
 
-/** Convert Shortcut story points to the equivalent WorkTime pomodoro estimate. */
+/**
+ * The single source of truth for point→pomodoro conversion.
+ *
+ * Both the Shortcut and Linear integration builders call this function, so an
+ * identical provider point/estimate value always yields an identical pomodoro
+ * count. Values outside the table pass through unchanged.
+ */
 export function shortcutPointsToPomodoros(points: number): number {
     // Keep unsupported/non-standard point values compatible with the previous
     // behavior until an explicit mapping for them is defined.

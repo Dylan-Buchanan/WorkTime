@@ -167,6 +167,55 @@ describe("SupabaseLinearDataAccess", () => {
         await expect(access.sync()).rejects.toMatchObject({ code: "LINEAR_INVALID_RESPONSE" });
     });
 
+    it("accepts a numeric estimate including a fractional value", async () => {
+        const withEstimate = { ...issue, estimate: 3 };
+        const fractional = { ...issue, id: "issue-2", identifier: "ENG-124", estimate: 4.5 };
+        const mocks = clientMock({ syncData: {
+            issues: [withEstimate, fractional],
+            states: [],
+            truncated: false,
+            synced_at: "2026-10-26T12:00:00.000Z",
+        } });
+        const access = new SupabaseLinearDataAccess(mocks.client, "owner-1");
+
+        await expect(access.sync()).resolves.toEqual({
+            issues: [withEstimate, fractional],
+            states: [],
+            truncated: false,
+            syncedAt: "2026-10-26T12:00:00.000Z",
+        });
+    });
+
+    it("accepts a null estimate", async () => {
+        const withNullEstimate = { ...issue, estimate: null };
+        const mocks = clientMock({ syncData: {
+            issues: [withNullEstimate],
+            states: [],
+            truncated: false,
+            synced_at: "2026-10-26T12:00:00.000Z",
+        } });
+        const access = new SupabaseLinearDataAccess(mocks.client, "owner-1");
+
+        await expect(access.sync()).resolves.toMatchObject({ issues: [withNullEstimate] });
+    });
+
+    it.each([
+        ["non-numeric", "3"],
+        ["non-finite", Number.POSITIVE_INFINITY],
+        ["non-finite negative", Number.NEGATIVE_INFINITY],
+        ["object", { value: 3 }],
+    ])("rejects a %s estimate", async (_label, estimate) => {
+        const mocks = clientMock({ syncData: {
+            issues: [{ ...issue, estimate }],
+            states: [],
+            truncated: false,
+            synced_at: "2026-10-26T12:00:00.000Z",
+        } });
+        const access = new SupabaseLinearDataAccess(mocks.client, "owner-1");
+
+        await expect(access.sync()).rejects.toMatchObject({ code: "LINEAR_INVALID_RESPONSE" });
+    });
+
     it("preserves allowlisted function error codes and retry delays", async () => {
         const error = {
             message: "Edge Function returned a non-2xx status code",

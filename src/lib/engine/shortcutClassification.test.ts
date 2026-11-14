@@ -133,4 +133,8 @@ describe("shortcut story classification", () => {
     ])("converts %i Shortcut points to %i pomodoros", (points, pomodoros) => {
         expect(shortcutPointsToPomodoros(points)).toBe(pomodoros);
     });
+
+    it.each([4, 13, 21, 4.5])("passes unsupported %s points through unchanged", (points) => {
+        expect(shortcutPointsToPomodoros(points)).toBe(points);
+    });
 });
