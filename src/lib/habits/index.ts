@@ -41,3 +41,4 @@ export {
 } from "./windows";
 export { derive365Grid, deriveGrid, get365Grid } from "./grid";
 export { createHabit, createHabitCompletion } from "./factories";
+export { HABIT_COLORS } from "./colors";

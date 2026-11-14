@@ -29,6 +29,7 @@ import {
 
 const drag = vi.hoisted(() => ({ goals: null as null | ((event: DragEndEvent) => void), trackers: null as null | ((event: DragEndEvent) => void) }));
 const deckExport = vi.hoisted(() => ({ render: vi.fn(), deliver: vi.fn(), stamp: vi.fn() }));
+const goalWrite = vi.hoisted(() => ({ failNext: false }));
 vi.mock("../hooks/useMediaQuery");
 vi.mock("../lib/goals/deck/render", () => ({ renderDeck: deckExport.render }));
 vi.mock("../lib/goals/deck/delivery", () => ({ initiateBlobDownload: deckExport.deliver }));
@@ -36,10 +37,20 @@ vi.mock("../state/GoalContext", async importOriginal => {
     const original = await importOriginal<typeof import("../state/GoalContext")>();
     return { ...original, useGoals: () => {
         const goals = original.useGoals();
-        return { ...goals, stampBuiltPeriod: async (trackerId: string, periodStart: LocalDateKey) => {
-            await deckExport.stamp(trackerId, periodStart);
-            await goals.stampBuiltPeriod(trackerId, periodStart);
-        } };
+        return {
+            ...goals,
+            updateGoal: (id: string, patch: Parameters<typeof goals.updateGoal>[1]) => {
+                if (goalWrite.failNext) {
+                    goalWrite.failNext = false;
+                    throw new RangeError("Goal write failed");
+                }
+                goals.updateGoal(id, patch);
+            },
+            stampBuiltPeriod: async (trackerId: string, periodStart: LocalDateKey) => {
+                await deckExport.stamp(trackerId, periodStart);
+                await goals.stampBuiltPeriod(trackerId, periodStart);
+            },
+        };
     } };
 });
 vi.mock("@dnd-kit/core", async importOriginal => {
@@ -113,10 +124,16 @@ const habitMetric = (overrides: Partial<GoalMetric> = {}): GoalMetric => ({
     overridePinned: false,
     ...overrides,
 });
+/** Opens the picker's create entry and returns the dialog it summons. */
+async function openCreateHabit(user: ReturnType<typeof userEvent.setup>) {
+    await user.selectOptions(screen.getByLabelText("Habit"), screen.getByRole("option", { name: /\+ Create new habit/ }));
+    return screen.getByRole("dialog", { name: "Create habit" });
+}
 beforeEach(() => {
     localStorage.clear();
     drag.goals = null;
     drag.trackers = null;
+    goalWrite.failNext = false;
     vi.mocked(useMediaQuery).mockReturnValue(true);
     deckExport.render.mockReset().mockResolvedValue({ blob: new Blob(["deck"]), fileName: "Work.pptx" });
     deckExport.deliver.mockReset().mockResolvedValue(undefined);
@@ -456,6 +473,250 @@ describe("GoalsPage", () => {
         expect(within(row).getByText("Habit")).toBeInTheDocument();
     });
 
+    it("creates a habit from the goal editor and links it only when the goal is saved", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        const { user } = await mount(data, "2026-11-02");
+        const saveHabits = vi.spyOn(data, "saveHabits");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+
+        const dialog = await openCreateHabit(user);
+        const name = within(dialog).getByLabelText("Habit name");
+        expect(name).toHaveValue(goal.title);
+        await user.clear(name);
+        await user.type(name, "Read 20 min");
+        await user.click(within(dialog).getByRole("radio", { name: "Choose #EC4899" }));
+        await user.selectOptions(within(dialog).getByLabelText("Frequency"), "weekly");
+        await user.click(within(dialog).getByRole("button", { name: "Create habit" }));
+
+        expect(screen.queryByRole("dialog", { name: "Create habit" })).not.toBeInTheDocument();
+        const picker = screen.getByLabelText("Habit");
+        expect((within(picker).getByRole("option", { name: "New habit: Read 20 min (not saved yet)" }) as HTMLOptionElement).selected).toBe(true);
+        expect(screen.getByLabelText("Metric label")).toHaveValue("Read 20 min");
+        expect(screen.getByLabelText("Unit")).toHaveValue("weeks");
+        expect((await data.loadHabits()).habits).toEqual([]);
+        expect(saveHabits).not.toHaveBeenCalled();
+
+        await user.clear(screen.getByLabelText("Target"));
+        await user.type(screen.getByLabelText("Target"), "2");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+
+        await waitFor(async () => expect((await data.loadHabits()).habits).toHaveLength(1));
+        const created = (await data.loadHabits()).habits[0];
+        expect(created).toMatchObject({ name: "Read 20 min", color: "#EC4899", frequency: "weekly" });
+        expect(saveHabits).toHaveBeenCalledTimes(1);
+        expect(saveHabits.mock.calls[0][0]).toEqual([created]);
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({
+            label: "Read 20 min", current: 0, target: 2, unit: "weeks", source: "habit", habitId: created.id, overridePinned: false,
+        }));
+    });
+
+    it("restores the prior habit selection when the create modal is cancelled without a draft", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: "habit-read", label: "Read" }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" }), habit("habit-walk", { name: "Walk", position: 1 })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getByLabelText("Habit")).toHaveValue("habit-read");
+
+        const dialog = await openCreateHabit(user);
+        expect(within(dialog).getByText(/Read 20 minutes/)).toBeInTheDocument();
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+        expect(screen.queryByRole("dialog", { name: "Create habit" })).not.toBeInTheDocument();
+        const picker = screen.getByLabelText("Habit");
+        expect(picker).toHaveValue("habit-read");
+        expect(within(picker).queryByRole("option", { name: /New habit:/ })).not.toBeInTheDocument();
+    });
+
+    it("names the goal’s saved habit link in the modal after the picker selection is cleared", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: "habit-read", label: "Read" }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.selectOptions(screen.getByLabelText("Habit"), "");
+
+        const dialog = await openCreateHabit(user);
+        expect(within(dialog).getByText(/will replace this goal’s “Read 20 minutes” habit link/)).toBeInTheDocument();
+    });
+
+    it("writes no habit and no metric when the goal editor is cancelled after drafting", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const dialog = await openCreateHabit(user);
+        await user.click(within(dialog).getByRole("button", { name: "Create habit" }));
+        expect(within(screen.getByLabelText("Habit")).getByRole("option", { name: /New habit:/ })).toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+        expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
+        expect((await data.loadHabits()).habits).toEqual([]);
+        expect((await data.loadGoals()).goals[0].metric).toBeNull();
+    });
+
+    it("re-opens the create modal with the draft instead of the goal title", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const first = await openCreateHabit(user);
+        await user.clear(within(first).getByLabelText("Habit name"));
+        await user.type(within(first).getByLabelText("Habit name"), "Read 20 min");
+        await user.click(within(first).getByRole("radio", { name: "Choose #10B981" }));
+        await user.selectOptions(within(first).getByLabelText("Frequency"), "weekly");
+        await user.click(within(first).getByRole("button", { name: "Create habit" }));
+
+        const second = await openCreateHabit(user);
+        expect(within(second).getByLabelText("Habit name")).toHaveValue("Read 20 min");
+        expect(within(second).getByRole("radio", { name: "Choose #10B981" })).toHaveAttribute("aria-checked", "true");
+        expect(within(second).getByLabelText("Frequency")).toHaveValue("weekly");
+    });
+
+    it("discards the draft and uses normal replacement semantics when a real habit is picked", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-walk", { name: "Walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const dialog = await openCreateHabit(user);
+        await user.clear(within(dialog).getByLabelText("Habit name"));
+        await user.type(within(dialog).getByLabelText("Habit name"), "Read 20 min");
+        await user.click(within(dialog).getByRole("button", { name: "Create habit" }));
+
+        const picker = screen.getByLabelText("Habit");
+        await user.selectOptions(picker, "habit-walk");
+
+        expect(picker).toHaveValue("habit-walk");
+        expect(within(picker).queryByRole("option", { name: /New habit:/ })).not.toBeInTheDocument();
+        expect(screen.getByLabelText("Metric label")).toHaveValue("Walk");
+        expect(screen.getByLabelText("Unit")).toHaveValue("days");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toMatchObject({
+            label: "Walk", source: "habit", habitId: "habit-walk",
+        }));
+        expect((await data.loadHabits()).habits.map(row => row.id)).toEqual(["habit-walk"]);
+    });
+
+    it("rejects an empty habit name before drafting anything", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const dialog = await openCreateHabit(user);
+        await user.clear(within(dialog).getByLabelText("Habit name"));
+        await user.click(within(dialog).getByRole("button", { name: "Create habit" }));
+
+        expect(within(dialog).getByRole("alert")).toHaveTextContent("Give this habit a name first.");
+        expect(screen.getByRole("dialog", { name: "Create habit" })).toBeInTheDocument();
+        expect(within(screen.getByLabelText("Habit")).queryByRole("option", { name: /New habit:/ })).not.toBeInTheDocument();
+    });
+
+    it("rejects a cadence-impractical draft target before creating and clears when its frequency changes", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const dialog = await openCreateHabit(user);
+        await user.selectOptions(within(dialog).getByLabelText("Frequency"), "monthly");
+        await user.click(within(dialog).getByRole("button", { name: "Create habit" }));
+        await user.clear(screen.getByLabelText("Target"));
+        await user.type(screen.getByLabelText("Target"), "6");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        expect(within(editor).getByRole("alert")).toHaveTextContent(/This cadence can hold at most \d+ months?\./);
+        expect((await data.loadHabits()).habits).toEqual([]);
+        expect((await data.loadGoals()).goals[0].metric).toBeNull();
+
+        const reopened = await openCreateHabit(user);
+        await user.selectOptions(within(reopened).getByLabelText("Frequency"), "daily");
+        await user.click(within(reopened).getByRole("button", { name: "Create habit" }));
+        expect(screen.queryByText(/This cadence can hold at most/)).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+
+        await waitFor(async () => expect((await data.loadHabits()).habits).toHaveLength(1));
+        const created = (await data.loadHabits()).habits[0];
+        expect(created.frequency).toBe("daily");
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toMatchObject({
+            source: "habit", habitId: created.id, target: 6,
+        }));
+    });
+
+    it.each(["achieved", "dropped"] as const)("hides the create-habit entry on a %s goal", async lifecycle => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, lifecycle });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read 20 minutes" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.selectOptions(screen.getByLabelText("Goal status"), lifecycle);
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+
+        const picker = screen.getByLabelText("Habit");
+        expect(within(picker).getByRole("option", { name: "Read 20 minutes" })).toBeInTheDocument();
+        expect(within(picker).queryByRole("option", { name: /\+ Create new habit/ })).not.toBeInTheDocument();
+    });
+
+    it("names the unlinked habit and the habits page when the goal write fails after creation", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await data.saveGoals([tracker], [goal], []);
+        const { user } = await mount(data, "2026-11-02");
+        const saveHabits = vi.spyOn(data, "saveHabits");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(screen.getByLabelText("Track one metric"));
+        await user.selectOptions(screen.getByLabelText("Source"), "habit");
+        const dialog = await openCreateHabit(user);
+        await user.clear(within(dialog).getByLabelText("Habit name"));
+        await user.type(within(dialog).getByLabelText("Habit name"), "Read 20 min");
+        await user.click(within(dialog).getByRole("button", { name: "Create habit" }));
+        await user.clear(screen.getByLabelText("Target"));
+        await user.type(screen.getByLabelText("Target"), "2");
+
+        goalWrite.failNext = true;
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+
+        const alert = screen.getByRole("alert");
+        expect(alert).toHaveTextContent("Read 20 min");
+        expect(alert).toHaveTextContent("/habits");
+        await waitFor(async () => expect((await data.loadHabits()).habits).toHaveLength(1));
+        const created = (await data.loadHabits()).habits[0];
+        expect((await data.loadGoals()).goals[0].metric).toBeNull();
+        expect(screen.getByLabelText("Habit")).toHaveValue(created.id);
+
+        // The created habit stays selected, so a retry links it instead of duplicating it.
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toMatchObject({
+            source: "habit", habitId: created.id,
+        }));
+        expect((await data.loadHabits()).habits).toHaveLength(1);
+        expect(saveHabits).toHaveBeenCalledTimes(1);
+    });
+
     it("switching manual to habit and back clears the habit link, override, and stored current", async () => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({
@@ -592,7 +853,8 @@ describe("GoalsPage", () => {
         expect(picker).toHaveValue("habit-read");
         expect(within(picker).getByRole("option", { name: "Read (archived)" })).toBeInTheDocument();
         expect(within(picker).getByRole("option", { name: "Walk" })).toBeInTheDocument();
-        expect(within(picker).getAllByRole("option")).toHaveLength(3);
+        expect(within(picker).getByRole("option", { name: /\+ Create new habit/ })).toBeInTheDocument();
+        expect(within(picker).getAllByRole("option")).toHaveLength(4);
     });
 
     it("shows a missing-habit state in the editor and saves a replacement habit", async () => {

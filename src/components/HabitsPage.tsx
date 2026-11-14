@@ -3,6 +3,7 @@ import { DndContext, type DragEndEvent, type DraggableAttributes, type Draggable
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+    HABIT_COLORS,
     dateFromBucket,
     derive365Grid,
     getBucketKey,
@@ -18,7 +19,6 @@ import { useHabits } from "../state/HabitContext";
 import { useGoals } from "../state/GoalContext";
 import { downgradeHabitMetric } from "../lib/goals/metrics";
 
-const HABIT_COLORS = ["#6366F1", "#EC4899", "#10B981", "#F59E0B", "#3B82F6", "#8B5CF6", "#EF4444", "#14B8A6"];
 const PERIODS: Array<{ value: HabitPeriod; label: string }> = [
     { value: "day", label: "Day" },
     { value: "week", label: "Week" },
