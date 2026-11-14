@@ -551,4 +551,157 @@ describe("PetReminderProvider", () => {
         expect(notifications).toHaveLength(0);
         expect(await data.loadPetReminderMarks()).toEqual([]);
     });
+
+    describe("occurrences moved exactly onto day end", () => {
+        function walk(): PetScheduleItem {
+            return { ...fixedItem("walk", "Walk", evening(21, 50)), flexibility: "flexible" };
+        }
+
+        function boundaryAccess() {
+            return busyAccess([runUntil(evening(22, 30), evening(21, 40))]);
+        }
+
+        it("remembers an upcoming Walk on open and reminds once at day end with a fire-time mark", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const item = walk();
+            const access = boundaryAccess();
+            const data = await eveningData([item]);
+            const entry = buildPetSchedule({ now: evening(21, 45), scheduleItems: [item], activityRecords: [], naps: [], startOfDay: "07:00", endOfDay: "22:00", busyIntervals: [runUntil(evening(22, 30), evening(21, 40))] }).entries[0];
+            expect(entry.start).toEqual(evening(22));
+            expect(entry.unshiftedStart).toEqual(evening(21, 50));
+            expect(entry.blockedBy).toBeNull();
+            render(wrap(data, access));
+            await ready();
+            await tickAt(evening(21, 59, 58));
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([]);
+
+            await tickAt(evening(22));
+            expect(notifications).toEqual([{ title: "Pet care: Walk", options: { body: "Walk is due now" } }]);
+            await waitFor(async () => expect(await data.loadPetReminderMarks()).toHaveLength(1));
+            const [mark] = await data.loadPetReminderMarks();
+            expect(mark).toMatchObject({ id: `walk:${evening(21, 50).toISOString()}`, itemId: "walk", dueAt: evening(21, 50).toISOString() });
+            expect(Date.parse(mark.remindedAt)).toBeGreaterThanOrEqual(evening(22).getTime());
+            expect(Date.parse(mark.remindedAt)).toBeLessThan(evening(22, 0, 1).getTime());
+            await advance(5_000);
+            expect(notifications).toHaveLength(1);
+            expect(await data.loadPetReminderMarks()).toEqual([mark]);
+        });
+
+        it("drops Walk when an explicit log fulfils its unshifted occurrence before day end", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await tickAt(evening(21, 55));
+            await act(async () => {
+                await data.savePetActivityRecords([{
+                    id: "walk-done", activityType: "feeding", timestamp: evening(21, 55).toISOString(),
+                    createdAt: evening(21, 55).toISOString(), scheduleItemId: "walk",
+                    scheduleOccurrenceStart: evening(21, 50).toISOString(),
+                }]);
+            });
+            await waitFor(() => expect(screen.getByText("ready:true:1")).toBeInTheDocument());
+            await advance(1_000);
+            await tickAt(evening(22));
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([]);
+        });
+
+        it.each(["removed", "inactive"])("drops Walk when the item is %s before day end", async (change) => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await tickAt(evening(21, 55));
+            await act(async () => { await data.savePetScheduleItems(change === "removed" ? [] : [{ ...walk(), isActive: false }]); });
+            await advance(1_000);
+            await tickAt(evening(22));
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([]);
+        });
+
+        it("clears the old boundary when end_of_day changes before it fires", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await tickAt(evening(21, 55));
+            await act(async () => { await data.updateSettings({ ...makeAppState().settings, start_of_day: "07:00", end_of_day: "23:00" }); });
+            await advance(1_000);
+            await tickAt(evening(22));
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([]);
+        });
+
+        it("stays silent when opened at 22:01 after day end", async () => {
+            vi.setSystemTime(evening(22, 1));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await advance(5_000);
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([]);
+        });
+
+        it("notifies each boundary occurrence separately rather than collapsing their busy run", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk(), { ...walk(), id: "water", label: "Water" }]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await tickAt(evening(21, 59, 58));
+            expect(notifications).toHaveLength(0);
+            await tickAt(evening(22));
+            expect(notifications).toHaveLength(2);
+            expect(notifications).toEqual(expect.arrayContaining([
+                { title: "Pet care: Walk", options: { body: "Walk is due now" } },
+                { title: "Pet care: Water", options: { body: "Water is due now" } },
+            ]));
+            expect(await data.loadPetReminderMarks()).toHaveLength(2);
+            await advance(5_000);
+            expect(notifications).toHaveLength(2);
+        });
+
+        it("refreshes the boundary label while the entry is still present", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await act(async () => { await data.savePetScheduleItems([{ ...walk(), label: "Evening walk" }]); });
+            await advance(1_000);
+            await tickAt(evening(22));
+            expect(notifications).toEqual([{ title: "Pet care: Evening walk", options: { body: "Evening walk is due now" } }]);
+            expect(await data.loadPetReminderMarks()).toHaveLength(1);
+        });
+
+        it("drops a boundary occurrence when a mark arrives before day end", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            const mark = { id: `walk:${evening(21, 50).toISOString()}`, itemId: "walk", dueAt: evening(21, 50).toISOString(), remindedAt: evening(21, 45).toISOString() };
+            await act(async () => { await data.savePetReminderMarks([mark]); });
+            await advance(1_000);
+            await tickAt(evening(22));
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([mark]);
+        });
+
+        it("hands the occurrence to pending if a window change makes it blocked", async () => {
+            vi.setSystemTime(evening(21, 45));
+            const data = await eveningData([walk()]);
+            render(wrap(data, boundaryAccess()));
+            await ready();
+            await act(async () => { await data.savePetScheduleItems([{ ...fixedItem("walk", "Walk", evening(21, 50), 30 * 60), flexibility: "flexible" }]); });
+            await advance(1_000);
+            await tickAt(evening(21, 50));
+            expect(notifications).toHaveLength(0);
+            expect(await data.loadPetReminderMarks()).toEqual([]);
+            await tickAt(evening(22));
+            expect(notifications).toEqual([{ title: "Pet care: Walk", options: { body: `Held during busy ${formatClock(evening(21, 40))}–${formatClock(evening(22))}. Walk is due now.` } }]);
+            expect(await data.loadPetReminderMarks()).toHaveLength(1);
+            await advance(5_000);
+            expect(notifications).toHaveLength(1);
+        });
+    });
 });

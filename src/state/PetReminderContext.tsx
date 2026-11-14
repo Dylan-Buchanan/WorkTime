@@ -17,6 +17,14 @@ interface ReminderSnapshot {
 
 const EMPTY_SNAPSHOT: ReminderSnapshot = { marks: {} };
 
+interface BoundaryReminder {
+    id: string;
+    itemId: string;
+    label: string;
+    dueAt: string;
+    dayEnd: Date;
+}
+
 interface PendingReminder {
     id: string;
     itemId: string;
@@ -56,6 +64,7 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const previousDueRef = useRef<Set<string> | null>(null);
     const previousOverdueRef = useRef<Set<string> | null>(null);
     const pendingRef = useRef<Map<string, PendingReminder>>(new Map());
+    const boundaryRef = useRef<Map<string, BoundaryReminder>>(new Map());
     const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
     useEffect(() => {
@@ -101,8 +110,38 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
         );
         const dueIds = new Set(dueEntries.map(petOccurrenceId));
         const overdueIds = new Set(overdueEntries.map(petOccurrenceId));
-        if (previousSettingsKeyRef.current !== settingsKey) {
+        const settingsChanged = previousSettingsKeyRef.current !== settingsKey;
+        if (settingsChanged) {
             pendingRef.current.clear();
+            boundaryRef.current.clear();
+        }
+
+        const nowMs = now.getTime();
+        const pending = pendingRef.current;
+        const boundary = boundaryRef.current;
+        const entriesById = new Map(schedule.entries.map((entry) => [petOccurrenceId(entry), entry]));
+        for (const [id, record] of boundary) {
+            const entry = entriesById.get(id);
+            if (marksRef.current[id] || snapshot.marks[id] || pending.has(id)
+                || (nowMs < record.dayEnd.getTime() && (!entry || entry.fulfilled || entry.paused
+                    || entry.start.getTime() !== schedule.dayEnd.getTime()))) {
+                boundary.delete(id);
+            }
+        }
+        // Capture upcoming boundary entries even on the baseline evaluation:
+        // the engine removes them at day end before they can become due.
+        for (const entry of schedule.entries) {
+            const id = petOccurrenceId(entry);
+            if (entry.start.getTime() === schedule.dayEnd.getTime() && !entry.fulfilled && !entry.paused
+                && !marksRef.current[id] && !snapshot.marks[id] && !pending.has(id)) {
+                boundary.set(id, {
+                    id, itemId: entry.itemId, label: entry.label,
+                    dueAt: entry.occurrenceStart.toISOString(), dayEnd: schedule.dayEnd,
+                });
+            }
+        }
+
+        if (settingsChanged) {
             previousSettingsKeyRef.current = settingsKey;
             previousDueRef.current = dueIds;
             previousOverdueRef.current = overdueIds;
@@ -120,9 +159,6 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
         previousDueRef.current = dueIds;
         previousOverdueRef.current = overdueIds;
 
-        const nowMs = now.getTime();
-        const pending = pendingRef.current;
-        const entriesById = new Map(schedule.entries.map((entry) => [petOccurrenceId(entry), entry]));
         for (const [id, record] of pending) {
             const entry = entriesById.get(id);
             if (marksRef.current[id] || snapshot.marks[id]) {
@@ -152,6 +188,7 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const defer = (entry: PetScheduleEntry) => {
             const id = petOccurrenceId(entry);
             if (marksRef.current[id] || snapshot.marks[id] || pending.has(id) || entry.blockedBy === null) return;
+            boundary.delete(id);
             pending.set(id, {
                 id, itemId: entry.itemId, label: entry.label, start: entry.start,
                 dueAt: entry.occurrenceStart.toISOString(),
@@ -177,13 +214,18 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
         });
         const fired = [...pending.values()].filter((record) => record.target <= nowMs)
             .sort((left, right) => left.start.getTime() - right.start.getTime() || left.label.localeCompare(right.label));
-        if (newDueEntries.length === 0 && fired.length === 0) return;
+        const firedBoundary = [...boundary.values()].filter((record) => record.dayEnd.getTime() <= nowMs);
+        if (newDueEntries.length === 0 && fired.length === 0 && firedBoundary.length === 0) return;
 
         const remindedAt = now.toISOString();
         const nextMarks = { ...marksRef.current };
         for (const entry of newDueEntries) {
             const id = petOccurrenceId(entry);
             nextMarks[id] = { id, itemId: entry.itemId, dueAt: entry.occurrenceStart.toISOString(), remindedAt };
+        }
+        for (const record of firedBoundary) {
+            nextMarks[record.id] = { id: record.id, itemId: record.itemId, dueAt: record.dueAt, remindedAt };
+            boundary.delete(record.id);
         }
         const runs = new Map<string, PendingReminder[]>();
         for (const record of fired) {
@@ -203,6 +245,12 @@ export const PetReminderProvider: React.FC<{ children: React.ReactNode }> = ({ c
             title: `Pet care: ${entry.label}`,
             body: `${entry.label} is due now`,
         }));
+        for (const record of firedBoundary) {
+            notifications.push(notifyNow({
+                title: `Pet care: ${record.label}`,
+                body: `${record.label} is due now`,
+            }));
+        }
         for (const group of runs.values()) {
             const labels = group.map((record) => record.label);
             const run = group[0].run;
