@@ -4,6 +4,10 @@ import type { PromotionTier, RankedCandidate, WhatsNextResult } from "../lib/wha
 import { formatPomodoroCount } from "../lib/timer";
 import { Check, ChevronRight, Bot, User } from "lucide-react";
 import { useOptionalResumeMemo } from "../state/ResumeMemoContext";
+import { TOP_SHEET_TIER_CLASS } from "../lib/overlayLayers";
+
+/** Focus target used when the sheet's invoker is gone by the time the sheet closes. */
+export const SWITCH_SHEET_FOCUS_FALLBACK_ID = "app-main";
 
 export interface SwitchSheetProps {
     mode: "switch" | "waiting";
@@ -18,6 +22,8 @@ export interface SwitchSheetProps {
     onClose: () => void;
     busyTaskId?: string | null;
     notice?: string | null;
+    /** Rendered in the empty-state slot instead of "Nothing else to switch to" when both result lists are empty. */
+    emptyMessage?: string | null;
     error?: string | null;
 }
 
@@ -59,7 +65,7 @@ const WAITING_DOT: Record<"agent" | "person", string> = {
 };
 
 export function SwitchSheet(props: SwitchSheetProps) {
-    const { mode, result, projects, linkStateOf, linkErrorOf, waitingType = "agent", onSetWaitingType, onSelect, onRetryLink, onClose, busyTaskId, notice, error } = props;
+    const { mode, result, projects, linkStateOf, linkErrorOf, waitingType = "agent", onSetWaitingType, onSelect, onRetryLink, onClose, busyTaskId, notice, emptyMessage, error } = props;
     const headingId = useId();
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeRef = useRef(onClose);
@@ -72,7 +78,15 @@ export function SwitchSheet(props: SwitchSheetProps) {
         const dialog = dialogRef.current;
         dialog?.focus();
         const onKey = (event: KeyboardEvent) => {
-            if (event.key === "Escape") { event.preventDefault(); closeRef.current(); }
+            if (event.key === "Escape") {
+                // Capture phase + stopImmediatePropagation means a single Escape closes exactly one
+                // layer: the sheet's event never reaches an underlying overlay's document listener
+                // or its React onKeyDown handler.
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                closeRef.current();
+                return;
+            }
             if (event.key !== "Tab" || !dialog) return;
             const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"]), [tabindex="0"]'));
             const first = controls[0];
@@ -83,10 +97,11 @@ export function SwitchSheet(props: SwitchSheetProps) {
                 event.preventDefault(); first?.focus();
             }
         };
-        document.addEventListener("keydown", onKey);
+        document.addEventListener("keydown", onKey, true);
         return () => {
-            document.removeEventListener("keydown", onKey);
+            document.removeEventListener("keydown", onKey, true);
             if (invoker?.isConnected) invoker.focus();
+            else document.getElementById(SWITCH_SHEET_FOCUS_FALLBACK_ID)?.focus({ preventScroll: true });
             releaseMemoPresentation?.();
         };
     }, [holdMemoPresentation]);
@@ -133,7 +148,7 @@ export function SwitchSheet(props: SwitchSheetProps) {
             </div>
         </li>;
     };
-    return <div ref={dialogRef} tabIndex={-1} className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby={headingId}>
+    return <div ref={dialogRef} tabIndex={-1} className={`fixed inset-0 ${TOP_SHEET_TIER_CLASS} flex items-center justify-center p-4`} role="dialog" aria-modal="true" aria-labelledby={headingId}>
         <button type="button" tabIndex={-1} aria-label="Close switch sheet backdrop" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
         <div className="switch-sheet-in app-scrollbar relative z-10 max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-neutral-700/80 bg-neutral-950/95 p-5 shadow-2xl shadow-black/40">
             <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/[0.05] to-transparent" />
@@ -173,7 +188,7 @@ export function SwitchSheet(props: SwitchSheetProps) {
             </div>}
             {notice && <p role="status" className="mb-3 rounded-lg border border-indigo-400/20 bg-indigo-400/10 px-3 py-2 text-sm text-indigo-300">{notice}</p>}
             {error && <p role="alert" className="mb-3 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-300">{error}</p>}
-            {result.top.length === 0 && result.continuation.length === 0 && <p className="rounded-lg border border-dashed border-neutral-700/70 px-3 py-6 text-center text-sm text-neutral-500">Nothing else to switch to</p>}
+            {result.top.length === 0 && result.continuation.length === 0 && <p className="rounded-lg border border-dashed border-neutral-700/70 px-3 py-6 text-center text-sm text-neutral-500">{emptyMessage || "Nothing else to switch to"}</p>}
             {(["top-pick", "quick-win", "next-up"] as const).map((tier) => {
                 const candidates = result.top.filter((candidate) => candidate.tier === tier);
                 const meta = TIER_META[tier];

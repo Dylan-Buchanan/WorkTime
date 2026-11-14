@@ -9,9 +9,34 @@ import { SyncProvider } from "../state/SyncContext";
 import { TauriCloseProvider } from "../state/TauriCloseContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
-import { SwitchSheet, type SwitchSheetProps } from "./SwitchSheet";
+import { SWITCH_SHEET_FOCUS_FALLBACK_ID, SwitchSheet, type SwitchSheetProps } from "./SwitchSheet";
 import type { RankedCandidate } from "../lib/whatsNext";
 import { normalizeProjectSchedule } from "../lib/projectSchedule";
+import { OVERLAY_TIER_CLASS, TOP_SHEET_TIER_CLASS } from "../lib/overlayLayers";
+
+/** Counts every call to the release function handed to the sheet, so a double release is visible. */
+const memoReleases = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../state/ResumeMemoContext", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../state/ResumeMemoContext")>();
+    const wrapped = new WeakMap<() => () => void, () => () => void>();
+    return {
+        ...actual,
+        useOptionalResumeMemo: () => {
+            const value = actual.useOptionalResumeMemo();
+            if (!value) return undefined;
+            let hold = wrapped.get(value.holdMemoPresentation);
+            if (!hold) {
+                const original = value.holdMemoPresentation;
+                hold = () => {
+                    const release = original();
+                    return () => { memoReleases.count += 1; release(); };
+                };
+                wrapped.set(original, hold);
+            }
+            return { ...value, holdMemoPresentation: hold };
+        },
+    };
+});
 
 function candidate(id: string, tier: RankedCandidate["tier"], remainingPomodoros = 1.5): RankedCandidate {
     return {
@@ -135,5 +160,135 @@ describe("SwitchSheet", () => {
         view.unmount();
         expect(invoker).toHaveFocus();
         invoker.remove();
+    });
+    it("owns Escape so an underlying overlay's document listener never sees it", () => {
+        const overlayEscape = vi.fn();
+        const onDocumentKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") overlayEscape(); };
+        document.addEventListener("keydown", onDocumentKeyDown);
+        try {
+            const input = props();
+            render(<SwitchSheet {...input} />);
+            const dialog = screen.getByRole("dialog", { name: "Switch task" });
+            expect(dialog).toHaveFocus();
+            const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+            act(() => { dialog.dispatchEvent(escape); });
+            expect(overlayEscape).not.toHaveBeenCalled();
+            expect(input.onClose).toHaveBeenCalledOnce();
+            expect(escape.defaultPrevented).toBe(true);
+        } finally {
+            document.removeEventListener("keydown", onDocumentKeyDown);
+        }
+    });
+    it("lets the underlying document listener handle Escape once the sheet has unmounted", () => {
+        const overlayEscape = vi.fn();
+        const onDocumentKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") overlayEscape(); };
+        document.addEventListener("keydown", onDocumentKeyDown);
+        try {
+            const view = render(<SwitchSheet {...props()} />);
+            view.unmount();
+            act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+            expect(overlayEscape).toHaveBeenCalledOnce();
+        } finally {
+            document.removeEventListener("keydown", onDocumentKeyDown);
+        }
+    });
+    it("keeps a React onKeyDown escape handler outside the sheet from firing while the sheet is open", () => {
+        const overlayEscape = vi.fn();
+        const onKeyDown = (event: { key: string }) => { if (event.key === "Escape") overlayEscape(); };
+        const view = render(<div onKeyDown={onKeyDown}><SwitchSheet {...props()} /></div>);
+        const dialog = screen.getByRole("dialog", { name: "Switch task" });
+        expect(dialog).toHaveFocus();
+        act(() => { dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+        expect(overlayEscape).not.toHaveBeenCalled();
+        view.rerender(<div onKeyDown={onKeyDown}><button type="button">Underlying overlay</button></div>);
+        const overlay = screen.getByRole("button", { name: "Underlying overlay" });
+        overlay.focus();
+        act(() => { overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+        expect(overlayEscape).toHaveBeenCalledOnce();
+    });
+    it("focuses the app-main fallback when the invoker was removed before the sheet closed", () => {
+        const invoker = document.createElement("button");
+        document.body.append(invoker);
+        invoker.focus();
+        const fallback = document.createElement("main");
+        fallback.id = SWITCH_SHEET_FOCUS_FALLBACK_ID;
+        fallback.tabIndex = -1;
+        document.body.append(fallback);
+        const view = render(<SwitchSheet {...props()} />);
+        invoker.remove();
+        act(() => { view.unmount(); });
+        expect(fallback).toHaveFocus();
+        fallback.remove();
+    });
+    it("closes without throwing when the invoker and the fallback are both gone", () => {
+        expect(document.getElementById(SWITCH_SHEET_FOCUS_FALLBACK_ID)).toBeNull();
+        const invoker = document.createElement("button");
+        document.body.append(invoker);
+        invoker.focus();
+        const view = render(<SwitchSheet {...props()} />);
+        invoker.remove();
+        expect(() => view.unmount()).not.toThrow();
+        expect(document.getElementById(SWITCH_SHEET_FOCUS_FALLBACK_ID)).toBeNull();
+    });
+    it.each(["backdrop", "Close", "Escape"])("releases the held memo exactly once when closed by %s", async (method) => {
+        memoReleases.count = 0;
+        const data = new InMemoryDataAccess(makeAppState());
+        function Flow() {
+            const app = useAppState();
+            const [open, setOpen] = useState(false);
+            return <>
+                <button disabled={!app.state} onClick={() => setOpen(true)}>Open sheet</button>
+                {open && <SwitchSheet {...props({ onClose: () => setOpen(false) })} />}
+            </>;
+        }
+        render(<TauriCloseProvider><DataProvider dataAccess={data}><SyncProvider ownerId="sheet-hold-owner">
+            <AppStateProvider><ProjectManagerProvider><ResumeMemoProvider><Flow /></ResumeMemoProvider></ProjectManagerProvider></AppStateProvider>
+        </SyncProvider></DataProvider></TauriCloseProvider>);
+        const opener = await screen.findByRole("button", { name: "Open sheet" });
+        await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+        fireEvent.click(opener);
+        expect(screen.getByRole("dialog", { name: "Switch task" })).toBeInTheDocument();
+        expect(memoReleases.count).toBe(0);
+        if (method === "Escape") fireEvent.keyDown(document.activeElement ?? document, { key: "Escape" });
+        else fireEvent.click(screen.getByRole("button", { name: method === "Close" ? "Close" : "Close switch sheet backdrop" }));
+        await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 10)); });
+        expect(screen.queryByRole("dialog", { name: "Switch task" })).toBeNull();
+        expect(memoReleases.count).toBe(1);
+    });
+    it("uses the explicit top-sheet tier above the overlay tier", () => {
+        render(<SwitchSheet {...props()} />);
+        const dialog = screen.getByRole("dialog", { name: "Switch task" });
+        expect(dialog).toHaveClass(TOP_SHEET_TIER_CLASS);
+        expect(dialog).not.toHaveClass(OVERLAY_TIER_CLASS);
+        expect(TOP_SHEET_TIER_CLASS).not.toBe(OVERLAY_TIER_CLASS);
+    });
+    it("renders an emptyMessage in the empty-state slot instead of the default placeholder", () => {
+        render(<SwitchSheet {...props({ result: { top: [], continuation: [] }, emptyMessage: "Nothing to switch to right now: 2 tasks are blocked." })} />);
+        expect(screen.getByText("Nothing to switch to right now: 2 tasks are blocked.")).toBeVisible();
+        expect(screen.queryByText("Nothing else to switch to")).toBeNull();
+    });
+    it("ignores emptyMessage when there are candidates", () => {
+        render(<SwitchSheet {...props({ emptyMessage: "Nothing to switch to right now: 2 tasks are blocked." })} />);
+        expect(screen.queryByText("Nothing to switch to right now: 2 tasks are blocked.")).toBeNull();
+        expect(screen.getByRole("button", { name: /Task a/ })).toBeVisible();
+    });
+    it("shows the default placeholder when emptyMessage is absent and keeps notice rendering", () => {
+        render(<SwitchSheet {...props({ result: { top: [], continuation: [] }, notice: "Paused mid-window" })} />);
+        expect(screen.getByText("Nothing else to switch to")).toBeVisible();
+        expect(screen.getByRole("status")).toHaveTextContent("Paused mid-window");
+    });
+    it("renders, traps focus and closes with minimal props and no surrounding timer state", () => {
+        function Minimal() {
+            const [open, setOpen] = useState(true);
+            return open
+                ? <SwitchSheet {...props({ result: { top: [], continuation: [] }, onClose: () => setOpen(false) })} />
+                : <p>closed</p>;
+        }
+        const view = render(<Minimal />);
+        expect(screen.getByRole("dialog", { name: "Switch task" })).toHaveFocus();
+        fireEvent.keyDown(document, { key: "Escape" });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(screen.getByText("closed")).toBeVisible();
+        expect(() => view.unmount()).not.toThrow();
     });
 });
