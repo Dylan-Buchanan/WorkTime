@@ -439,7 +439,7 @@ describe("GoalsPage", () => {
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
-    it("changing the tracker project leaves goal rows, their links, and the built stamp untouched", async () => {
+    it("changing the tracker project leaves goal links and the built stamp untouched, flagging the goal only as it deviates", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture({ projectId: "project-1", lastBuiltPeriodStart: "2026-10-04" });
         const goal = buildGoalFixture({ id: "goal-linked", trackerId: tracker.id, title: "Ship the release", projectLink: { mode: "project", projectId: "project-1" } });
@@ -447,7 +447,7 @@ describe("GoalsPage", () => {
         await data.savePMState(pmState([project(), project({ id: "project-2", name: "Admin", sortOrder: 1 })]));
         const { user, container } = await mount(data, "2026-10-20");
         const row = screen.getByLabelText(goal.title);
-        expect(within(row).getByText("Deep Work")).toBeInTheDocument();
+        expect(within(row).queryByText("Deep Work")).not.toBeInTheDocument();
 
         await user.click(screen.getByRole("button", { name: `Actions for ${tracker.name}` }));
         await user.click(screen.getByRole("button", { name: "Edit tracker" }));
@@ -459,9 +459,9 @@ describe("GoalsPage", () => {
         const saved = await data.loadGoals();
         expect(saved.goals[0]).toEqual(goal);
         expect(saved.trackers[0].lastBuiltPeriodStart).toBe("2026-10-04");
-        const unchangedRow = screen.getByLabelText(goal.title);
-        expect(within(unchangedRow).getByText("Deep Work")).toBeInTheDocument();
-        expect(within(unchangedRow).queryByText("Admin")).not.toBeInTheDocument();
+        const deviatingRow = screen.getByLabelText(goal.title);
+        expect(within(deviatingRow).getByText("Deep Work")).toBeInTheDocument();
+        expect(within(deviatingRow).queryByText("Admin")).not.toBeInTheDocument();
         await waitFor(() => expect(container.querySelector('[data-goals-slot="tracker-project"]')).toHaveTextContent("Admin"));
     });
 
@@ -966,6 +966,40 @@ describe("GoalsPage", () => {
         expect(within(row).queryByText("Linked habit is missing")).not.toBeInTheDocument();
     });
 
+    it("shows a goal project only when it deviates from the tracker's project", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ projectId: "project-1" });
+        const inherited = buildGoalFixture({ id: "goal-inherit", trackerId: tracker.id, title: "Inherited", sortOrder: 0, projectLink: { mode: "inherit" } });
+        const same = buildGoalFixture({ id: "goal-same", trackerId: tracker.id, title: "Same override", sortOrder: 1, projectLink: { mode: "project", projectId: "project-1" } });
+        const other = buildGoalFixture({ id: "goal-other", trackerId: tracker.id, title: "Other override", sortOrder: 2, projectLink: { mode: "project", projectId: "project-2" } });
+        const none = buildGoalFixture({ id: "goal-none", trackerId: tracker.id, title: "No project", sortOrder: 3, projectLink: { mode: "none" } });
+        await data.saveGoals([tracker], [inherited, same, other, none], []);
+        await data.savePMState(pmState([project(), project({ id: "project-2", name: "Admin", sortOrder: 1 })]));
+        await mount(data, "2026-10-20");
+
+        for (const title of [inherited.title, same.title, none.title]) {
+            const row = screen.getByLabelText(title);
+            expect(within(row).queryByText("Deep Work")).not.toBeInTheDocument();
+            expect(within(row).queryByText("Admin")).not.toBeInTheDocument();
+        }
+        const deviating = screen.getByLabelText(other.title);
+        expect(within(deviating).getByText("Admin")).toBeInTheDocument();
+        expect(within(deviating).queryByText("Deep Work")).not.toBeInTheDocument();
+    });
+
+    it("shows an override's project in a project-less tracker but nothing for an inheriting goal", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const inherited = buildGoalFixture({ id: "goal-inherit", trackerId: tracker.id, title: "Inherited", sortOrder: 0, projectLink: { mode: "inherit" } });
+        const override = buildGoalFixture({ id: "goal-override", trackerId: tracker.id, title: "Override", sortOrder: 1, projectLink: { mode: "project", projectId: "project-1" } });
+        await data.saveGoals([tracker], [inherited, override], []);
+        await data.savePMState(pmState([project()]));
+        await mount(data, "2026-10-20");
+
+        expect(within(screen.getByLabelText(inherited.title)).queryByText("Deep Work")).not.toBeInTheDocument();
+        expect(within(screen.getByLabelText(override.title)).getByText("Deep Work")).toBeInTheDocument();
+    });
+
     it("keeps a linked archived habit as the selected picker value and counts its completions", async () => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ label: "Read" }) });
@@ -1356,6 +1390,38 @@ describe("GoalsPage", () => {
         expect(preview).toBeEmptyDOMElement();
     });
 
+    it("passes the PM project registry into the built deck", async () => {
+        const work = project({ id: "project-work", name: "Deep Work" });
+        const ops = project({ id: "project-ops", name: "Ops", sortOrder: 1 });
+        pmProjects.override = { [work.id]: work, [ops.id]: ops };
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const goals = [
+            buildGoalFixture({ id: "goal-inherit", trackerId: tracker.id, title: "Inherits", sortOrder: 0 }),
+            buildGoalFixture({
+                id: "goal-ops",
+                trackerId: tracker.id,
+                title: "Ops goal",
+                sortOrder: 1,
+                projectLink: { mode: "project", projectId: ops.id },
+            }),
+        ];
+        await data.saveGoals([tracker], goals, []);
+        const { user, container } = await mount(data, "2026-10-20");
+
+        const entry = container.querySelector('[data-goals-slot="deck-entry"]') as HTMLElement;
+        await user.click(within(entry).getByRole("button", { name: "Build deck" }));
+
+        const preview = container.querySelector('[data-goals-slot="deck-preview"]') as HTMLElement;
+        const title = within(preview).getByRole("article", { name: `Slide: ${tracker.name}` });
+        expect(within(title).getByText("Deep Work")).toBeInTheDocument();
+        expect(within(title).getByText("+1 goal in other projects")).toBeInTheDocument();
+        expect(within(within(preview).getByRole("article", { name: "Slide: Ops goal" })).getByText("Ops"))
+            .toBeInTheDocument();
+        expect(within(within(preview).getByRole("article", { name: "Slide: Inherits" })).queryByText("Ops"))
+            .not.toBeInTheDocument();
+    });
+
     it("waits for habit hydration before enabling a linked tracker's deck", async () => {
         const { data, tracker } = await oneTracker();
         const plainTracker = buildGoalTrackerFixture({ id: "plain-tracker", name: "Plain tracker", sortOrder: 1 });
@@ -1545,33 +1611,58 @@ describe("GoalsPage", () => {
         save.mockRestore();
     });
 
-    it("round-trips a goal project link through the editor and clears it to inherit", async () => {
+    it("saves inherit, none, and an explicit project from the goal project link control", async () => {
         const { data, tracker } = await oneTracker();
         const goal = buildGoalFixture({ id: "goal-linked", trackerId: tracker.id, title: "Ship the release" });
         await data.saveGoals([tracker], [goal], []);
-        await data.savePMState({
-            projects: { "project-1": project() },
-            tasks: {},
-            meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
-        });
+        await data.savePMState(pmState([project()]));
         const { user } = await mount(data, "2026-10-20");
 
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getByRole("radio", { name: "Use tracker project" })).toBeChecked();
+        expect(screen.queryByLabelText("Project")).not.toBeInTheDocument();
+        await user.click(screen.getByRole("radio", { name: "Specific project" }));
         const select = await screen.findByLabelText("Project");
-        await screen.findByRole("option", { name: "Deep Work" });
-        await user.selectOptions(select, "project-1");
+        expect(select).toHaveValue("project-1");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
         await waitFor(async () => expect((await data.loadGoals()).goals[0].projectLink).toEqual({ mode: "project", projectId: "project-1" }));
         expect(within(screen.getByLabelText(goal.title)).getByText("Deep Work")).toBeInTheDocument();
 
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
-        const reopened = await screen.findByLabelText("Project");
-        await waitFor(() => expect(reopened).toHaveValue("project-1"));
-        await user.selectOptions(reopened, "");
+        expect(await screen.findByLabelText("Project")).toHaveValue("project-1");
+        await user.click(screen.getByRole("radio", { name: "No project" }));
+        expect(screen.queryByLabelText("Project")).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].projectLink).toEqual({ mode: "none" }));
+        expect(screen.queryByText("Deep Work")).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        await user.click(await screen.findByRole("radio", { name: "Use tracker project" }));
         await user.click(screen.getByRole("button", { name: "Save goal" }));
         await waitFor(async () => expect((await data.loadGoals()).goals[0].projectLink).toEqual({ mode: "inherit" }));
         expect(screen.queryByText("Deep Work")).not.toBeInTheDocument();
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("keeps a dangling explicit project when an unrelated field is edited", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ id: "goal-broken", trackerId: tracker.id, title: "Broken link", projectLink: { mode: "project", projectId: "project-gone" } });
+        await data.saveGoals([tracker], [goal], []);
+        await data.savePMState(pmState([project()]));
+        const { user } = await mount(data, "2026-10-20");
+
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        expect(screen.getByRole("radio", { name: "Specific project" })).toBeChecked();
+        const select = screen.getByLabelText("Project");
+        expect(select).toHaveValue("project-gone");
+        expect(within(select).getByRole("option", { name: "Linked project is missing" })).toBeInTheDocument();
+        await user.clear(screen.getByLabelText("Name"));
+        await user.type(screen.getByLabelText("Name"), "Still broken");
+        await user.click(screen.getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0]).toMatchObject({
+            title: "Still broken", projectLink: { mode: "project", projectId: "project-gone" },
+        }));
+        expect(within(screen.getByLabelText("Still broken")).getByText("Linked project is missing")).toBeInTheDocument();
     });
 
     it("preserves an explicit none link when editing a goal's title", async () => {

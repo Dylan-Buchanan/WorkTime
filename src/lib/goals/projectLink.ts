@@ -7,6 +7,15 @@ export interface ResolvedGoalProject {
     readonly source: GoalProjectSource;
 }
 
+/** One copy of the dangling-link note, shared by every project display surface. */
+export const MISSING_PROJECT_LABEL = "Linked project is missing";
+
+/** A tracker half-state stored without an id is deliberately project-less. */
+export function resolveTrackerProjectId(tracker: GoalTracker): string | null {
+    const { projectId } = tracker;
+    return typeof projectId === "string" && projectId.trim() !== "" ? projectId : null;
+}
+
 /**
  * The one place a goal's effective project is decided. An explicit link always
  * wins, an inheriting goal reads its tracker's project, and a no-project goal is
@@ -22,13 +31,8 @@ export function resolveGoalProject(goal: Goal, tracker: GoalTracker): ResolvedGo
             }
             return { projectId, source: "override" };
         }
-        case "inherit": {
-            const projectId = tracker.projectId;
-            return {
-                projectId: typeof projectId === "string" && projectId.trim() !== "" ? projectId : null,
-                source: "inherit",
-            };
-        }
+        case "inherit":
+            return { projectId: resolveTrackerProjectId(tracker), source: "inherit" };
         case "none":
             return { projectId: null, source: "none" };
         default: {

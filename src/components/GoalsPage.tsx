@@ -13,6 +13,7 @@ import { isGoalDateKey } from "../lib/goals/factories";
 import { maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
 import { daysUntil, dueState, firstPeriod, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
+import { MISSING_PROJECT_LABEL, resolveGoalProject, resolveTrackerProjectId } from "../lib/goals/projectLink";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
 import type { DeckPlan } from "../lib/goals/deck/types";
 import { initiateBlobDownload } from "../lib/goals/deck/delivery";
@@ -70,6 +71,7 @@ const pageToday = (today?: LocalDateKey): LocalDateKey => {
 export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp }) => {
     const goals = useGoals();
     const habits = useHabits();
+    const pm = usePM();
     const { state, hydrated } = goals;
     const today = pageToday(todayProp);
     const [trackerForm, setTrackerForm] = useState<GoalTracker | "new" | null>(null);
@@ -242,6 +244,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 checkIns: Object.values(state.checkIns),
                 habits: Object.values(habits.state.habits),
                 completions: Object.values(habits.state.completions),
+                projects: pm.state.projects,
                 period,
                 now: new Date(),
             });
@@ -442,7 +445,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                         </div>
                     </section>
                     {!tracker.isArchived && <QuickAdd key={tracker.id} first={allGoals.length === 0} onAdd={(title, status, notes) => {
-                        const row = goals.createGoal({ trackerId: tracker.id, title, notes });
+                        const row = goals.createGoal({ trackerId: tracker.id, title, notes, projectLink: { mode: "inherit" } });
                         if (status !== "active") goals.setGoalLifecycle(row.id, status);
                     }} />}
                     {allGoals.length === 0 && <p className="text-neutral-400">Review what you did, what you’re currently working on, and what you plan next.</p>}
@@ -455,14 +458,14 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                     <DndContext id="goals-list" sensors={sensors} onDragEnd={reorder}>
                         <SortableContext items={visible.map(row => row.id)} strategy={verticalListSortingStrategy}>
                             <div className="space-y-2" aria-label="Goals list">
-                                {visible.map(row => <GoalRow key={row.id} goal={row} consecutiveSlips={slipCount(row.id)} expanded={!!state.ui.expandedGoalIds[row.id]}
+                                {visible.map(row => <GoalRow key={row.id} goal={row} tracker={tracker} consecutiveSlips={slipCount(row.id)} expanded={!!state.ui.expandedGoalIds[row.id]}
                                     cadence={tracker.cadence} period={checkInCurrent} today={today}
                                     onExpand={() => goals.setGoalExpanded(row.id, !state.ui.expandedGoalIds[row.id])}
                                     onEdit={() => setEditingGoal(row.id)} onLifecycle={value => attempt(() => goals.setGoalLifecycle(row.id, value))} />)}
                             </div>
                         </SortableContext>
                     </DndContext>
-                    {edit && edit.trackerId === tracker.id && <GoalEditor key={edit.id} goal={edit} cadence={tracker.cadence} onCancel={() => setEditingGoal(null)} onSave={patch => {
+                    {edit && edit.trackerId === tracker.id && <GoalEditor key={edit.id} goal={edit} tracker={tracker} cadence={tracker.cadence} onCancel={() => setEditingGoal(null)} onSave={patch => {
                         goals.updateGoal(edit.id, patch);
                         setEditingGoal(null);
                     }} />}
@@ -644,8 +647,9 @@ function HabitMetricLine({ metric, period, today, cadence }: {
     </>;
 }
 
-function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onExpand, onEdit, onLifecycle }: {
+function GoalRow({ goal, tracker, consecutiveSlips, expanded, cadence, period, today, onExpand, onEdit, onLifecycle }: {
     goal: Goal;
+    tracker: GoalTracker;
     consecutiveSlips: number;
     expanded: boolean;
     cadence: GoalCadence;
@@ -656,11 +660,15 @@ function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onE
     onLifecycle: (value: Goal["lifecycle"]) => void;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id });
+    // Flag a project only when the goal departs from what the tracker already
+    // says. Ids decide, so an explicit copy of the tracker project stays quiet.
+    const resolvedProjectId = resolveGoalProject(goal, tracker).projectId;
+    const differsFromTracker = resolvedProjectId !== null && resolvedProjectId !== resolveTrackerProjectId(tracker);
     return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className="rounded border border-neutral-800 bg-neutral-900/30 p-3" aria-label={goal.title}>
         <div className="flex flex-wrap items-center gap-3">
             <button className={button} {...attributes} {...listeners} aria-label={`Reorder ${goal.title}`}>⠿</button>
             <h3 className="flex-1 font-medium">{goal.title}</h3>
-            {goal.projectLink.mode === "project" && <ProjectLink projectId={goal.projectLink.projectId} />}
+            {differsFromTracker && <ProjectLink projectId={resolvedProjectId} />}
             <GoalStatusBadge lifecycle={goal.lifecycle} />
             <span data-goals-slot="goal-slip" data-goal-id={goal.id}><GoalSlipBadge consecutiveSlips={consecutiveSlips} /></span>
             <button className={button} onClick={onExpand} aria-expanded={expanded}>{expanded ? "Hide details" : "Show details"}</button>
@@ -675,15 +683,18 @@ function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onE
     </article>;
 }
 
-function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: GoalCadence; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
+function GoalEditor({ goal, tracker, cadence, onSave, onCancel }: { goal: Goal; tracker: GoalTracker; cadence: GoalCadence; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
     const pm = usePM();
     const habits = useHabits();
     const projects = orderedProjects(pm.state.projects);
     const [title, setTitle] = useState(goal.title);
     const [notes, setNotes] = useState(goal.notes);
-    const savedProjectId = goal.projectLink.mode === "project" ? goal.projectLink.projectId : "";
-    const [projectId, setProjectId] = useState(savedProjectId);
-    const missingProject = savedProjectId !== "" && !projects.some(project => project.id === savedProjectId);
+    // The link union is the editor's state. Keeping the whole stored link lets a
+    // dangling override survive an edit to an unrelated field.
+    const [link, setLink] = useState<Goal["projectLink"]>(goal.projectLink);
+    const resolved = resolveGoalProject({ ...goal, projectLink: link }, tracker);
+    const missingProject = link.mode === "project" && !projects.some(project => project.id === link.projectId);
+    const canChooseProject = projects.length > 0 || link.mode === "project";
     const [metric, setMetric] = useState(goal.metric !== null);
     const [label, setLabel] = useState(goal.metric?.label ?? "");
     const [current, setCurrent] = useState(String(goal.metric?.current ?? 0));
@@ -805,9 +816,7 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
                     if (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and finite current and target values.");
                     nextMetric = { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: !sourceTouched && source === goal.metric?.source ? goal.metric.overridePinned : false };
                 }
-                const projectLink: Goal["projectLink"] = projectId === savedProjectId
-                    ? goal.projectLink
-                    : projectId ? { mode: "project", projectId } : { mode: "inherit" };
+                const projectLink: Goal["projectLink"] = link;
                 onSave({ title, notes, projectLink, metric: nextMetric });
             } catch (error) {
                 if (created) {
@@ -823,11 +832,26 @@ function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: 
             <h3 className="font-medium">Edit goal</h3>
             <label className="grid gap-1">Name<input className={control} value={title} onChange={event => setTitle(event.target.value)} /></label>
             <label className="grid gap-1">Goal note<textarea className={control} value={notes} onChange={event => setNotes(event.target.value)} /></label>
-            <label className="grid gap-1">Project<select className={control} aria-label="Project" value={projectId} onChange={event => setProjectId(event.target.value)}>
-                <option value="">No project</option>
-                {missingProject && <option value={savedProjectId}>Missing project</option>}
-                {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-            </select></label>
+            <fieldset className="grid gap-1">
+                <legend>Project link</legend>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "inherit"} onChange={() => setLink({ mode: "inherit" })} />Use tracker project</label>
+                    <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "none"} onChange={() => setLink({ mode: "none" })} />No project</label>
+                    <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "project"} disabled={!canChooseProject}
+                        onChange={() => setLink(previous => previous.mode === "project" ? previous : { mode: "project", projectId: projects[0]?.id ?? "" })} />Specific project</label>
+                </div>
+                {link.mode === "project" && <select className={control} aria-label="Project" value={link.projectId} onChange={event => setLink({ mode: "project", projectId: event.target.value })}>
+                    {missingProject && <option value={link.projectId}>{MISSING_PROJECT_LABEL}</option>}
+                    {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>}
+                <p className="text-xs text-neutral-500" data-goals-slot="goal-project-summary">
+                    {resolved.projectId === null
+                        ? link.mode === "inherit" ? "Inherits the tracker’s project, which is not set." : "No project."
+                        : link.mode === "inherit"
+                            ? <>Inherits <ProjectLink projectId={resolved.projectId} /> from the tracker.</>
+                            : <>Links to <ProjectLink projectId={resolved.projectId} />.</>}
+                </p>
+            </fieldset>
             <label className="flex items-center gap-2"><input type="checkbox" checked={metric} onChange={event => setMetric(event.target.checked)} />Track one metric</label>
             {metric && <fieldset className="flex flex-wrap gap-3"><legend className="mb-2">Metric {goal.metric && <MetricBadge metric={goal.metric} />}</legend>
                 <label className="grid gap-1">Metric label<input className={control} value={label} onChange={event => setLabel(event.target.value)} /></label>

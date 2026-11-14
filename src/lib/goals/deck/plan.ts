@@ -1,4 +1,4 @@
-import type { Goal, GoalCheckIn, GoalTracker, Habit, HabitCompletion } from "../../../state/types";
+import type { Goal, GoalCheckIn, GoalTracker, Habit, HabitCompletion, Project } from "../../../state/types";
 import type { LocalDateKey } from "../../todos/types";
 import { isGoalDateKey } from "../factories";
 import type { GoalPeriod } from "../periods";
@@ -14,6 +14,7 @@ import {
     unmetPlannedItems,
 } from "../slips";
 import { localDateKey } from "../../todos/calendar";
+import { MISSING_PROJECT_LABEL, resolveGoalProject, resolveTrackerProjectId } from "../projectLink";
 import {
     DECK_SLIDE_BASE_SECONDS,
     DECK_SLIDE_ORDER,
@@ -50,9 +51,39 @@ export interface DeckPlanInput {
     completions?: readonly HabitCompletion[];
     evidenceTitlesByGoal?: Readonly<Record<string, readonly string[]>>;
     localDateOf?: LifecycleDateProjection;
+    /** PM project registry used only to resolve display names; ids are compared unchanged. */
+    projects?: Readonly<Record<string, Project>>;
 }
 
 export const MISSING_PROGRESS_DID = "No progress recorded this period";
+
+/** The quiet title-slide note; the count is always greater than zero when shown. */
+export function otherProjectsGoalLabel(count: number): string {
+    return `+${count} ${count === 1 ? "goal" : "goals"} in other projects`;
+}
+
+function projectNameOf(
+    projectId: string | null,
+    projects: Readonly<Record<string, Project>>,
+): string | null {
+    if (projectId === null) return null;
+    return projects[projectId]?.name ?? null;
+}
+
+/**
+ * Deviation is an id comparison, but only a goal that resolves to a project is
+ * labelled: inheriting and explicitly project-less goals stay quiet. A dangling
+ * override keeps its deviation and reads as a missing project, never a raw id.
+ */
+function recapProjectLabel(
+    projectId: string | null,
+    trackerProjectId: string | null,
+    projects: Readonly<Record<string, Project>>,
+): string | null {
+    if (projectId === null || projectId === trackerProjectId) return null;
+    return projects[projectId]?.name ?? MISSING_PROJECT_LABEL;
+}
+
 const MISSING_COMMITMENT_TEXT = "No commitments set for the next period.";
 const STATUS_LABELS: Readonly<Record<GoalCheckIn["statusPill"], string>> = {
     "on-track": "on track",
@@ -131,7 +162,12 @@ function appendixEntryFromRecap(recap: DeckRecapSlide): DeckAppendixEntry {
     };
 }
 
-function buildTitleSlide(tracker: GoalTracker, period: GoalPeriod): DeckTitleSlide {
+function buildTitleSlide(
+    tracker: GoalTracker,
+    period: GoalPeriod,
+    projectName: string | null,
+    otherProjectsGoalCount: number,
+): DeckTitleSlide {
     const label = periodLabel(period);
     const range = periodRangeLabel(period);
     return {
@@ -147,6 +183,8 @@ function buildTitleSlide(tracker: GoalTracker, period: GoalPeriod): DeckTitleSli
         purpose: tracker.purpose,
         periodLabel: label,
         periodRangeLabel: range,
+        projectName,
+        otherProjectsGoalCount,
     };
 }
 
@@ -157,6 +195,7 @@ function buildRecapSlide(
     period: GoalPeriod,
     achievedInPeriod: boolean,
     evidenceTaskTitles: string[],
+    projectLabel: string | null,
     input: DeckPlanInput,
     today: LocalDateKey,
 ): DeckRecapSlide {
@@ -192,6 +231,7 @@ function buildRecapSlide(
         isHidden: false,
         goalId: goal.id,
         goalTitle: goal.title,
+        projectLabel,
         placement,
         statusPill,
         did: current ? current.did : MISSING_PROGRESS_DID,
@@ -326,6 +366,9 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
         goal.trackerId === input.tracker.id &&
         isGoalIncludedInPeriod(goal, input.period, localDateOf)));
     const history = normalizeCheckInHistory(input.checkIns);
+    const projects = input.projects ?? {};
+    const trackerProjectId = resolveTrackerProjectId(input.tracker);
+    let otherProjectsGoalCount = 0;
 
     const recaps: DeckRecapSlide[] = [];
     const missItems: DeckMissItem[] = [];
@@ -338,6 +381,8 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
             row.goalId === goal.id && row.periodStart <= input.period.periodStart);
         const current = rows.find(row => row.periodStart === input.period.periodStart) ?? null;
         const previous = current ? previousStoredRow(rows, current) : null;
+        const goalProjectId = resolveGoalProject(goal, input.tracker).projectId;
+        if (goalProjectId !== null && goalProjectId !== trackerProjectId) otherProjectsGoalCount += 1;
 
         recaps.push(buildRecapSlide(
             goal,
@@ -346,6 +391,7 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
             input.period,
             isAchievedInPeriod(goal, input.period, localDateOf),
             evidenceTitlesFor(goal.id, input.evidenceTitlesByGoal),
+            recapProjectLabel(goalProjectId, trackerProjectId, projects),
             input,
             today,
         ));
@@ -379,7 +425,12 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
     }
 
     const slides: DeckSlide[] = [
-        buildTitleSlide(input.tracker, input.period),
+        buildTitleSlide(
+            input.tracker,
+            input.period,
+            projectNameOf(trackerProjectId, projects),
+            otherProjectsGoalCount,
+        ),
         ...recaps,
         buildMissesSlide(missItems),
         buildNextPlansSlide(nextPlanItems),
@@ -430,9 +481,19 @@ export function countDeckWords(slide: DeckSlide): number {
     let total = words(slide.title, slide.notes);
     switch (slide.kind) {
         case "title":
-            return total;
+            return total + words(
+                slide.projectName,
+                slide.otherProjectsGoalCount > 0 ? otherProjectsGoalLabel(slide.otherProjectsGoalCount) : null,
+            );
         case "recap":
-            total += words(slide.did, slide.current, slide.missReason, slide.metric?.label, slide.metric?.unit);
+            total += words(
+                slide.did,
+                slide.current,
+                slide.missReason,
+                slide.metric?.label,
+                slide.metric?.unit,
+                slide.projectLabel,
+            );
             for (const item of slide.planned) total += words(item.text);
             for (const title of slide.evidenceTaskTitles) total += words(title);
             return total;

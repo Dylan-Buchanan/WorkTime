@@ -36,6 +36,8 @@ export interface DeckTitleSlide extends DeckSlideBase<"title"> {
     purpose: string;
     periodLabel: string;
     periodRangeLabel: string;
+    projectName: string | null;
+    otherProjectsGoalCount: number;
 }
 export interface DeckRecapItem {
     text: string;
@@ -44,6 +46,8 @@ export interface DeckRecapItem {
 export interface DeckRecapSlide extends DeckSlideBase<"recap"> {
     goalId: string;
     goalTitle: string;
+    /** Only a goal that deviates from the tracker project carries a label. */
+    projectLabel: string | null;
     placement: "body" | "appendix";
     statusPill: GoalCheckIn["statusPill"];
     did: string;

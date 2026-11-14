@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest";
-import type { Goal } from "../../state/types";
+import type { Goal, GoalTracker } from "../../state/types";
 import { buildGoalFixture, buildGoalTrackerFixture } from "./testFixtures";
-import { resolveGoalProject } from "./projectLink";
+import { resolveGoalProject, resolveTrackerProjectId } from "./projectLink";
+
+describe("resolveTrackerProjectId", () => {
+    it("returns the tracker project id", () => {
+        expect(resolveTrackerProjectId(buildGoalTrackerFixture({ projectId: "project-tracker" })))
+            .toBe("project-tracker");
+    });
+
+    it("treats a missing or blank id as project-less", () => {
+        expect(resolveTrackerProjectId(buildGoalTrackerFixture({ projectId: null }))).toBeNull();
+        expect(resolveTrackerProjectId({ ...buildGoalTrackerFixture(), projectId: undefined } as unknown as GoalTracker))
+            .toBeNull();
+        expect(resolveTrackerProjectId({ ...buildGoalTrackerFixture(), projectId: "   " } as unknown as GoalTracker))
+            .toBeNull();
+    });
+});
 
 describe("resolveGoalProject", () => {
     it("returns an explicit goal project with source override", () => {

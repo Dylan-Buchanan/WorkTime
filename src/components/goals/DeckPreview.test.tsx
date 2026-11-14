@@ -16,6 +16,7 @@ import {
     buildGoalTrackerFixture,
 } from "../../lib/goals/testFixtures";
 import type { LocalDateKey } from "../../lib/todos/types";
+import type { Project } from "../../state/types";
 import { setAgentApiKey } from "../../lib/agent/apiKey";
 import * as transport from "../../lib/agent/llmTransport";
 import { buildDeckPolishContext } from "../../lib/agent/deckPolishWorkflow";
@@ -132,8 +133,22 @@ function buildPlan(): DeckPlan {
     });
 }
 
-function buildThinPlan(): DeckPlan {
-    const tracker = buildGoalTrackerFixture({ id: "tracker-thin", name: "Thin", purpose: "" });
+function project(id: string, name: string, sortOrder = 0): Project {
+    return {
+        id,
+        name,
+        color: "#6366F1",
+        workableStart: "09:00",
+        workableEnd: "17:00",
+        workableDays: [1, 2, 3, 4, 5],
+        isArchived: false,
+        sortOrder,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+    };
+}
+
+function buildThinPlan(): DeckPlan {    const tracker = buildGoalTrackerFixture({ id: "tracker-thin", name: "Thin", purpose: "" });
     const goal = buildGoalFixture({
         id: "goal-thin",
         trackerId: tracker.id,
@@ -550,6 +565,56 @@ describe("DeckPreview", () => {
         expect(screen.getByTestId("deck-estimate-summary")).toHaveTextContent(
             `${plan.estimate.visibleSlides} visible slides`,
         );
+    });
+
+    it("renders the tracker project, the deviation count, and deviation-only recap labels", () => {
+        const work = project("project-work", "Deep Work");
+        const ops = project("project-ops", "Ops", 1);
+        const tracker = buildGoalTrackerFixture({
+            id: "tracker-projects",
+            name: "Project deck",
+            purpose: "",
+            projectId: work.id,
+        });
+        const goals = [
+            buildGoalFixture({ id: "goal-inherit", trackerId: tracker.id, title: "Inherits", sortOrder: 0 }),
+            buildGoalFixture({
+                id: "goal-ops",
+                trackerId: tracker.id,
+                title: "Ops goal",
+                sortOrder: 1,
+                projectLink: { mode: "project", projectId: ops.id },
+            }),
+            buildGoalFixture({
+                id: "goal-missing",
+                trackerId: tracker.id,
+                title: "Dangling goal",
+                sortOrder: 2,
+                projectLink: { mode: "project", projectId: "project-deleted" },
+            }),
+        ];
+        const plan = buildDeckPlan({
+            tracker,
+            goals,
+            checkIns: [],
+            period: PERIOD,
+            now: NOW,
+            localDateOf,
+            projects: { [work.id]: work, [ops.id]: ops },
+        });
+
+        renderPreview(plan);
+
+        const title = screen.getByRole("article", { name: "Slide: Project deck" });
+        expect(within(title).getByText("Deep Work")).toBeInTheDocument();
+        expect(within(title).getByText("+2 goals in other projects")).toBeInTheDocument();
+
+        expect(within(screen.getByRole("article", { name: "Slide: Inherits" })).queryByText("Ops"))
+            .not.toBeInTheDocument();
+        expect(within(screen.getByRole("article", { name: "Slide: Ops goal" })).getByText("Ops"))
+            .toBeInTheDocument();
+        expect(within(screen.getByRole("article", { name: "Slide: Dangling goal" })).getByText("Linked project is missing"))
+            .toBeInTheDocument();
     });
 
     it("hides and shows a slide, updates the estimate, and retains edited hidden content", async () => {

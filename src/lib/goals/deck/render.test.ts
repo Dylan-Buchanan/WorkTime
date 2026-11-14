@@ -37,8 +37,8 @@ function fixture(): DeckPlan {
     });
     const common = { notes: "Edited speaker notes", suggestedSeconds: 9999, isHidden: false };
     const slides: DeckSlide[] = [
-        { ...common, id: "title", kind: "title", title: "Edited cover", trackerName: "Edited tracker", purpose: "Edited purpose", periodLabel: "Edited period", periodRangeLabel: "Edited range" },
-        { ...common, id: "recap:g1", kind: "recap", title: "Edited recap", goalId: "g1", goalTitle: "Edited goal", placement: "body", statusPill: "at-risk", did: "Edited did", current: "Edited current", planned: [{ text: "Edited planned", dueDate: "2026-10-30" }], missReason: "Edited miss reason", metric: { label: "Sessions", current: 3, target: 8, unit: "visits", source: "manual", overridePinned: false }, habitStreak: null, slipBadge: true, slipCount: 2, achievedInPeriod: true, evidenceTaskTitles: ["Edited evidence"] },
+        { ...common, id: "title", kind: "title", title: "Edited cover", trackerName: "Edited tracker", purpose: "Edited purpose", periodLabel: "Edited period", periodRangeLabel: "Edited range", projectName: null, otherProjectsGoalCount: 0 },
+        { ...common, id: "recap:g1", kind: "recap", title: "Edited recap", goalId: "g1", goalTitle: "Edited goal", projectLabel: null, placement: "body", statusPill: "at-risk", did: "Edited did", current: "Edited current", planned: [{ text: "Edited planned", dueDate: "2026-10-30" }], missReason: "Edited miss reason", metric: { label: "Sessions", current: 3, target: 8, unit: "visits", source: "manual", overridePinned: false }, habitStreak: null, slipBadge: true, slipCount: 2, achievedInPeriod: true, evidenceTaskTitles: ["Edited evidence"] },
         { ...common, id: "misses", kind: "misses", title: "Edited misses", items: [{ goalId: "g1", goalTitle: "Miss goal", text: "Edited miss", dueDate: "2026-10-17", reason: "Edited reason" }] },
         { ...common, id: "next-plans", kind: "next-plans", title: "Edited next", items: [{ goalId: "g1", goalTitle: "Plan goal", text: "Edited next plan", dueDate: "2026-11-14" }] },
         { ...common, id: "progress", kind: "progress", title: "Edited progress", series: [series, { ...series, goalId: "g2", points: series.points.slice(0, 1) }, { ...series, goalId: "g3", points: [] }, { ...series, goalId: "g4", goalTitle: "Second trend" }] },
@@ -115,6 +115,33 @@ describe("renderDeck", () => {
         await renderDeck(plan);
         if (streak >= 2) expect(copy(1)).toContain(`hit target ${streak} periods running`);
         else expect(copy(1)).not.toContain("periods running");
+    });
+
+    it("renders the tracker project, the quiet deviation count, and deviation-only recap labels", async () => {
+        const plan = fixture();
+        const title = plan.slides[0];
+        const recapSlide = plan.slides[1];
+        if (title.kind !== "title" || recapSlide.kind !== "recap") throw new Error("Fixture slides missing");
+        title.projectName = "Deep Work";
+        title.otherProjectsGoalCount = 2;
+        recapSlide.projectLabel = "Ops";
+
+        const result = await renderDeck(plan);
+
+        expect(copy(0)).toContain("Deep Work");
+        expect(copy(0)).toContain("+2 goals in other projects");
+        expect(copy(1)).toContain("Ops");
+        expect(result.fileName).toBe(deckFileName(plan));
+        expect(mock.presentation?.title).toBe(plan.trackerName);
+        expect(mock.presentation?.subject).toBe("Goals period review");
+        expect(mock.presentation?.author).toBe("WorkTime");
+    });
+
+    it("omits the project lines for a deck with no project context", async () => {
+        await renderDeck(fixture());
+
+        expect(copy(0)).not.toContain("goals in other projects");
+        expect(copy(1)).not.toContain("Linked project is missing");
     });
 
     it("renders matching cover and recap names exactly once across text runs", async () => {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { GoalCheckIn, Habit, HabitCompletion } from "../../../state/types";
+import type { GoalCheckIn, Habit, HabitCompletion, Project } from "../../../state/types";
 import type { LocalDateKey } from "../../todos/types";
 import type { GoalPeriod } from "../periods";
 import { goalGrid, periodAt } from "../periods";
+import { MISSING_PROJECT_LABEL } from "../projectLink";
 import type { GoalCheckInFixtureOverrides, GoalFixtureOverrides } from "../testFixtures";
 import {
     buildGoalCheckInFixture,
@@ -21,6 +22,7 @@ import {
     moveGoalToBody,
     moveSlide,
     metricTextOf,
+    otherProjectsGoalLabel,
     refreshDeckDerivations,
     setSlideHidden,
     suggestedSecondsForSlide,
@@ -628,6 +630,8 @@ describe("deck talk-length estimate", () => {
             purpose: "",
             periodLabel: "",
             periodRangeLabel: "",
+            projectName: null,
+            otherProjectsGoalCount: 0,
         };
         expect(countDeckWords(titleSlide)).toBe(5);
         expect(suggestedSecondsForSlide(titleSlide)).toBe(
@@ -711,6 +715,8 @@ describe("deck talk-length estimate", () => {
                 purpose: "",
                 periodLabel: "October 2026",
                 periodRangeLabel: "Oct 18 - Oct 31, 2026",
+                projectName: null,
+                otherProjectsGoalCount: 0,
             };
             const missesSlide: DeckMissesSlide = {
                 id: "misses",
@@ -1002,5 +1008,183 @@ describe("deck editing helpers", () => {
 
         expect(snapshot(plan)).toEqual(planBefore);
         expect(snapshot(checkIns)).toEqual(checkInsBefore);
+    });
+});
+
+describe("deck project context", () => {
+    function project(id: string, name: string, sortOrder = 0): Project {
+        return {
+            id,
+            name,
+            color: "#6366F1",
+            workableStart: "09:00",
+            workableEnd: "17:00",
+            workableDays: [1, 2, 3, 4, 5],
+            isArchived: false,
+            sortOrder,
+            createdAt: "2026-10-01T00:00:00.000Z",
+            updatedAt: "2026-10-01T00:00:00.000Z",
+        };
+    }
+
+    function projectMap(...rows: Project[]): Record<string, Project> {
+        return Object.fromEntries(rows.map(row => [row.id, row]));
+    }
+
+    const work = project("project-work", "Work");
+    const ops = project("project-ops", "Ops", 1);
+    const research = project("project-research", "Research", 2);
+
+    it("names the tracker project and stays quiet when every goal inherits", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const goals = [
+            goal("g1", { title: "Alpha", sortOrder: 0 }),
+            goal("g2", { title: "Beta", sortOrder: 1 }),
+        ];
+
+        const plan = buildPlan({ tracker, goals, projects: projectMap(work) });
+        const title = slide(plan, "title") as DeckTitleSlide;
+
+        expect(title.projectName).toBe("Work");
+        expect(title.otherProjectsGoalCount).toBe(0);
+        expect(recaps(plan).map(row => row.projectLabel)).toEqual([null, null]);
+    });
+
+    it("counts and labels only goals that deviate to another project", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const goals = [
+            goal("g1", { title: "Inherits", sortOrder: 0 }),
+            goal("g2", { title: "Ops goal", sortOrder: 1, projectLink: { mode: "project", projectId: ops.id } }),
+            goal("g3", {
+                title: "Research goal",
+                sortOrder: 2,
+                projectLink: { mode: "project", projectId: research.id },
+            }),
+            goal("g4", {
+                title: "Same as tracker",
+                sortOrder: 3,
+                projectLink: { mode: "project", projectId: work.id },
+            }),
+        ];
+
+        const plan = buildPlan({ tracker, goals, projects: projectMap(work, ops, research) });
+        const title = slide(plan, "title") as DeckTitleSlide;
+
+        expect(title.projectName).toBe("Work");
+        expect(title.otherProjectsGoalCount).toBe(2);
+        expect(recaps(plan).map(row => row.projectLabel)).toEqual([null, "Ops", "Research", null]);
+    });
+
+    it("shows only the deviation count for a project-less tracker", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: null });
+        const goals = [
+            goal("g1", { title: "No project", sortOrder: 0, projectLink: { mode: "none" } }),
+            goal("g2", { title: "Ops goal", sortOrder: 1, projectLink: { mode: "project", projectId: ops.id } }),
+        ];
+
+        const plan = buildPlan({ tracker, goals, projects: projectMap(ops) });
+        const title = slide(plan, "title") as DeckTitleSlide;
+
+        expect(title.projectName).toBeNull();
+        expect(title.otherProjectsGoalCount).toBe(1);
+        expect(recaps(plan).map(row => row.projectLabel)).toEqual([null, "Ops"]);
+    });
+
+    it("stays quiet for a project-less tracker with no deviations", () => {
+        const plan = buildPlan({ goals: [goal("g1")] });
+        const title = slide(plan, "title") as DeckTitleSlide;
+
+        expect(title.projectName).toBeNull();
+        expect(title.otherProjectsGoalCount).toBe(0);
+        expect(recap(plan, "g1").projectLabel).toBeNull();
+    });
+
+    it("does not count an explicitly project-less goal under a project tracker", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const plan = buildPlan({
+            tracker,
+            goals: [goal("g1", { projectLink: { mode: "none" } })],
+            projects: projectMap(work),
+        });
+
+        expect((slide(plan, "title") as DeckTitleSlide).otherProjectsGoalCount).toBe(0);
+        expect(recap(plan, "g1").projectLabel).toBeNull();
+    });
+
+    it("labels a dangling override with the shared missing-project copy", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const goals = [
+            goal("g1", {
+                title: "Dangling goal",
+                projectLink: { mode: "project", projectId: "project-deleted" },
+            }),
+        ];
+
+        const plan = buildPlan({ tracker, goals, projects: projectMap(work) });
+
+        expect((slide(plan, "title") as DeckTitleSlide).otherProjectsGoalCount).toBe(1);
+        expect(recap(plan, "g1").projectLabel).toBe(MISSING_PROJECT_LABEL);
+        expect(recap(plan, "g1").projectLabel).not.toContain("project-deleted");
+    });
+
+    it("retains project context through refreshDeckDerivations without mutating the input", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const plan = buildPlan({
+            tracker,
+            goals: [goal("g1", {
+                title: "Ops goal",
+                projectLink: { mode: "project", projectId: ops.id },
+            })],
+            projects: projectMap(work, ops),
+        });
+        const before = snapshot(plan);
+
+        const refreshed = refreshDeckDerivations(plan);
+        const title = slide(refreshed, "title") as DeckTitleSlide;
+
+        expect(title.projectName).toBe("Work");
+        expect(title.otherProjectsGoalCount).toBe(1);
+        expect(recap(refreshed, "g1").projectLabel).toBe("Ops");
+        expect(refreshed.estimate.targetSeconds).toBe(DECK_TARGET_SECONDS);
+        expect(snapshot(plan)).toEqual(before);
+    });
+
+    it("counts project labels in words and in suggested seconds", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const longOps = project("project-long-ops", "Operations and customer support for the whole quarter", 3);
+        const noProject = buildPlan({ goals: [goal("g1")] });
+        const plain = buildPlan({ tracker, goals: [goal("g1")], projects: projectMap(work, longOps) });
+        const labelled = buildPlan({
+            tracker,
+            goals: [goal("g1", { projectLink: { mode: "project", projectId: longOps.id } })],
+            projects: projectMap(work, longOps),
+        });
+        const noProjectTitle = slide(noProject, "title") as DeckTitleSlide;
+        const plainTitle = slide(plain, "title") as DeckTitleSlide;
+        const labelledTitle = slide(labelled, "title") as DeckTitleSlide;
+
+        expect(countDeckWords(plainTitle) - countDeckWords(noProjectTitle))
+            .toBe("Work".split(/\s+/).length);
+        expect(countDeckWords(labelledTitle) - countDeckWords(plainTitle))
+            .toBe(otherProjectsGoalLabel(1).split(/\s+/).length);
+        expect(countDeckWords(recap(labelled, "g1")) - countDeckWords(recap(plain, "g1")))
+            .toBe(longOps.name.split(/\s+/).length);
+        expect(suggestedSecondsForSlide(labelledTitle))
+            .toBeGreaterThan(suggestedSecondsForSlide(plainTitle));
+        expect(suggestedSecondsForSlide(recap(labelled, "g1")))
+            .toBeGreaterThan(suggestedSecondsForSlide(recap(plain, "g1")));
+        expect(labelled.estimate.targetSeconds).toBe(DECK_TARGET_SECONDS);
+        expect(labelled.estimate.overTarget).toBe(labelled.estimate.totalSeconds > DECK_TARGET_SECONDS);
+    });
+
+    it("adds no thin warnings for project context", () => {
+        const tracker = buildGoalTrackerFixture({ projectId: work.id });
+        const goals = [goal("g1", { projectLink: { mode: "project", projectId: "project-deleted" } })];
+
+        const withProjects = buildPlan({ tracker, goals, projects: projectMap(work) });
+        const withoutProjects = buildPlan({ tracker, goals });
+
+        expect(withProjects.warnings).toEqual(withoutProjects.warnings);
+        expect(findThinWarnings(withProjects)).toEqual(withProjects.warnings);
     });
 });

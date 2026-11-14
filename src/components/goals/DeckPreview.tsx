@@ -23,6 +23,7 @@ import {
     moveGoalToAppendix,
     moveGoalToBody,
     moveSlide,
+    otherProjectsGoalLabel,
     refreshDeckDerivations,
     setSlideHidden,
 } from "../../lib/goals/deck/plan";
@@ -534,6 +535,10 @@ export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExpor
             case "title":
                 return <div className="space-y-2">
                     <p className="text-sm font-medium text-neutral-700">{slide.trackerName}</p>
+                    {slide.projectName !== null && <p className="text-sm text-neutral-600">{slide.projectName}</p>}
+                    {slide.otherProjectsGoalCount > 0 && <p className="text-xs text-neutral-500">
+                        {otherProjectsGoalLabel(slide.otherProjectsGoalCount)}
+                    </p>}
                     <p className="text-sm text-neutral-600">{slide.periodLabel} · {slide.periodRangeLabel}</p>
                     <label className="block text-xs font-medium text-neutral-600">
                         Purpose
@@ -548,6 +553,7 @@ export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExpor
                 </div>;
             case "recap":
                 return <div className="space-y-3">
+                    {slide.projectLabel !== null && <p className="text-xs text-neutral-500">{slide.projectLabel}</p>}
                     <div className="flex flex-wrap gap-2 text-xs">
                         <span className="rounded-full border border-neutral-300 bg-white px-2 py-0.5">
                             {STATUS_LABELS[slide.statusPill]}

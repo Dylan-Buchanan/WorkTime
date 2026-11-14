@@ -1,7 +1,7 @@
 import type PptxGenJS from "pptxgenjs";
 import { buildSeriesSvg, rasterizeSvgToPng } from "./chart";
 import { sanitizeDownloadFileName } from "./delivery";
-import { metricTextOf, suggestedSecondsForSlide } from "./plan";
+import { metricTextOf, otherProjectsGoalLabel, suggestedSecondsForSlide } from "./plan";
 import type { DeckPlan, DeckRecapSlide, DeckSlide } from "./types";
 
 const STATUS = { "on-track": "On track", "at-risk": "At risk", blocked: "Blocked" };
@@ -36,6 +36,7 @@ function recap(slide: Slide, source: DeckRecapSlide) {
         margin: 5, align: "center",
     });
     const cues = [
+        ...(source.projectLabel ? [source.projectLabel] : []),
         ...(source.achievedInPeriod ? ["Achieved this period"] : []),
         ...(source.slipBadge ? [`${source.slipCount} consecutive slips`] : []),
         ...(source.habitStreak !== null && source.habitStreak >= 2 ? [`hit target ${source.habitStreak} periods running`] : []),
@@ -55,13 +56,24 @@ function recap(slide: Slide, source: DeckRecapSlide) {
 
 async function renderSlide(slide: Slide, source: DeckSlide) {
     switch (source.kind) {
-        case "title":
+        case "title": {
+            let cursor = 1.8;
             if (source.trackerName !== source.title) {
-                text(slide, source.trackerName, 0.65, 1.8, 12.03, 0.75, 32);
+                text(slide, source.trackerName, 0.65, cursor, 12.03, 0.7, 32);
+                cursor += 0.7;
             }
-            text(slide, source.purpose, 0.65, 2.95, 12.03, 1.6, 28);
+            if (source.projectName !== null) {
+                text(slide, source.projectName, 0.65, cursor, 12.03, 0.5, 26);
+                cursor += 0.55;
+            }
+            if (source.otherProjectsGoalCount > 0) {
+                text(slide, otherProjectsGoalLabel(source.otherProjectsGoalCount), 0.65, cursor, 12.03, 0.4, 20);
+                cursor += 0.45;
+            }
+            text(slide, source.purpose, 0.65, Math.max(cursor, 2.95), 12.03, 1.6, 28);
             text(slide, `${source.periodLabel}\n${source.periodRangeLabel}`, 0.65, 5.3, 12.03, 1.1, 24);
             break;
+        }
         case "recap": recap(slide, source); break;
         case "misses":
             bullets(slide, source.items.length ? source.items.map(item =>
