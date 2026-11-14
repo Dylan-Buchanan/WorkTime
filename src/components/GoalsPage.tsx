@@ -7,7 +7,7 @@ import { useHabits } from "../state/HabitContext";
 import { usePM } from "../state/ProjectManagerContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { HABIT_COLORS } from "../lib/habits";
-import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency, Weekday } from "../state/types";
+import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency, Project, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
 import { maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
@@ -28,6 +28,7 @@ import { GoalDueNudge } from "./goals/GoalDueNudge";
 import { GoalSetActions } from "./goals/GoalSetActions";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
+import { ProjectLink } from "./goals/ProjectLink";
 import { TrackerDueBadge } from "./goals/TrackerDueBadge";
 import { TrackerRail } from "./goals/TrackerRail";
 
@@ -53,6 +54,8 @@ const habitUnitSuggestion = (frequency: HabitFrequency) => HABIT_UNIT_WORDS[freq
 const cadenceHoldMessage = (max: number, frequency: HabitFrequency) => `This cadence can hold at most ${max} ${habitUnitWord(max, frequency)}.`;
 const orderedHabits = (habits: Record<string, Habit>) => Object.values(habits)
     .sort((left, right) => left.position - right.position || left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+const orderedProjects = (projects: Record<string, Project>) => Object.values(projects)
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 /** Sentinel option values; neither can collide with a generated habit id. */
 const CREATE_HABIT = "__create-habit__";
 const DRAFT_HABIT = "__draft-habit__";
@@ -339,6 +342,10 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                     <span className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1 text-xs text-neutral-300">{tracker.cadence.kind === "monthly-weekday"
                                         ? `Monthly on ${weekdays[tracker.cadence.weekday]}`
                                         : `Every ${tracker.cadence.intervalWeeks} ${tracker.cadence.intervalWeeks === 1 ? "week" : "weeks"} on ${weekdays[tracker.cadence.weekday]}`}</span>
+                                    {tracker.projectId !== null && <span data-goals-slot="tracker-project" data-tracker-id={tracker.id}
+                                        className="rounded-full border border-neutral-700 bg-neutral-900/60 px-2.5 py-1">
+                                        <ProjectLink projectId={tracker.projectId} />
+                                    </span>}
                                     <div data-goals-slot="tracker-due" data-tracker-id={tracker.id}>
                                         <TrackerDueBadge due={dueTracker !== null} periodLabel={dueTracker ? periodLabel(dueTracker.mostRecentCompleted) : null} />
                                     </div>
@@ -519,8 +526,11 @@ function TrackerDrawer({ children, triggerRef, onClose }: React.PropsWithChildre
 }
 
 function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | null; onSave: (input: NewGoalTrackerInput) => void; onCancel: () => void }) {
+    const pm = usePM();
+    const projects = orderedProjects(pm.state.projects);
     const [name, setName] = useState(tracker?.name ?? "");
     const [purpose, setPurpose] = useState(tracker?.purpose ?? "");
+    const [projectId, setProjectId] = useState(tracker?.projectId ?? "");
     const [kind, setKind] = useState<GoalCadence["kind"]>(tracker?.cadence.kind ?? "every-n-weeks");
     const [weekday, setWeekday] = useState<Weekday>(tracker?.cadence.weekday ?? 0);
     const [interval, setInterval] = useState(String(tracker?.cadence.kind === "every-n-weeks" ? tracker.cadence.intervalWeeks : 1));
@@ -532,11 +542,15 @@ function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | nul
             if (!name.trim()) throw new RangeError("Give this tracker a name.");
             if (/[\r\n]/.test(purpose)) throw new RangeError("Purpose must be one line.");
             const cadence = normalizeGoalCadence(kind === "monthly-weekday" ? { kind, weekday } : { kind, weekday, intervalWeeks: Number(interval) });
-            onSave({ name, purpose, cadence, color });
+            onSave({ name, purpose, cadence, color, projectId: projectId || null });
         } catch (error) { setError(errorMessage(error)); }
     }}>
         <label className="grid gap-1">Tracker name<input className={control} autoFocus value={name} onChange={event => setName(event.target.value)} /></label>
         <label className="grid gap-1">Purpose<input className={control} value={purpose} onChange={event => setPurpose(event.target.value)} /></label>
+        <label className="grid gap-1">Project<select className={control} aria-label="Project" value={projectId} onChange={event => setProjectId(event.target.value)}>
+            <option value="">No project</option>
+            {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select></label>
         <label className="grid gap-1">Cadence<select className={control} value={kind} onChange={event => setKind(event.target.value as typeof kind)}>
             <option value="every-n-weeks">Every N weeks</option><option value="monthly-weekday">Monthly weekday</option>
         </select></label>
@@ -545,6 +559,7 @@ function TrackerForm({ tracker, onSave, onCancel }: { tracker: GoalTracker | nul
             {weekdays.map((day, index) => <option key={day} value={index}>{day}</option>)}
         </select></label>
         <label className="grid gap-1">Color<input type="color" value={color} onChange={event => setColor(event.target.value)} /></label>
+        <p className="w-full text-xs text-neutral-500">Goals inherit this tracker’s project unless they override it.</p>
         {kind === "monthly-weekday" && <p className="w-full text-neutral-400">First selected weekday of each month; when the 1st is Monday or Tuesday, use the matching weekday on or before the 1st.</p>}
         {error && <p role="alert" className="w-full text-red-300">{error}</p>}
         <button className={primary} type="submit">{tracker ? "Save tracker" : "Create tracker"}</button>
@@ -581,14 +596,6 @@ function QuickAdd({ first, onAdd }: { first: boolean; onAdd: (title: string, sta
 function MetricBadge({ metric }: { metric: GoalMetric }) {
     const source = metric.source === "manual" ? "Manual" : metric.source === "habit" ? "Habit" : "Auto";
     return <span className="text-neutral-400">{source}{metric.source !== "habit" && metric.overridePinned ? " · Override" : ""}</span>;
-}
-
-function GoalProjectLink({ projectId }: { projectId: string }) {
-    const pm = usePM();
-    const project = pm.state.projects[projectId];
-    return project
-        ? <span className="text-xs text-neutral-400">{project.name}</span>
-        : <span className="text-xs text-neutral-500">Linked project is missing</span>;
 }
 
 function GoalMetricLine({ metric, period, today, cadence }: {
@@ -653,7 +660,7 @@ function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onE
         <div className="flex flex-wrap items-center gap-3">
             <button className={button} {...attributes} {...listeners} aria-label={`Reorder ${goal.title}`}>⠿</button>
             <h3 className="flex-1 font-medium">{goal.title}</h3>
-            {goal.projectLink.mode === "project" && <GoalProjectLink projectId={goal.projectLink.projectId} />}
+            {goal.projectLink.mode === "project" && <ProjectLink projectId={goal.projectLink.projectId} />}
             <GoalStatusBadge lifecycle={goal.lifecycle} />
             <span data-goals-slot="goal-slip" data-goal-id={goal.id}><GoalSlipBadge consecutiveSlips={consecutiveSlips} /></span>
             <button className={button} onClick={onExpand} aria-expanded={expanded}>{expanded ? "Hide details" : "Show details"}</button>
@@ -671,8 +678,7 @@ function GoalRow({ goal, consecutiveSlips, expanded, cadence, period, today, onE
 function GoalEditor({ goal, cadence, onSave, onCancel }: { goal: Goal; cadence: GoalCadence; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
     const pm = usePM();
     const habits = useHabits();
-    const projects = Object.values(pm.state.projects).sort((left, right) =>
-        left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    const projects = orderedProjects(pm.state.projects);
     const [title, setTitle] = useState(goal.title);
     const [notes, setNotes] = useState(goal.notes);
     const savedProjectId = goal.projectLink.mode === "project" ? goal.projectLink.projectId : "";
