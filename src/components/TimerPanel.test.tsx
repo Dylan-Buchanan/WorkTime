@@ -17,6 +17,7 @@ import { toLocalDateKey } from "../lib/timer";
 import { makeActiveTimer, makeAppState } from "../test/mockTauri";
 import type { AppStateData, PMTask, Project, Task } from "../state/types";
 import { ResumeMemoProvider } from "../state/ResumeMemoContext";
+import { TodoProvider, useOptionalTodos } from "../state/TodoContext";
 import * as resumeStore from "../lib/resume";
 import { afterEach } from "vitest";
 import { useResumeMemo } from "../state/ResumeMemoContext";
@@ -101,7 +102,13 @@ const SelectedTaskActions = () => {
     </> : null;
 };
 
-function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode, memoEnabled = false) {
+const TodoLinkProbe = () => {
+    const todos = useOptionalTodos();
+    return <span hidden data-testid="todo-link">{Object.values(todos?.state.todos ?? {})
+        .map((todo) => todo.currentTaskId ?? "").join(",")}</span>;
+};
+
+function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode, memoEnabled = false, todoEnabled = false) {
     const content = <>
         <SelectionProbe />
         {children}
@@ -109,17 +116,20 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.
         {switchTaskId && <ActiveTaskSwitcher taskId={switchTaskId} />}
         <TimerPanel />
     </>;
+    const shell = (
+        <ProjectManagerProvider>
+            <HabitProvider>
+                {memoEnabled ? <ResumeMemoProvider><TaskCompletionProvider>{content}</TaskCompletionProvider></ResumeMemoProvider> : <TaskCompletionProvider>{content}</TaskCompletionProvider>}
+            </HabitProvider>
+        </ProjectManagerProvider>
+    );
     return (
         <MemoryRouter>
             <TauriCloseProvider>
                 <DataProvider dataAccess={data}>
                     <SyncProvider ownerId={OWNER}>
                         <AppStateProvider>
-                            <ProjectManagerProvider>
-                                <HabitProvider>
-                                    {memoEnabled ? <ResumeMemoProvider><TaskCompletionProvider>{content}</TaskCompletionProvider></ResumeMemoProvider> : <TaskCompletionProvider>{content}</TaskCompletionProvider>}
-                                </HabitProvider>
-                            </ProjectManagerProvider>
+                            {todoEnabled ? <TodoProvider>{shell}</TodoProvider> : shell}
                         </AppStateProvider>
                     </SyncProvider>
                 </DataProvider>
@@ -292,13 +302,13 @@ function HandoffProbe({ onChange }: { onChange: (value: HandoffControls) => void
     useLayoutEffect(() => onChange({ app, pm }), [app, pm, onChange]);
     return null;
 }
-async function setupHandoff(options: { paused?: boolean; unlinked?: boolean; noTimer?: boolean; kind?: "Work" | "ShortBreak"; missingOccupant?: boolean } = {}) {
-    const a = makeAppTask("a", "Task A");
+async function setupHandoff(options: { paused?: boolean; unlinked?: boolean; noTimer?: boolean; kind?: "Work" | "ShortBreak"; missingOccupant?: boolean; occupantCompleted?: boolean; pmOccupantDone?: boolean } = {}) {
+    const a = { ...makeAppTask("a", "Task A"), ...(options.occupantCompleted ? { completed_at: "2026-11-09T15:00:00.000Z" } : {}) };
     const b = makeAppTask("b", "Task B");
     const timer = makeActiveTimer({ task_id: "a", paused: options.paused ?? false, paused_remaining_secs: options.paused ? 900 : 0, kind: options.kind ?? "Work" });
     const data = new InMemoryDataAccess(makeAppState({ tasks: { a, b }, active_task: "a", timer: options.noTimer ? null : timer }));
     await data.savePMState({ projects: {}, tasks: {
-        ...(!options.missingOccupant ? { pa: makePMTask({ id: "pa", title: "Task A", appTaskId: "a", estimatePomos: 2 }) } : {}),
+        ...(!options.missingOccupant ? { pa: makePMTask({ id: "pa", title: "Task A", appTaskId: "a", estimatePomos: 2, ...(options.pmOccupantDone ? { status: "Done" as const } : {}) }) } : {}),
         pb: makePMTask({ id: "pb", title: "Task B", appTaskId: options.unlinked ? undefined : "b", estimatePomos: 2 }),
     }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
     let current!: HandoffControls;
@@ -452,6 +462,78 @@ describe("TimerPanel Switch/Waiting sheet", () => {
         fireEvent.click(screen.getByRole("button", { name: "Close" }));
         expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("");
         expect(view.data.store.state.timer?.task_id).toBe("a");
+    });
+});
+
+describe("TimerPanel completed occupant", () => {
+    it("shows Completed and Pick next on a running window without pausing the clock", async () => {
+        const view = await setupHandoff({ occupantCompleted: true });
+        expect(await screen.findByText("Completed")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Pick next" })).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+        expect(view.data.store.state.timer).toMatchObject({ task_id: "a", paused: false });
+    });
+
+    it("shows Completed and Pick next on a paused window with no Resume", async () => {
+        await setupHandoff({ paused: true, occupantCompleted: true });
+        expect(await screen.findByText("Completed")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Pick next" })).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+    });
+
+    it("shows Completed when the PM twin is Done while the backend task is not completed", async () => {
+        await setupHandoff({ pmOccupantDone: true });
+        expect(await screen.findByText("Completed")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Pick next" })).toBeVisible();
+    });
+
+    it("shows Completed from the backend task alone when there is no PM twin", async () => {
+        await setupHandoff({ occupantCompleted: true, missingOccupant: true });
+        expect(await screen.findByText("Completed")).toBeVisible();
+    });
+
+    it("opens the switch sheet from Pick next without resuming the timer", async () => {
+        const view = await setupHandoff({ paused: true, pmOccupantDone: true });
+        const resume = vi.spyOn(view.data, "resumeTimer");
+        fireEvent.click(screen.getByRole("button", { name: "Pick next" }));
+        const dialog = await screen.findByRole("dialog", { name: "Switch task" });
+        expect(within(dialog).getByRole("button", { name: /Task B/ })).toBeVisible();
+        expect(resume).not.toHaveBeenCalled();
+        expect(view.data.store.state.timer).toMatchObject({ task_id: "a", paused: true });
+    });
+
+    it("never badges a to-do-owned occupant and keeps the normal Resume action", async () => {
+        const task = makeAppTask("a", "Task A");
+        const data = new InMemoryDataAccess(makeAppState({
+            tasks: { a: task }, active_task: "a",
+            timer: makeActiveTimer({ task_id: "a", paused: true, paused_remaining_secs: 900 }),
+        }));
+        await data.savePMState({ projects: {}, tasks: {
+            pa: makePMTask({ id: "pa", title: "Task A", appTaskId: "a", status: "Done" }),
+        }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        await data.saveTodos([{
+            id: "todo-a", title: "Task A", rule: null, dueDate: null, estimate: 1,
+            currentTaskId: "a", position: 0, isArchived: false,
+            createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+        }], []);
+        render(wrap(data, undefined, <TodoLinkProbe />, false, true));
+        await waitFor(() => expect(screen.getByTestId("todo-link")).toHaveTextContent("a"));
+        expect(screen.queryByText("Completed")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Pick next" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Resume" })).toBeVisible();
+    });
+
+    it("does not start a Work window on a completed task after the window ended", async () => {
+        const completed = { ...makeAppTask("done", "Finished work"), completed_at: "2026-11-09T15:00:00.000Z", archived: true };
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { done: completed }, active_task: null, timer: null }));
+        render(wrap(data));
+        const start = vi.spyOn(data, "startWorkTimer");
+        fireEvent.click(await screen.findByRole("button", { name: "Start Focus" }));
+        await waitFor(() => expect(screen.getByText("Create a task first")).toBeInTheDocument());
+        expect(start).not.toHaveBeenCalled();
+        expect(data.store.state.timer).toBeNull();
     });
 });
 
@@ -1153,6 +1235,16 @@ describe("TimerPanel resume card integration", () => {
         expect(resumeCard()).toBeNull();
         expect(resumeStore.getResumeNote("a")).toEqual(CARD_MEMO);
         if (terminal === "PM archive") expect(view.current.app.state?.tasks.a.archived).toBe(false);
+    });
+
+    it("stays absent for a completed occupant", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard({ reason: "resume", state: {
+            tasks: { a: { ...makeAppTask("a", "Task A"), completed_at: CARD_NOW }, b: makeAppTask("b", "Task B") },
+        } });
+        await view.enter();
+        expect(view.current.memo.lastEnter?.reason).toBe("resume");
+        expect(resumeCard()).toBeNull();
     });
 
     it("permits missing PM metadata and stays visible when a valid link arrives", async () => {
