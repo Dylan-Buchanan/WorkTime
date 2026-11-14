@@ -1,4 +1,4 @@
-import type { Goal, GoalCadence, GoalTracker, Weekday } from "../../state/types";
+import type { Goal, GoalCadence, GoalProjectLink, GoalTracker, Project, Weekday } from "../../state/types";
 import type { LocalDateKey } from "../todos/types";
 import { localDateKey } from "../todos/calendar";
 import { sanitizeDownloadFileName } from "./deck/delivery";
@@ -6,7 +6,9 @@ import { createGoal, createGoalTracker, isGoalDateKey } from "./factories";
 import { resolveCadenceAnchorAt } from "./periods";
 
 export const GOAL_SET_FORMAT = "worktime.goal-set" as const;
-export const GOAL_SET_VERSION = 1 as const;
+export const GOAL_SET_VERSION = 2 as const;
+
+type ProjectNames = Readonly<Record<string, Pick<Project, "name">>>;
 
 export interface GoalSetMetricDefinition {
     label: string;
@@ -17,7 +19,8 @@ export interface GoalSetMetricDefinition {
 export interface GoalSetGoalDefinition {
     title: string;
     notes: string;
-    projectId: string | null;
+    projectMode: GoalProjectLink["mode"];
+    project: string | null;
     metric: GoalSetMetricDefinition | null;
     lifecycle: Goal["lifecycle"];
     sortOrder: number;
@@ -28,6 +31,7 @@ export interface GoalSetTrackerDefinition {
     purpose: string;
     cadence: GoalCadence;
     color: string;
+    project: string | null;
 }
 
 export interface GoalSetFile {
@@ -55,8 +59,8 @@ export class GoalSetError extends Error {
 }
 
 const ROOT_KEYS = ["format", "version", "tracker", "goals"] as const;
-const TRACKER_KEYS = ["name", "purpose", "cadence", "color"] as const;
-const GOAL_KEYS = ["title", "notes", "projectId", "metric", "lifecycle", "sortOrder"] as const;
+const TRACKER_KEYS = ["name", "purpose", "cadence", "color", "project"] as const;
+const GOAL_KEYS = ["title", "notes", "projectMode", "project", "metric", "lifecycle", "sortOrder"] as const;
 const METRIC_KEYS = ["label", "target", "unit"] as const;
 const EVERY_N_WEEKS_KEYS = ["kind", "weekday", "intervalWeeks"] as const;
 const MONTHLY_KEYS = ["kind", "weekday"] as const;
@@ -145,6 +149,7 @@ function readTracker(value: unknown): GoalSetTrackerDefinition {
         purpose,
         cadence: readCadence(value.cadence),
         color: requireString(value.color, "tracker color"),
+        project: value.project === null ? null : requireText(value.project, "tracker project"),
     };
 }
 
@@ -152,8 +157,16 @@ function readGoal(value: unknown, index: number): GoalSetGoalDefinition {
     const what = `goal ${index + 1}`;
     if (!isPlainObject(value)) invalid(`${what} must be an object`);
     requireKeys(value, GOAL_KEYS, what);
-    let projectId: string | null = null;
-    if (value.projectId !== null) projectId = requireText(value.projectId, `${what} projectId`);
+    const projectMode = value.projectMode;
+    if (projectMode !== "project" && projectMode !== "inherit" && projectMode !== "none") {
+        invalid(`${what} projectMode must be inherit, none, or project`);
+    }
+    let project: string | null = null;
+    if (projectMode === "project") {
+        project = requireText(value.project, `${what} project`);
+    } else if (value.project !== null) {
+        invalid(`${what} project must be null in ${projectMode} mode`);
+    }
     const lifecycle = value.lifecycle;
     if (lifecycle !== "active" && lifecycle !== "achieved" && lifecycle !== "dropped") {
         invalid(`${what} lifecycle must be active, achieved, or dropped`);
@@ -161,7 +174,8 @@ function readGoal(value: unknown, index: number): GoalSetGoalDefinition {
     return {
         title: requireText(value.title, `${what} title`),
         notes: requireString(value.notes, `${what} notes`),
-        projectId,
+        projectMode,
+        project,
         metric: readMetric(value.metric, what),
         lifecycle,
         sortOrder: requireNumber(value.sortOrder, `${what} sortOrder`),
@@ -204,7 +218,11 @@ function canonicalMetric(metric: GoalSetMetricDefinition | null): GoalSetMetricD
 const compareText = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
 /** Definitions only: canonical key order, two-space indent, trailing newline. */
-export function serializeGoalSet(tracker: GoalTracker, goals: readonly Goal[]): string {
+export function serializeGoalSet(tracker: GoalTracker, goals: readonly Goal[], projects: ProjectNames): string {
+    const projectName = (id: string | null): string | null => {
+        const name = id === null ? undefined : projects[id]?.name;
+        return name?.trim() ? name : null;
+    };
     const file: GoalSetFile = {
         format: GOAL_SET_FORMAT,
         version: GOAL_SET_VERSION,
@@ -213,20 +231,26 @@ export function serializeGoalSet(tracker: GoalTracker, goals: readonly Goal[]): 
             purpose: tracker.purpose,
             cadence: canonicalCadence(tracker.cadence),
             color: tracker.color,
+            project: projectName(tracker.projectId),
         },
         goals: [...goals]
             .sort((left, right) =>
                 left.sortOrder - right.sortOrder
                 || compareText(left.title, right.title)
                 || compareText(left.id, right.id))
-            .map(goal => ({
-                title: goal.title,
-                notes: goal.notes,
-                projectId: goal.projectLink.mode === "project" ? goal.projectLink.projectId : null,
-                metric: canonicalMetric(goal.metric),
-                lifecycle: goal.lifecycle,
-                sortOrder: goal.sortOrder,
-            })),
+            .map(goal => {
+                const link = goal.projectLink;
+                const project = link.mode === "project" ? projectName(link.projectId) : null;
+                return {
+                    title: goal.title,
+                    notes: goal.notes,
+                    projectMode: link.mode === "project" && project === null ? "inherit" : link.mode,
+                    project,
+                    metric: canonicalMetric(goal.metric),
+                    lifecycle: goal.lifecycle,
+                    sortOrder: goal.sortOrder,
+                };
+            }),
     };
     return `${JSON.stringify(readGoalSet(file), null, 2)}\n`;
 }
@@ -240,6 +264,33 @@ export function parseGoalSet(json: string): GoalSetFile {
         throw new GoalSetError("invalid-json", "the file is not valid JSON");
     }
     return readGoalSet(parsed);
+}
+
+/** Resolve name links for both the review and the import. Duplicate names are ambiguous. */
+export function resolveGoalSetProjects(file: GoalSetFile, projects: ProjectNames) {
+    const idsByName = new Map<string, string | null>();
+    for (const [id, project] of Object.entries(projects)) {
+        const name = project.name.toLowerCase();
+        idsByName.set(name, idsByName.has(name) ? null : id);
+    }
+    const resolve = (name: string | null): string | null =>
+        name === null ? null : idsByName.get(name.toLowerCase()) ?? null;
+
+    const trackerProjectId = resolve(file.tracker.project);
+    let unresolvedGoalProjects = 0;
+    const goalProjectLinks = file.goals.map((goal): GoalProjectLink => {
+        if (goal.projectMode !== "project") return { mode: goal.projectMode };
+        const projectId = resolve(goal.project);
+        if (projectId !== null) return { mode: "project", projectId };
+        unresolvedGoalProjects += 1;
+        return { mode: "inherit" };
+    });
+    return {
+        trackerProjectId,
+        goalProjectLinks,
+        unresolvedTrackerProject: file.tracker.project !== null && trackerProjectId === null,
+        unresolvedGoalProjects,
+    };
 }
 
 function validatedLocalDateKey(now: Date): LocalDateKey {
@@ -267,8 +318,10 @@ export function materializeGoalSet(
     file: GoalSetFile,
     now: Date,
     nextId: () => string,
+    projects: ProjectNames,
 ): { tracker: GoalTracker; goals: Goal[] } {
     const definition = readGoalSet(file);
+    const { trackerProjectId, goalProjectLinks } = resolveGoalSetProjects(definition, projects);
     const cadence = canonicalCadence(definition.tracker.cadence);
     const tracker = createGoalTracker({
         name: definition.tracker.name,
@@ -276,13 +329,14 @@ export function materializeGoalSet(
         cadence,
         cadenceAnchorAt: resolveCadenceAnchorAt(cadence, validatedLocalDateKey(now)),
         color: definition.tracker.color,
+        projectId: trackerProjectId,
     }, now, nextId());
     const stamp = now.toISOString();
     const goals = definition.goals.map((goal, index) => createGoal({
         trackerId: tracker.id,
         title: goal.title,
         notes: goal.notes,
-        projectLink: goal.projectId === null ? { mode: "inherit" } : { mode: "project", projectId: goal.projectId },
+        projectLink: goalProjectLinks[index],
         metric: goal.metric
             ? { label: goal.metric.label, target: goal.metric.target, current: 0, unit: goal.metric.unit, source: "manual", overridePinned: false }
             : null,

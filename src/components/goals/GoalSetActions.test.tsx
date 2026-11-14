@@ -117,9 +117,9 @@ function project(id: string, sortOrder: number): Project {
     };
 }
 
-async function seedProjects(data: InMemoryDataAccess, ids: readonly string[]) {
+async function seedProjects(data: InMemoryDataAccess, projects: readonly Project[]) {
     await data.savePMState({
-        projects: Object.fromEntries(ids.map((id, index) => [id, project(id, index)])),
+        projects: Object.fromEntries(projects.map(row => [row.id, row])),
         tasks: {},
         meta: { initializedAt: "2026-10-01T00:00:00.000Z" },
     });
@@ -136,8 +136,8 @@ async function uploadJson(user: UserEvent, text: string, name = "goals-work-2026
     await user.upload(input, new File([text], name, { type: "application/json" }));
 }
 
-function fileJson(tracker: GoalTracker, goals: Goal[]): string {
-    return serializeGoalSet(tracker, goals);
+function fileJson(tracker: GoalTracker, goals: Goal[], projects: readonly Project[] = []): string {
+    return serializeGoalSet(tracker, goals, Object.fromEntries(projects.map(row => [row.id, row])));
 }
 
 function mutateFile(tracker: GoalTracker, goals: Goal[], change: (file: Record<string, unknown>) => void): string {
@@ -162,9 +162,16 @@ beforeEach(() => {
 
 describe("GoalSetActions", () => {
     it("exports the tracker as a JSON download with a dated filename and persists nothing", async () => {
-        const tracker = buildEveryNWeeksTrackerFixture();
-        const goal = buildMetricGoalFixture(tracker.id);
+        const tracker = { ...buildEveryNWeeksTrackerFixture(), projectId: "tracker-project" };
+        const goal: Goal = {
+            ...buildMetricGoalFixture(tracker.id),
+            projectLink: { mode: "project", projectId: "goal-project" },
+        };
         const data = await seeded(tracker, [goal]);
+        await seedProjects(data, [
+            { ...project("tracker-project", 0), name: "Studio" },
+            { ...project("goal-project", 1), name: "Release" },
+        ]);
         const { user } = await mount(data, tracker.id);
 
         await user.click(screen.getByRole("button", { name: "Export goals" }));
@@ -175,8 +182,13 @@ describe("GoalSetActions", () => {
         expect(blob).toBeInstanceOf(Blob);
         expect(blob.type).toBe("application/json");
         const payload = JSON.parse(await blob.text());
-        expect(payload).toMatchObject({ format: "worktime.goal-set", version: 1, tracker: { name: "Work" } });
-        expect(payload.goals.map((row: { title: string }) => row.title)).toEqual(["Train four times"]);
+        expect(payload).toMatchObject({
+            format: "worktime.goal-set",
+            version: 2,
+            tracker: { name: "Work", project: "Studio" },
+            goals: [{ title: "Train four times", projectMode: "project", project: "Release" }],
+        });
+        expect(calls.persist).not.toHaveBeenCalled();
         expect(calls.updateTracker).not.toHaveBeenCalled();
         expect(calls.archiveTracker).not.toHaveBeenCalled();
     });
@@ -221,17 +233,26 @@ describe("GoalSetActions", () => {
         expect(calls.selected).toHaveLength(0);
     });
 
-    it("creates a new tracker and one goal per definition on confirm", async () => {
-        const tracker = buildEveryNWeeksTrackerFixture();
+    it("creates fresh rows and keeps tracker and goal project names that match across accounts", async () => {
+        const tracker = { ...buildEveryNWeeksTrackerFixture(), projectId: "source-tracker-project" };
         const goals = [
-            buildGoalFixture({ id: "goal-a", trackerId: tracker.id, title: "Ship the release", notes: "Two notes", projectLink: { mode: "project", projectId: "project-1" }, sortOrder: 0 }),
-            buildMetricGoalFixture(tracker.id),
+            buildGoalFixture({ id: "goal-a", trackerId: tracker.id, title: "Ship the release", notes: "Two notes", projectLink: { mode: "project", projectId: "source-goal-project" }, sortOrder: 0 }),
+            { ...buildMetricGoalFixture(tracker.id), projectLink: { mode: "none" }, sortOrder: 1 } satisfies Goal,
+            buildGoalFixture({ id: "goal-inherited", trackerId: tracker.id, title: "Inherit the project", sortOrder: 2 }),
         ];
         const data = await seeded(tracker, goals);
+        await seedProjects(data, [
+            { ...project("local-tracker-project", 0), name: "STUDIO", isArchived: true },
+            { ...project("local-goal-project", 1), name: "Release", isArchived: true },
+        ]);
         const { user, onImported } = await mount(data, tracker.id);
-        await uploadJson(user, fileJson(tracker, goals));
+        await uploadJson(user, fileJson(tracker, goals, [
+            { ...project("source-tracker-project", 0), name: "Studio" },
+            { ...project("source-goal-project", 1), name: "Release" },
+        ]));
 
         const review = await screen.findByRole("region", { name: "Import review" });
+        expect(within(review).queryByText(/no unique local match/)).not.toBeInTheDocument();
         await user.click(within(review).getByRole("button", { name: "Create tracker" }));
 
         await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
@@ -244,12 +265,24 @@ describe("GoalSetActions", () => {
             purpose: tracker.purpose,
             cadence: tracker.cadence,
             color: tracker.color,
+            projectId: "local-tracker-project",
         });
-        expect(calls.createGoal).toHaveLength(2);
-        expect(calls.createGoal.map(input => input.title)).toEqual(["Ship the release", "Train four times"]);
+        expect(calls.createGoal).toHaveLength(3);
+        expect(calls.createGoal.map(input => input.title)).toEqual(["Ship the release", "Train four times", "Inherit the project"]);
         expect(calls.createGoal.every(input => input.trackerId === newTrackerId)).toBe(true);
-        expect(calls.createGoal.map(input => input.sortOrder)).toEqual([0, 1]);
+        expect(calls.createGoal.map(input => input.sortOrder)).toEqual([0, 1, 2]);
         expect(calls.createGoal[1].metric).toEqual({ label: "Sessions", target: 8, current: 0, unit: "", source: "manual", overridePinned: false });
+        const saved = await data.loadGoals();
+        expect(saved.trackers.find(row => row.id === newTrackerId)?.projectId).toBe("local-tracker-project");
+        expect(saved.trackers.find(row => row.id === tracker.id)).toEqual(tracker);
+        const importedGoals = saved.goals.filter(row => row.trackerId === newTrackerId).sort((a, b) => a.sortOrder - b.sortOrder);
+        expect(importedGoals.map(row => row.projectLink)).toEqual([
+            { mode: "project", projectId: "local-goal-project" }, { mode: "none" }, { mode: "inherit" },
+        ]);
+        const sourceIds = new Set(goals.map(row => row.id));
+        expect(importedGoals.every(row => !sourceIds.has(row.id))).toBe(true);
+        expect(saved.goals.filter(row => row.trackerId === tracker.id)).toHaveLength(goals.length);
+        for (const goal of goals) expect(saved.goals.find(row => row.id === goal.id)).toEqual(goal);
         expect(calls.selected).toHaveLength(0);
         expect(screen.queryByRole("region", { name: "Import review" })).not.toBeInTheDocument();
         expect(calls.updateTracker).not.toHaveBeenCalled();
@@ -257,12 +290,17 @@ describe("GoalSetActions", () => {
         expect(calls.setLifecycle).toHaveLength(0);
     });
 
-    it("keeps the review open and reports no success when the save rejects", async () => {
+    it("keeps the review and its project note visible when the save rejects", async () => {
         const tracker = buildEveryNWeeksTrackerFixture();
-        const goals = [buildGoalFixture({ id: "goal-a", trackerId: tracker.id, sortOrder: 0 })];
+        const goals = [buildGoalFixture({
+            id: "goal-a",
+            trackerId: tracker.id,
+            projectLink: { mode: "project", projectId: "source-project" },
+            sortOrder: 0,
+        })];
         const data = await seeded(tracker, goals);
         const { user, onImported } = await mount(data, tracker.id);
-        await uploadJson(user, fileJson(tracker, goals));
+        await uploadJson(user, fileJson(tracker, goals, [project("source-project", 0)]));
 
         const review = await screen.findByRole("region", { name: "Import review" });
         calls.persistFailure = new Error("storage is unavailable");
@@ -271,7 +309,9 @@ describe("GoalSetActions", () => {
         const alert = await screen.findByRole("alert");
         expect(alert).toHaveTextContent("Could not save the imported goal set");
         expect(alert).toHaveTextContent("storage is unavailable");
-        expect(screen.getByRole("region", { name: "Import review" })).toBeInTheDocument();
+        expect(within(screen.getByRole("region", { name: "Import review" })).getByText(
+            "1 goal will inherit the tracker’s project because its override has no unique local match.",
+        )).toBeInTheDocument();
         expect(onImported).not.toHaveBeenCalled();
         expect(calls.selected).toHaveLength(0);
         expect(calls.persist).toHaveBeenCalledTimes(1);
@@ -279,27 +319,43 @@ describe("GoalSetActions", () => {
         expect(calls.createGoal).toHaveLength(1);
     });
 
-    it("imports goals unlinked when their project is not on this device and keeps known links", async () => {
-        const tracker = buildEveryNWeeksTrackerFixture();
+    it("warns about a missing tracker project and unresolved overrides without blocking import", async () => {
+        const tracker = { ...buildEveryNWeeksTrackerFixture(), projectId: "source-tracker-project" };
         const goals = [
             buildGoalFixture({ id: "goal-known", trackerId: tracker.id, title: "Known project", projectLink: { mode: "project", projectId: "project-1" }, sortOrder: 0 }),
             buildGoalFixture({ id: "goal-missing-a", trackerId: tracker.id, title: "Missing A", projectLink: { mode: "project", projectId: "project-missing-a" }, sortOrder: 1 }),
             buildGoalFixture({ id: "goal-missing-b", trackerId: tracker.id, title: "Missing B", projectLink: { mode: "project", projectId: "project-missing-b" }, sortOrder: 2 }),
         ];
         const data = await seeded(tracker, goals);
-        await seedProjects(data, ["project-1"]);
+        await seedProjects(data, [
+            { ...project("local-release", 0), name: "Release" },
+            { ...project("local-studio", 1), name: "Studio" },
+            { ...project("archived-studio", 2), name: "STUDIO", isArchived: true },
+        ]);
         const { user, onImported } = await mount(data, tracker.id);
-        await uploadJson(user, fileJson(tracker, goals));
+        await uploadJson(user, fileJson(tracker, goals, [
+            { ...project("source-tracker-project", 0), name: "Missing tracker project" },
+            { ...project("project-1", 1), name: "Release" },
+            { ...project("project-missing-a", 2), name: "Studio" },
+            { ...project("project-missing-b", 3), name: "Missing override" },
+        ]));
 
         const review = await screen.findByRole("region", { name: "Import review" });
-        expect(await within(review).findByText(
-            "2 project links will be cleared because those projects are not on this device.",
+        expect(within(review).getByText(
+            "The tracker’s project link will be cleared because it has no unique local match.",
         )).toBeInTheDocument();
+        expect(within(review).getByText(
+            "2 goals will inherit the tracker’s project because their overrides have no unique local match.",
+        )).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        const confirm = within(review).getByRole("button", { name: "Create tracker" });
+        expect(confirm).toBeEnabled();
 
-        await user.click(within(review).getByRole("button", { name: "Create tracker" }));
+        await user.click(confirm);
         await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
 
-        const expectedLinks = [{ mode: "project", projectId: "project-1" }, { mode: "inherit" }, { mode: "inherit" }];
+        expect(calls.createTracker[0].projectId).toBeNull();
+        const expectedLinks = [{ mode: "project", projectId: "local-release" }, { mode: "inherit" }, { mode: "inherit" }];
         expect(calls.createGoal.map(input => input.projectLink)).toEqual(expectedLinks);
         expect(calls.createdGoals.map(goal => goal.projectLink)).toEqual(expectedLinks);
     });
@@ -346,7 +402,7 @@ describe("GoalSetActions", () => {
 
     it.each([
         ["invalid JSON", () => "{ not json", "not valid JSON"],
-        ["an unsupported version", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.version = 2; }), "version this app does not support"],
+        ["an unsupported version", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.version = 1; }), "version this app does not support"],
         ["a foreign format", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.format = "other.tool"; }), "not a WorkTime goal-set file"],
         ["an invalid field", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => {
             (file.tracker as Record<string, unknown>).name = " ";

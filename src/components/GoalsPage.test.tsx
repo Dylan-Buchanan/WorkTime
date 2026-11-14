@@ -1747,7 +1747,7 @@ describe("GoalsPage", () => {
         // Drive the real Lane B component through a validated file and confirm.
         await user.upload(
             within(slot()).getByLabelText("Import goals"),
-            new File([serializeGoalSet(tracker, [goal])], "goals-work-2026-10-20.json", { type: "application/json" }),
+            new File([serializeGoalSet(tracker, [goal], {})], "goals-work-2026-10-20.json", { type: "application/json" }),
         );
         const review = await within(slot()).findByRole("region", { name: "Import review" });
         expect(within(review).getByText("Ship the release")).toBeInTheDocument();

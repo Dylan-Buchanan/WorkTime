@@ -11,6 +11,7 @@ import {
     goalSetFileName,
     materializeGoalSet,
     parseGoalSet,
+    resolveGoalSetProjects,
     serializeGoalSet,
     type GoalSetFile,
 } from "../../lib/goals/goalSetFile";
@@ -35,8 +36,8 @@ const countLabel = (count: number): string => count === 1 ? "1 goal" : `${count}
 const EXPORT_HINT_ID = "goal-set-export-hint";
 
 const projectLinkLabel = (count: number): string => count === 1
-    ? "1 project link will be cleared because that project is not on this device."
-    : `${count} project links will be cleared because those projects are not on this device.`;
+    ? "1 goal will inherit the tracker’s project because its override has no unique local match."
+    : `${count} goals will inherit the tracker’s project because their overrides have no unique local match.`;
 
 /** Short, code-specific copy so a bad file names its own problem. */
 function errorCopy(error: GoalSetError): string {
@@ -60,21 +61,16 @@ function todayKey(): LocalDateKey {
     return key;
 }
 
-/**
- * Review is only rendered once a file parses, so its PM dependency is limited to
- * this subtree. The project lookup decides which imported links survive.
- */
 interface ImportReviewProps {
     review: GoalSetFile;
+    projectResolution: ReturnType<typeof resolveGoalSetProjects>;
     busy: "export" | "import" | null;
-    onConfirm: (knownProjectIds: ReadonlySet<string>) => void;
+    onConfirm: () => void;
     onCancel: () => void;
 }
 
-const ImportReview: React.FC<ImportReviewProps> = ({ review, busy, onConfirm, onCancel }) => {
-    const pm = usePM();
-    const knownProjectIds = new Set(Object.keys(pm.state.projects));
-    const clearedLinks = review.goals.filter(goal => goal.projectId !== null && !knownProjectIds.has(goal.projectId)).length;
+const ImportReview: React.FC<ImportReviewProps> = ({ review, projectResolution, busy, onConfirm, onCancel }) => {
+    const { unresolvedTrackerProject, unresolvedGoalProjects } = projectResolution;
 
     return <section aria-label="Import review" className="flex flex-col gap-2 rounded border border-neutral-800 bg-neutral-900/40 p-2">
         <h3 className="text-xs font-semibold text-neutral-100">Review import</h3>
@@ -82,12 +78,15 @@ const ImportReview: React.FC<ImportReviewProps> = ({ review, busy, onConfirm, on
             Creates a new tracker <strong className="text-neutral-100">{review.tracker.name}</strong> with {countLabel(review.goals.length)}. Nothing existing is changed.
         </p>
         <p className="text-xs text-neutral-400">{cadenceLabel(review.tracker.cadence)}</p>
-        {clearedLinks > 0 && <p className="text-xs text-amber-200">{projectLinkLabel(clearedLinks)}</p>}
+        {unresolvedTrackerProject && <p className="text-xs text-amber-200">
+            The tracker’s project link will be cleared because it has no unique local match.
+        </p>}
+        {unresolvedGoalProjects > 0 && <p className="text-xs text-amber-200">{projectLinkLabel(unresolvedGoalProjects)}</p>}
         <ul aria-label="Imported goal titles" className="list-disc space-y-0.5 pl-4 text-xs text-neutral-300">
             {review.goals.map((goal, index) => <li key={`${index}:${goal.title}`}>{goal.title}</li>)}
         </ul>
         <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className={primary} disabled={busy !== null} onClick={() => onConfirm(knownProjectIds)}>
+            <button type="button" className={primary} disabled={busy !== null} onClick={onConfirm}>
                 {busy === "import" ? "Importing…" : "Create tracker"}
             </button>
             <button type="button" className={action} disabled={busy !== null} onClick={onCancel}>
@@ -103,6 +102,7 @@ const ImportReview: React.FC<ImportReviewProps> = ({ review, busy, onConfirm, on
  */
 export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImported }) => {
     const { state, createTracker, createGoal, setGoalLifecycle, persist } = useGoals();
+    const { state: { projects } } = usePM();
     const tracker = state.trackers[trackerId];
     const goals = Object.values(state.goals).filter(goal => goal.trackerId === trackerId);
     const hasGoals = goals.length > 0;
@@ -115,7 +115,7 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
         setBusy("export");
         setError(null);
         try {
-            const blob = new Blob([serializeGoalSet(tracker, goals)], { type: "application/json" });
+            const blob = new Blob([serializeGoalSet(tracker, goals, projects)], { type: "application/json" });
             await initiateBlobDownload(blob, goalSetFileName(tracker.name, todayKey()));
         } catch (caught) {
             setError(caught instanceof GoalSetError ? errorCopy(caught) : "Could not export the goal set. Try again.");
@@ -141,28 +141,26 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
         }
     }
 
-    async function confirmImport(knownProjectIds: ReadonlySet<string>) {
+    async function confirmImport() {
         if (!review || busy !== null) return;
         setBusy("import");
         setError(null);
         try {
             // The provider assigns final IDs; this pass validates and stamps lifecycle.
-            const prepared = materializeGoalSet(review, new Date(), () => crypto.randomUUID());
+            const prepared = materializeGoalSet(review, new Date(), () => crypto.randomUUID(), projects);
             const created = createTracker({
                 name: prepared.tracker.name,
                 purpose: prepared.tracker.purpose,
                 cadence: prepared.tracker.cadence,
                 color: prepared.tracker.color,
+                projectId: prepared.tracker.projectId,
             });
             for (const goal of prepared.goals) {
                 const row = createGoal({
                     trackerId: created.id,
                     title: goal.title,
                     notes: goal.notes,
-                    // A file from another device can name projects that do not exist here.
-                    projectLink: goal.projectLink.mode === "project" && !knownProjectIds.has(goal.projectLink.projectId)
-                        ? { mode: "inherit" }
-                        : goal.projectLink,
+                    projectLink: goal.projectLink,
                     metric: goal.metric,
                     sortOrder: goal.sortOrder,
                 });
@@ -226,8 +224,9 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
 
         {review && <ImportReview
             review={review}
+            projectResolution={resolveGoalSetProjects(review, projects)}
             busy={busy}
-            onConfirm={knownProjectIds => { void confirmImport(knownProjectIds); }}
+            onConfirm={() => { void confirmImport(); }}
             onCancel={() => setReview(null)}
         />}
     </section>;
