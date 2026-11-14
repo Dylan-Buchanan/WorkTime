@@ -1,6 +1,6 @@
 import type { PetScheduleItem } from "../../state/types";
 import { formatMinuteOfDay } from "./format";
-import { formatShiftIndicator, parsePetScheduleTime, resolveFixedTimeInScheduleDay, resolveIntervalWindow, resolvePetScheduleDay } from "./schedule";
+import { buildPetSchedule, formatShiftIndicator, parsePetScheduleTime, resolveFixedTimeInScheduleDay, resolveIntervalWindow, resolvePetScheduleDay } from "./schedule";
 import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY } from "../settings";
 import type {
     PetNapReflowProposal,
@@ -70,10 +70,25 @@ export function proposeNapReflow(input: ProposeNapReflowInput): PetNapReflowProp
     changes.sort((left, right) => left.to.getTime() - right.to.getTime() || left.itemId.localeCompare(right.itemId));
 
     const itemsById = new Map(input.scheduleItems.map((item) => [item.id, item]));
+    // Preview the same placement the schedule will use after applying nap-only changes.
+    const placedById = new Map(input.busyIntervals?.length ? buildPetSchedule({
+        ...input,
+        scheduleItems: applyNapReflow(input.scheduleItems, { nap: input.nap, napMinutes, changes, shifts: [] }, now),
+    }).entries.map((entry) => [entry.itemId, entry]) : []);
     const shifts: PetShiftIndicator[] = [];
     for (const change of changes) {
         const item = itemsById.get(change.itemId);
-        if (item) shifts.push(formatShiftIndicator(item, change.deltaMinutes, change.reason, input.nap, now));
+        if (!item) continue;
+        const placed = placedById.get(change.itemId);
+        if (placed?.shift?.reason === "busy") {
+            const deltaMinutes = change.deltaMinutes + (placed.start.getTime() - placed.unshiftedStart.getTime()) / MS_PER_MINUTE;
+            const napShift = formatShiftIndicator(item, deltaMinutes, "nap", input.nap, now);
+            const description = placed.shift.description;
+            const busyCause = description.slice(description.lastIndexOf(" — ") + 3).split("; ").pop();
+            shifts.push({ ...napShift, reason: "busy", description: `${napShift.description}; ${busyCause}` });
+        } else {
+            shifts.push(formatShiftIndicator(item, change.deltaMinutes, change.reason, input.nap, now));
+        }
     }
 
     return { nap: input.nap, napMinutes, changes, shifts };

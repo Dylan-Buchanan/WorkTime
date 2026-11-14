@@ -27,6 +27,7 @@ import { TodoProvider } from "./state/TodoContext";
 import { ToastProvider } from "./state/ToastContext";
 import { PetActivityProvider } from "./state/PetActivityContext";
 import { PetReminderProvider } from "./state/PetReminderContext";
+import { CalendarBusyProvider } from "./state/CalendarBusyContext";
 import { PetProvider } from "./state/PetContext";
 import { SupabaseShortcutDataAccess } from "./lib/data/ShortcutDataAccess";
 import { SupabaseLinearDataAccess } from "./lib/data/LinearDataAccess";
@@ -167,6 +168,7 @@ const AuthenticatedShell: React.FC = () => {
                                     <ToastProvider>
                                         <PetProvider>
                                             <PetActivityProvider>
+                                                <CalendarBusyProvider>
                                                 <PetReminderProvider>
                                                 <ResumeMemoProvider>
                                                 <StateSyncBridge />
@@ -177,6 +179,7 @@ const AuthenticatedShell: React.FC = () => {
                                                 </div>
                                                 </ResumeMemoProvider>
                                                 </PetReminderProvider>
+                                                </CalendarBusyProvider>
                                             </PetActivityProvider>
                                         </PetProvider>
                                     </ToastProvider>

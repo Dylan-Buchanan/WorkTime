@@ -15,6 +15,7 @@ import type {
     PetShiftReason,
 } from "./types";
 import { DEFAULT_END_OF_DAY, DEFAULT_START_OF_DAY, isTimeOfDay } from "../settings";
+import { mergeBusyIntervals } from "../engine/busyIntervals";
 
 const MS_PER_MINUTE = 60_000;
 
@@ -349,6 +350,10 @@ function buildEntry(
             flexibility: item.flexibility,
             priority: item.priority,
             start,
+            unshiftedStart: start,
+            occurrenceStart: start,
+            unshiftedWindowEnd: end > dayEnd ? dayEnd : end,
+            blockedBy: null,
             end: end > dayEnd ? dayEnd : end,
             startMinutes: item.recurrence.startMinutes,
             endMinutes: minutesOfDay(end > dayEnd ? dayEnd : end),
@@ -372,6 +377,10 @@ function buildEntry(
         flexibility: item.flexibility,
         priority: item.priority,
         start: resolved.start,
+        unshiftedStart: resolved.start,
+        occurrenceStart: resolved.baseStart,
+        unshiftedWindowEnd: resolved.end > dayEnd ? dayEnd : resolved.end,
+        blockedBy: null,
         end: resolved.end > dayEnd ? dayEnd : resolved.end,
         startMinutes: minutesOfDay(resolved.start),
         endMinutes: minutesOfDay(resolved.end > dayEnd ? dayEnd : resolved.end),
@@ -389,8 +398,8 @@ function buildEntry(
 
 /** Explicit fixed-time attribution wins; unassigned logs use the existing time window. */
 function firstMatchingRecord(entry: PetScheduleEntry, records: readonly PetActivityRecord[], nowMs: number): Date | null {
-    const startMs = entry.start.getTime();
-    const endMs = entry.windowEnd.getTime();
+    const startMs = entry.unshiftedStart.getTime();
+    const endMs = entry.unshiftedWindowEnd.getTime();
     let best: number | null = null;
     for (const record of records) {
         if (record.activityType !== entry.activityType) continue;
@@ -403,6 +412,58 @@ function firstMatchingRecord(entry: PetScheduleEntry, records: readonly PetActiv
         if (best === null || time < best) best = time;
     }
     return best === null ? null : new Date(best);
+}
+
+/** Place in pre-busy order using epoch arithmetic; only calendar hits trigger moves. */
+function placeAroundBusyTime(entries: PetScheduleEntry[], input: BuildPetScheduleInput, dayStart: Date, dayEnd: Date): void {
+    const runs = mergeBusyIntervals(input.busyIntervals ?? [], dayStart, dayEnd)
+        .map((run) => ({ start: run.start.getTime(), end: run.end.getTime() }));
+    if (runs.length === 0) return;
+    const occupied = runs.slice();
+    for (const entry of entries) {
+        if (entry.flexibility === "fixed" || entry.paused) continue;
+        const start = entry.start.getTime();
+        const length = entry.mode === "fixed-time" ? entry.end.getTime() - start : 0;
+        const limit = entry.mode === "fixed-time" ? dayEnd.getTime() - length : entry.end.getTime();
+        const hits = (range: { start: number; end: number }, candidate: number): boolean => length > 0
+            ? range.start < candidate + length && candidate < range.end
+            : range.start <= candidate && candidate < range.end;
+        const displacing = runs.find((run) => hits(run, start));
+        if (!displacing) {
+            if (length > 0) occupied.push({ start, end: start + length });
+            continue;
+        }
+        const candidates = [...new Set(occupied.map((range) => range.end).filter((end) => end > start))]
+            .sort((left, right) => left - right);
+        const slot = candidates.find((candidate) => candidate <= limit && !occupied.some((range) => hits(range, candidate)));
+        if (slot === undefined) {
+            entry.blockedBy = {
+                start: new Date(displacing.start),
+                end: new Date(displacing.end),
+                reason: entry.mode === "interval" && entry.end < dayEnd ? "interval-limit" : "day-end",
+            };
+            continue;
+        }
+        entry.start = new Date(slot);
+        entry.startMinutes = minutesOfDay(entry.start);
+        if (entry.mode === "fixed-time") {
+            entry.end = new Date(slot + length);
+            entry.endMinutes = minutesOfDay(entry.end);
+        }
+        const deltaMinutes = Math.round((slot - entry.occurrenceStart.getTime()) / MS_PER_MINUTE);
+        const priorDescription = entry.shift?.description;
+        const priorCause = priorDescription?.slice(priorDescription.lastIndexOf(" — ") + 3);
+        const busyCause = `busy ${formatClock(new Date(displacing.start))}–${formatClock(new Date(displacing.end))}`;
+        entry.shift = {
+            itemId: entry.itemId,
+            activityType: entry.activityType,
+            label: entry.label,
+            deltaMinutes,
+            reason: "busy",
+            description: `${entry.label.toLowerCase()} ${formatDeltaMinutes(deltaMinutes)} — ${priorCause ? `${priorCause}; ` : ""}${busyCause}`,
+        };
+        if (length > 0) occupied.push({ start: slot, end: slot + length });
+    }
 }
 
 /**
@@ -428,9 +489,14 @@ export function buildPetSchedule(input: BuildPetScheduleInput): PetDaySchedule {
         const startMs = entries[groupStart].start.getTime();
         while (nextGroup < entries.length && entries[nextGroup].start.getTime() === startMs) nextGroup += 1;
         const windowEnd = nextGroup < entries.length ? entries[nextGroup].start : dayEnd;
-        for (let index = groupStart; index < nextGroup; index += 1) entries[index].windowEnd = windowEnd;
+        for (let index = groupStart; index < nextGroup; index += 1) {
+            entries[index].windowEnd = windowEnd;
+            entries[index].unshiftedWindowEnd = windowEnd;
+        }
         groupStart = nextGroup;
     }
+
+    placeAroundBusyTime(entries, input, dayStart, dayEnd);
 
     for (const entry of entries) {
         const fulfilledAt = firstMatchingRecord(entry, input.activityRecords, nowMs);
@@ -438,6 +504,7 @@ export function buildPetSchedule(input: BuildPetScheduleInput): PetDaySchedule {
         entry.fulfilledAt = fulfilledAt;
         entry.overdueMinutes = fulfilledAt !== null ? 0 : Math.max(0, minutesBetween(now, entry.end));
     }
+    entries.sort(compareEntries);
 
     return { now, dayStart, dayEnd, napping: activeNap !== null, activeNap, entries };
 }
