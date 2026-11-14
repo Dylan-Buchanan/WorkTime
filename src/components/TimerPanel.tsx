@@ -289,6 +289,15 @@ export const TimerPanel: React.FC = () => {
     const activeIsTodoTask = Boolean(activeAppTaskId && Object.values(todoContext?.state.todos ?? {})
         .some((todo) => todo.currentTaskId === activeAppTaskId));
 
+    /** A Work occupant is finished when its backend task is completed or its PM twin is Done/archived.
+     *  To-do-owned tasks never gain the completed presentation. */
+    const occupantCompleted = useMemo(() => {
+        if (timer?.kind !== "Work" || activeIsTodoTask) return false;
+        if (cardTask?.completed_at != null) return true;
+        const twin = findPMTaskByAppTaskId(pmState.tasks, timer.task_id);
+        return Boolean(twin && (twin.status === "Done" || twin.isArchived));
+    }, [timer, activeIsTodoTask, cardTask, pmState.tasks]);
+
     const linkedTask = useMemo(() => {
         if (!activeAppTaskId) return null;
         const tasks = Object.values(pmState.tasks);
@@ -586,6 +595,11 @@ export const TimerPanel: React.FC = () => {
                                     {taskName}
                                 </span>
                             )}
+                            {occupantCompleted && (
+                                <span className="px-2 py-1 rounded bg-emerald-600/20 text-[10px] font-medium tracking-wide text-emerald-300">
+                                    Completed
+                                </span>
+                            )}
                             {pmTaskProject && (
                                 <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-neutral-800 text-[10px]">
                                     <span className="w-2 h-2 rounded-full" style={{ background: pmTaskProject.color }} />
@@ -646,7 +660,20 @@ export const TimerPanel: React.FC = () => {
                                     Start Focus
                                 </button>
                             )}
-                            {timer && !isPaused && ms > 0 && (
+                            {occupantCompleted && (
+                                <button
+                                    className={ACTION_PRIMARY}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={(event) => {
+                                        event.currentTarget.focus();
+                                        openSwitchSheet("switch");
+                                        play("pressSide");
+                                    }}
+                                >
+                                    Pick next
+                                </button>
+                            )}
+                            {timer && !isPaused && ms > 0 && !occupantCompleted && (
                                 <button
                                     className={ACTION_SECONDARY}
                                     onMouseEnter={() => play("hover")}
@@ -658,7 +685,7 @@ export const TimerPanel: React.FC = () => {
                                     Pause
                                 </button>
                             )}
-                            {timer && isPaused && (
+                            {timer && isPaused && !occupantCompleted && (
                                 <button
                                     className={ACTION_SECONDARY}
                                     onMouseEnter={() => play("hover")}
