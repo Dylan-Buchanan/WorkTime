@@ -1,3 +1,5 @@
+import { TaskCompletionProvider } from "./state/TaskCompletionContext";
+import { SWITCH_SHEET_FOCUS_FALLBACK_ID } from "./components/SwitchSheet";
 import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
@@ -172,11 +174,13 @@ const AuthenticatedShell: React.FC = () => {
                                                 <PetReminderProvider>
                                                 <ResumeMemoProvider>
                                                 <StateSyncBridge />
+                                                <TaskCompletionProvider>
                                                 <div className="flex flex-col h-screen overflow-hidden bg-neutral-950 text-neutral-200 text-xs">
                                                     <TopNav />
                                                     <UnsyncedBanner />
-                                                    <div className="flex-1 min-h-0"><Outlet /></div>
+                                                    <div id={SWITCH_SHEET_FOCUS_FALLBACK_ID} tabIndex={-1} className="flex-1 min-h-0 outline-none"><Outlet /></div>
                                                 </div>
+                                                </TaskCompletionProvider>
                                                 </ResumeMemoProvider>
                                                 </PetReminderProvider>
                                                 </CalendarBusyProvider>

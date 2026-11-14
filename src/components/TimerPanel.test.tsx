@@ -1,3 +1,5 @@
+import * as completionHooks from "../state/TaskCompletionContext";
+import { TaskCompletionProvider } from "../state/TaskCompletionContext";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useLayoutEffect } from "react";
@@ -115,7 +117,7 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.
                         <AppStateProvider>
                             <ProjectManagerProvider>
                                 <HabitProvider>
-                                    {memoEnabled ? <ResumeMemoProvider>{content}</ResumeMemoProvider> : content}
+                                    {memoEnabled ? <ResumeMemoProvider><TaskCompletionProvider>{content}</TaskCompletionProvider></ResumeMemoProvider> : <TaskCompletionProvider>{content}</TaskCompletionProvider>}
                                 </HabitProvider>
                             </ProjectManagerProvider>
                         </AppStateProvider>
@@ -1291,4 +1293,19 @@ describe("TimerPanel resume card integration", () => {
         expect(within(card).getByText("x".repeat(140))).toBeVisible();
         expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pa");
     });
+});
+
+
+it.each(["Switch", "Waiting"] as const)("routes %s through the completion controller", async label => {
+    const openSwitchSheet = vi.fn();
+    const hook = vi.spyOn(completionHooks, "useTaskCompletion").mockReturnValue({ completeTask: vi.fn(), completeAppTask: vi.fn(), openSwitchSheet, busy: false });
+    try {
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { a: makeAppTask("a", "Task A") }, active_task: "a",
+            timer: makeActiveTimer({ task_id: "a" }) }));
+        await data.savePMState({ projects: {}, tasks: { pa: makePMTask({ id: "pa", appTaskId: "a", title: "Task A" }) }, meta: { initializedAt: new Date().toISOString() } });
+        render(wrap(data));
+        await waitFor(() => expect(screen.getByRole("button", { name: "Waiting" })).toBeEnabled());
+        fireEvent.click(screen.getByRole("button", { name: label }));
+        expect(openSwitchSheet).toHaveBeenCalledExactlyOnceWith(label === "Switch" ? "switch" : "waiting");
+    } finally { hook.mockRestore(); }
 });

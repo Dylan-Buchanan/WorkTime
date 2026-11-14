@@ -6,6 +6,8 @@ import { PMTask, TaskPriority } from "../state/types";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useOptionalTodos } from "../state/TodoContext";
 import { waitingOf } from "../lib/pm/waiting";
+import { useTaskCompletion } from "../state/TaskCompletionContext";
+import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
 import { WaitingDot } from "./WaitingIndicator";
 
 export const TASK_SORT_LS_KEY = "task_panel_sort_v1";
@@ -32,8 +34,9 @@ function saveTaskSort(value: TaskSortOption): void {
 }
 
 export const TaskPanel: React.FC = () => {
-    const { state, createTask, setActiveTask, finalizeTask } = useAppState();
+    const { state, createTask, setActiveTask } = useAppState();
     const { state: pmState } = usePM();
+    const { completeTask, completeAppTask } = useTaskCompletion();
     const todoContext = useOptionalTodos();
     const { play } = useSounds();
     const [name, setName] = useState("");
@@ -342,7 +345,8 @@ export const TaskPanel: React.FC = () => {
                                                         onMouseEnter={() => play("hover")}
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            finalizeTask(t.id);
+                                                            const twin = findPMTaskByAppTaskId(pmState.tasks, t.id);
+                                                            void (twin ? completeTask(twin.id) : completeAppTask(t.id)).catch(() => undefined);
                                                             play("completeTask");
                                                         }}
                                                         className="rounded bg-emerald-600 px-2.5 py-1 text-[10px] text-white transition hover:bg-emerald-500 active:bg-emerald-700"

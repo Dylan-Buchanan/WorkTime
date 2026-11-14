@@ -84,7 +84,8 @@ interface AppContextShape {
     updateSettings: (s: Settings) => Promise<void>;
     remainingMs: () => number;
     error: string | null;
-    finalizeTask: (id: string) => Promise<void>;
+    finalizeTask: (id: string, options?: { rethrow?: boolean }) => Promise<void>;
+    completeTaskKeepingWindow: (taskId: string) => Promise<void>;
     /** Finalize now, or queue it when `taskId` owns the current Work window. Memory-only. */
     requestFinalize: (taskId: string, options?: { mode?: "finalize" | "archive" }) => Promise<"finalized" | "deferred">;
     /** Backend task ids awaiting a deferred finalize, in enqueue order. Memory-only. */
@@ -537,12 +538,13 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     const skipBreak = () => adoptResult(() => data.skipBreak());
     const updateSettings = (settings: Settings) => adoptResult(() => data.updateSettings(settings));
-    const finalizeTask = (id: string) => {
+    const finalizeTask = (id: string, options?: { rethrow?: boolean }) => {
         const pending = pendingFinalizeRef.current.filter(entry => entry.id !== id);
         pendingFinalizeRef.current = pending;
         setPendingFinalizeTaskIds(pending.map(entry => entry.id));
-        return adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)));
+        return adoptResult(() => adoptTaskTransition(() => data.finalizeTask(id)), options?.rethrow);
     };
+    const completeTaskKeepingWindow = (taskId: string) => adoptResult(() => data.completeTaskKeepingWindow(taskId), true);
     const requestFinalize = async (taskId: string, options?: { mode?: "finalize" | "archive" }): Promise<"finalized" | "deferred"> => {
         const mode = options?.mode ?? "finalize";
         const queued = pendingFinalizeRef.current.find(entry => entry.id === taskId);
@@ -685,7 +687,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     };
 
-    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, requestFinalize, pendingFinalizeTaskIds, archiveTask, startTaskWork, subscribeTaskCompletions, subscribeTimerTransitions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
+    return <AppStateContext.Provider value={{ state, refresh, createTask, setActiveTask, startWork, startBreak, completeTimer, stopWork, skipBreak, updateSettings, remainingMs: () => computeRemainingMs(state?.timer, Date.now()), error, finalizeTask, completeTaskKeepingWindow, requestFinalize, pendingFinalizeTaskIds, archiveTask, startTaskWork, subscribeTaskCompletions, subscribeTimerTransitions, pauseTimer, resumeTimer, isPaused: !!state?.timer?.paused, tick, resetAll }}>{children}</AppStateContext.Provider>;
 };
 
 export const useAppState = () => {

@@ -1,3 +1,5 @@
+import * as completionHooks from "../state/TaskCompletionContext";
+import { TaskCompletionProvider } from "../state/TaskCompletionContext";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TASK_SORT_LS_KEY, TaskPanel } from "./TaskPanel";
@@ -22,7 +24,7 @@ function wrap(data: InMemoryDataAccess, children: React.ReactNode) {
             <DataProvider dataAccess={data}>
                 <SyncProvider ownerId={OWNER}>
                     <AppStateProvider>
-                        <ProjectManagerProvider>{children}</ProjectManagerProvider>
+                        <ProjectManagerProvider><TaskCompletionProvider>{children}</TaskCompletionProvider></ProjectManagerProvider>
                     </AppStateProvider>
                 </SyncProvider>
             </DataProvider>
@@ -103,4 +105,32 @@ it("handles a rejected row activation while preserving the AppState error banner
     const row = await screen.findByText("Clickable (0/1)");
     await act(async () => { fireEvent.click(row); });
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Activation unavailable"));
+});
+
+
+it.each([
+    [true, false], [false, false], [true, true], [false, true],
+])("routes active-row Complete through the controller, PM twin=%s, rejection=%s", async (linked, rejects) => {
+    const completeTask = vi.fn();
+    const completeAppTask = vi.fn();
+    for (const complete of [completeTask, completeAppTask]) {
+        if (rejects) complete.mockRejectedValue(new Error("Completion unavailable"));
+        else complete.mockResolvedValue(undefined);
+    }
+    const hook = vi.spyOn(completionHooks, "useTaskCompletion").mockReturnValue({ completeTask, completeAppTask, openSwitchSheet: vi.fn(), busy: false });
+    try {
+        const appTask = { id: "a", name: "Active task", target_pomodoros: 2, completed_pomodoros: 0,
+            created_at: "2026-01-01T00:00:00Z", completed_at: null, break_skips: 0, archived: false };
+        const data = new InMemoryDataAccess(makeAppState({ tasks: { a: appTask }, active_task: "a" }));
+        if (linked) await data.savePMState({ projects: {}, tasks: { pa: {
+            id: "pa", title: "Active task", appTaskId: "a", projectId: null, status: "In Progress", priority: "Medium",
+            timeSpentMinutes: 0, tags: [], links: [], checklist: [], sortOrder: 0, isArchived: false, relatedTo: [],
+            createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+        } }, meta: { initializedAt: "2026-01-01T00:00:00Z" } });
+        render(wrap(data, <TaskPanel />));
+        const button = await screen.findByRole("button", { name: "Complete" });
+        await act(async () => { fireEvent.click(button); });
+        if (linked) { expect(completeTask).toHaveBeenCalledExactlyOnceWith("pa"); expect(completeAppTask).not.toHaveBeenCalled(); }
+        else { expect(completeAppTask).toHaveBeenCalledExactlyOnceWith("a"); expect(completeTask).not.toHaveBeenCalled(); }
+    } finally { hook.mockRestore(); }
 });
