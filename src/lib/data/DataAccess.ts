@@ -124,6 +124,7 @@ export interface DataAccess {
     skipBreak(): Promise<EngineResult<AppStateData>>;
     updateSettings(settings: Settings): Promise<EngineResult<Settings>>;
     finalizeTask(taskId: string): Promise<EngineResult<Task>>;
+    completeTaskKeepingWindow(taskId: string): Promise<EngineResult<Task>>;
     finalizeDeferredTask(taskId: string): Promise<EngineResult<DeferredFinalizeOutcome>>;
     archiveDeferredTask(taskId: string): Promise<EngineResult<DeferredFinalizeOutcome>>;
     archiveTask(taskId: string): Promise<EngineResult<Task>>;

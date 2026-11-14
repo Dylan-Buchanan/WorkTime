@@ -25,9 +25,7 @@ import { WaitingBadge } from "./WaitingIndicator";
 import { waitingOf } from "../lib/pm/waiting";
 import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
 import { isWorkWindowLive } from "../lib/engine";
-import { rankWhatsNext } from "../lib/whatsNext";
-import { SwitchSheet } from "./SwitchSheet";
-import { useWindowHandoff } from "../hooks/useWindowHandoff";
+import { useTaskCompletion } from "../state/TaskCompletionContext";
 import { useOptionalResumeMemo } from "../state/ResumeMemoContext";
 import { getResumeNote } from "../lib/resume";
 import { ResumeCard } from "./ResumeCard";
@@ -267,20 +265,7 @@ export const TimerPanel: React.FC = () => {
             !(emptyCardDismissal?.taskId === cardTask.id && emptyCardDismissal.at === lastEnter.at));
     const waitingTask = timer?.kind === "Work" ? findPMTaskByAppTaskId(pmState.tasks, timer.task_id) : null;
     const waiting = waitingTask ? waitingOf(waitingTask) : null;
-    const [sheet, setSheet] = useState<{ mode: "switch" | "waiting"; reference: Date; occupantId: string | null } | null>(null);
-    const handoff = useWindowHandoff(() => setSheet(null), sheet ?? undefined);
-    const openSheet = (mode: "switch" | "waiting", invoker: HTMLButtonElement) => {
-        const reference = new Date();
-        invoker.focus();
-        handoff.cancel();
-        if (mode === "waiting" && waitingTask) {
-            updateTask(waitingTask.id, { waiting: { type: "agent", since: reference.toISOString() } });
-        }
-        setSheet({ mode, occupantId: waitingTask?.id ?? null, reference });
-    };
-    const closeSheet = () => { handoff.cancel(); setSheet(null); };
-    const sheetOccupant = sheet?.occupantId ? pmState.tasks[sheet.occupantId] : undefined;
-    const sheetWaiting = sheetOccupant ? waitingOf(sheetOccupant) : null;
+    const { openSwitchSheet } = useTaskCompletion();
     const ms = remainingMs();
     const isBreak = timer && timer.kind !== "Work";
     const workMinutesSetting = state?.settings?.work_minutes ?? 0;
@@ -303,6 +288,15 @@ export const TimerPanel: React.FC = () => {
     const activeAppTask = activeAppTaskId ? state?.tasks[activeAppTaskId] : null;
     const activeIsTodoTask = Boolean(activeAppTaskId && Object.values(todoContext?.state.todos ?? {})
         .some((todo) => todo.currentTaskId === activeAppTaskId));
+
+    /** A Work occupant is finished when its backend task is completed or its PM twin is Done/archived.
+     *  To-do-owned tasks never gain the completed presentation. */
+    const occupantCompleted = useMemo(() => {
+        if (timer?.kind !== "Work" || activeIsTodoTask) return false;
+        if (cardTask?.completed_at != null) return true;
+        const twin = findPMTaskByAppTaskId(pmState.tasks, timer.task_id);
+        return Boolean(twin && (twin.status === "Done" || twin.isArchived));
+    }, [timer, activeIsTodoTask, cardTask, pmState.tasks]);
 
     const linkedTask = useMemo(() => {
         if (!activeAppTaskId) return null;
@@ -601,6 +595,11 @@ export const TimerPanel: React.FC = () => {
                                     {taskName}
                                 </span>
                             )}
+                            {occupantCompleted && (
+                                <span className="px-2 py-1 rounded bg-emerald-600/20 text-[10px] font-medium tracking-wide text-emerald-300">
+                                    Completed
+                                </span>
+                            )}
                             {pmTaskProject && (
                                 <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-neutral-800 text-[10px]">
                                     <span className="w-2 h-2 rounded-full" style={{ background: pmTaskProject.color }} />
@@ -644,8 +643,8 @@ export const TimerPanel: React.FC = () => {
                     <div className="flex flex-col items-center gap-2 text-xs">
                         {isWorkWindowLive(timer ?? null, new Date()) && (
                             <div className="flex flex-wrap justify-center gap-2">
-                                <button type="button" className={`${ACTION_BUTTON} border-amber-700 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50`} disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) => openSheet("waiting", event.currentTarget)}>Waiting</button>
-                                <button type="button" className={`${ACTION_BUTTON} border-sky-700 bg-sky-950/40 text-sky-200 hover:bg-sky-900/50`} onClick={(event) => openSheet("switch", event.currentTarget)}>Switch</button>
+                                <button type="button" className={`${ACTION_BUTTON} border-amber-700 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50`} disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) =>  { event.currentTarget.focus(); openSwitchSheet("waiting"); }}>Waiting</button>
+                                <button type="button" className={`${ACTION_BUTTON} border-sky-700 bg-sky-950/40 text-sky-200 hover:bg-sky-900/50`} onClick={(event) =>  { event.currentTarget.focus(); openSwitchSheet("switch"); }}>Switch</button>
                             </div>
                         )}
                         <div className="flex flex-wrap justify-center gap-2">
@@ -661,7 +660,20 @@ export const TimerPanel: React.FC = () => {
                                     Start Focus
                                 </button>
                             )}
-                            {timer && !isPaused && ms > 0 && (
+                            {occupantCompleted && (
+                                <button
+                                    className={ACTION_PRIMARY}
+                                    onMouseEnter={() => play("hover")}
+                                    onClick={(event) => {
+                                        event.currentTarget.focus();
+                                        openSwitchSheet("switch");
+                                        play("pressSide");
+                                    }}
+                                >
+                                    Pick next
+                                </button>
+                            )}
+                            {timer && !isPaused && ms > 0 && !occupantCompleted && (
                                 <button
                                     className={ACTION_SECONDARY}
                                     onMouseEnter={() => play("hover")}
@@ -673,7 +685,7 @@ export const TimerPanel: React.FC = () => {
                                     Pause
                                 </button>
                             )}
-                            {timer && isPaused && (
+                            {timer && isPaused && !occupantCompleted && (
                                 <button
                                     className={ACTION_SECONDARY}
                                     onMouseEnter={() => play("hover")}
@@ -783,19 +795,6 @@ export const TimerPanel: React.FC = () => {
                     </div>
                 )}
             </aside>
-            {sheet && <SwitchSheet
-                mode={sheet.mode} result={rankWhatsNext({
-                    pmTasks: Object.values(pmState.tasks), backendTasks: state?.tasks ?? {}, projects: pmState.projects,
-                    currentOccupantId: waitingTask?.id ?? null, reference: sheet.reference,
-                })} projects={pmState.projects}
-                linkStateOf={handoff.linkStateOf} linkErrorOf={handoff.linkErrorOf}
-                waitingType={sheetWaiting?.type}
-                onSetWaitingType={(type) => {
-                    if (sheet.occupantId && sheetWaiting) updateTask(sheet.occupantId, { waiting: { ...sheetWaiting, type } });
-                }}
-                onSelect={handoff.select} onRetryLink={handoff.retry} onClose={closeSheet}
-                busyTaskId={handoff.busyTaskId} notice={handoff.notice} error={handoff.error}
-            />}
         </div>
     );
 };

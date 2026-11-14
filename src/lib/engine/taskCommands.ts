@@ -88,6 +88,22 @@ export function finalizeTask(state: AppStateData, taskId: string, now: Date, log
     return { state: next, value: { ...task } };
 }
 
+/**
+ * Commits `taskId` (stamp `completed_at` when null, set `archived`, clear `active_task`)
+ * without consulting the window.
+ *
+ * Caller contract: the caller must already have established `windowRemainingSecs(timer, now) > 0`;
+ * this command neither checks nor repairs the window and never reads or writes `state.timer`.
+ */
+export function completeTaskKeepingWindow(state: AppStateData, taskId: string, now: Date): EngineResult<Task> {
+    const next = cloneAppState(state);
+    const task = taskOrThrow(next, taskId);
+    if (task.completed_at === null) task.completed_at = now.toISOString();
+    task.archived = true;
+    if (next.active_task === taskId) next.active_task = null;
+    return { state: next, value: { ...task } };
+}
+
 /** Rust: set_task_target */
 export function setTaskTarget(state: AppStateData, taskId: string, target: number): EngineResult<Task> {
     const next = cloneAppState(state);
