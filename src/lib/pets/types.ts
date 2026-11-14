@@ -19,7 +19,10 @@ export type {
 
 export type PetScheduleMode = "fixed-time" | "interval";
 export type PetAgeUnit = "weeks" | "months";
-export type PetShiftReason = "nap" | "post-wake";
+export type PetShiftReason = "nap" | "post-wake" | "busy";
+export interface PetBusyInterval { start: string | Date; end: string | Date; }
+export type PetBlockedReason = "day-end" | "interval-limit";
+export interface PetBlockedBy { start: Date; end: Date; reason: PetBlockedReason; }
 
 export interface NewPetProfileInput {
     name: string;
@@ -134,6 +137,14 @@ export interface PetScheduleEntry {
     endMinutes: number;
     /** Exclusive close for unassigned activity matching: next entry start or day end. */
     windowEnd: Date;
+    /** Busy run that kept a needed move from fitting, or null. */
+    blockedBy: PetBlockedBy | null;
+    /** Fulfilment and grouping anchor before busy placement, including nap effects. */
+    unshiftedStart: Date;
+    /** Exclusive grouping close before busy placement; also used as windowEnd. */
+    unshiftedWindowEnd: Date;
+    /** Occurrence identity anchor before any nap or busy reflow. */
+    occurrenceStart: Date;
     fulfilled: boolean;
     fulfilledAt: Date | null;
     /** Whole minutes past the window close while unfulfilled; zero otherwise. */
@@ -147,6 +158,8 @@ export interface PetScheduleEntry {
 }
 
 export interface BuildPetScheduleInput {
+    /** Calendar busy time for the resolved schedule day; optional and never persisted. */
+    busyIntervals?: readonly PetBusyInterval[];
     now: Date;
     /** Configured local wall-clock start edge; defaults to midnight. */
     startOfDay?: string;
@@ -195,6 +208,8 @@ export interface PetNapReflowProposal {
 }
 
 export interface ProposeNapReflowInput {
+    /** Calendar busy time for the resolved schedule day; optional and never persisted. */
+    busyIntervals?: readonly PetBusyInterval[];
     /** The nap that just ended. */
     nap: PetNapRecord;
     now: Date;
