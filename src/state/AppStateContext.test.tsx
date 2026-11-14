@@ -49,6 +49,30 @@ describe("timer transition events", () => {
         return { data, events, app: () => current, ...view };
     }
 
+    it("guards pause by task and window identity while retaining matching and unguarded pause transitions", async () => {
+        const c = await setup();
+        const pause = vi.spyOn(c.data, "pauseTimer");
+        time(3);
+        await act(async () => {
+            await c.app().pauseTimer({ expect: { taskId: "B", windowStartedAt: W } });
+            await c.app().pauseTimer({ expect: { taskId: "A", windowStartedAt: at(1) } });
+        });
+        expect(pause).not.toHaveBeenCalled();
+        expect(c.app().state?.timer?.paused).toBe(false);
+        expect(c.events).toEqual([]);
+        await act(async () => { await c.app().pauseTimer({ expect: { taskId: "A", windowStartedAt: W } }); });
+        expect(pause).toHaveBeenCalledTimes(1);
+        expect(c.app().state?.timer?.paused).toBe(true);
+        expect(c.events).toEqual([{ type: "leave", taskId: "A", reason: "pause", at: at(3), windowId: W }]);
+        await act(async () => { await c.app().resumeTimer(); });
+        c.events.length = 0;
+        time(4);
+        await act(async () => { await c.app().pauseTimer(); });
+        expect(pause).toHaveBeenCalledTimes(2);
+        expect(c.app().state?.timer?.paused).toBe(true);
+        expect(c.events).toEqual([{ type: "leave", taskId: "A", reason: "pause", at: at(4), windowId: W }]);
+    });
+
     it("swallows finalize failure by default and rethrows on request, setting error in both cases", async () => {
         const c = await setup();
         const before = structuredClone(c.app().state);

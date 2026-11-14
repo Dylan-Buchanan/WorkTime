@@ -24,8 +24,9 @@ const pmTask = (id: string, extra: Partial<PMTask> = {}): PMTask => ({ id: `p${i
 type Controls = { app: ReturnType<typeof useAppState>; pm: ReturnType<typeof usePM>;
     completion: ReturnType<typeof useTaskCompletion>; memo: ReturnType<typeof useOptionalResumeMemo> };
 
-async function setup(options: { tasks?: PMTask[]; timer?: Partial<ActiveTimer>; memo?: boolean; projects?: Record<string, Project> } = {}) {
-    const data = new InMemoryDataAccess(makeAppState({ tasks: { a: backend("a"), b: backend("b") }, active_task: "a",
+async function setup(options: { tasks?: PMTask[]; timer?: Partial<ActiveTimer>; memo?: boolean; projects?: Record<string, Project>;
+    backendIds?: string[] } = {}) {
+    const data = new InMemoryDataAccess(makeAppState({ tasks: Object.fromEntries((options.backendIds ?? ["a", "b"]).map(id => [id, backend(id)])), active_task: "a",
         timer: makeActiveTimer({ task_id: "a", started_at: W, window_started_at: W,
             ends_at: "2026-11-09T14:25:00.000Z", ...options.timer }) }));
     const tasks = options.tasks ?? [pmTask("a"), pmTask("b")];
@@ -56,8 +57,235 @@ async function setup(options: { tasks?: PMTask[]; timer?: Partial<ActiveTimer>; 
 beforeEach(() => { localStorage.clear(); vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(NOW)); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 const noSheet = () => expect(screen.queryByRole("dialog", { name: "Switch task" })).not.toBeInTheDocument();
+const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+};
 
 describe("TaskCompletion controller", () => {
+    it("guards a delayed pause when another task takes the window and finalizes the former occupant", async () => {
+        const view = await setup();
+        const gate = deferred();
+        const pause = view.current.app.pauseTimer;
+        const guardedPause = vi.spyOn(view.current.app, "pauseTimer").mockImplementation(async options => {
+            await gate.promise;
+            await pause(options);
+        });
+        const dataPause = vi.spyOn(view.data, "pauseTimer");
+        const finalize = vi.spyOn(view.data, "finalizeTask");
+        const commit = vi.spyOn(view.data, "completeTaskKeepingWindow");
+        const hold = view.current.memo!.holdMemoPresentation;
+        const release = vi.fn();
+        vi.spyOn(view.current.memo!, "holdMemoPresentation").mockImplementation(() => {
+            const original = hold();
+            return () => { release(); original(); };
+        });
+        let pending!: Promise<void>;
+        act(() => { pending = view.current.completion.completeTask("pa"); });
+        expect(guardedPause).toHaveBeenCalledExactlyOnceWith({ expect: { taskId: "a", windowStartedAt: W } });
+        await act(async () => { await view.current.app.startTaskWork("b"); });
+        await act(async () => { gate.resolve(); await pending; });
+        expect(dataPause).not.toHaveBeenCalled();
+        expect(finalize).toHaveBeenCalledExactlyOnceWith("a");
+        expect(commit).not.toHaveBeenCalled();
+        expect(view.current.app.state?.timer).toMatchObject({ task_id: "b", paused: false, window_started_at: W });
+        expect(view.current.app.state?.tasks.a).toMatchObject({ completed_at: NOW, archived: true });
+        expect(release).toHaveBeenCalledTimes(1);
+        view.unmount();
+        expect(release).toHaveBeenCalledTimes(1);
+        noSheet(); view.assertNoPending();
+    });
+
+    it("keeps completion durable without a sheet when End clears the window during the commit", async () => {
+        const view = await setup();
+        const gate = deferred();
+        const commit = view.data.completeTaskKeepingWindow.bind(view.data);
+        const pendingCommit = vi.spyOn(view.data, "completeTaskKeepingWindow").mockImplementation(async id => {
+            await gate.promise;
+            return commit(id);
+        });
+        const hold = view.current.memo!.holdMemoPresentation;
+        const release = vi.fn();
+        vi.spyOn(view.current.memo!, "holdMemoPresentation").mockImplementation(() => {
+            const original = hold();
+            return () => { release(); original(); };
+        });
+        let pending!: Promise<void>;
+        act(() => { pending = view.current.completion.completeTask("pa"); });
+        await waitFor(() => expect(pendingCommit).toHaveBeenCalledTimes(1));
+        await act(async () => { await view.current.app.stopWork(); });
+        expect(view.current.app.state?.timer).toBeNull();
+        await act(async () => { gate.resolve(); await pending; });
+        expect(view.current.app.state?.tasks.a).toMatchObject({ completed_at: NOW, archived: true });
+        expect(view.data.store.state.tasks.a).toMatchObject({ completed_at: NOW, archived: true });
+        expect(view.current.app.state?.timer).toBeNull();
+        expect(view.current.completion.busy).toBe(false);
+        expect(release).toHaveBeenCalledTimes(1);
+        noSheet(); view.assertNoPending();
+        act(() => view.current.memo!.openMemo("b"));
+        await screen.findByRole("dialog", { name: "What were you doing in Task B?" });
+        view.unmount();
+        expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("serializes different completions, deduplicates queued and running ids, and preserves pausedAt for handoff", async () => {
+        const view = await setup({ tasks: [pmTask("a"), pmTask("b"), pmTask("c")], backendIds: ["a", "b", "c"] });
+        const pauseGate = deferred();
+        const finalizeGate = deferred();
+        const pause = view.data.pauseTimer.bind(view.data);
+        vi.spyOn(view.data, "pauseTimer").mockImplementation(async () => {
+            const result = await pause();
+            await pauseGate.promise;
+            return result;
+        });
+        const finalize = view.data.finalizeTask.bind(view.data);
+        const finalizing = vi.spyOn(view.data, "finalizeTask").mockImplementation(async id => {
+            await finalizeGate.promise;
+            return finalize(id);
+        });
+        const commit = vi.spyOn(view.data, "completeTaskKeepingWindow");
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => { first = view.current.completion.completeTask("pa"); });
+        await waitFor(() => expect(view.current.app.state?.timer?.paused).toBe(true));
+        act(() => { second = view.current.completion.completeAppTask("b"); });
+        await act(async () => {
+            await view.current.completion.completeAppTask("a");
+            await view.current.completion.completeTask("pb");
+        });
+        expect(view.current.completion.busy).toBe(true);
+        expect(finalizing).not.toHaveBeenCalled();
+        expect(commit).not.toHaveBeenCalled();
+        await act(async () => { pauseGate.resolve(); await first; });
+        expect(commit).toHaveBeenCalledExactlyOnceWith("a");
+        expect(finalizing).toHaveBeenCalledExactlyOnceWith("b");
+        expect(view.current.completion.busy).toBe(true);
+        await act(async () => {
+            await view.current.completion.completeTask("pb");
+            finalizeGate.resolve(); await second;
+        });
+        expect(finalizing).toHaveBeenCalledTimes(1);
+        expect(view.current.completion.busy).toBe(false);
+        vi.setSystemTime(new Date("2026-11-09T14:08:00.000Z"));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Switch task" })).getByRole("button", { name: /Task C/ }));
+        await waitFor(() => expect(view.current.app.state?.timer?.task_id).toBe("c"));
+        expect(view.events).toEqual([
+            { type: "leave", reason: "pause", taskId: "a", windowId: W, at: NOW },
+            { type: "leave", reason: "switch", taskId: "a", windowId: W, at: "2026-11-09T14:08:00.000Z", pausedAt: NOW },
+            { type: "enter", reason: "switch", taskId: "c", windowId: W, at: "2026-11-09T14:08:00.000Z", fromTaskId: "a" },
+        ]);
+        expect(view.data.store.state.logs.filter(log => log.work_window_id === W)).toHaveLength(1);
+        noSheet(); view.assertNoPending();
+    });
+
+    it("evaluates a queued task against the occupant and time at the head of the FIFO", async () => {
+        const view = await setup();
+        const gate = deferred();
+        const finalize = view.data.finalizeTask.bind(view.data);
+        const finalizing = vi.spyOn(view.data, "finalizeTask").mockImplementationOnce(async id => {
+            await gate.promise;
+            return finalize(id);
+        });
+        const commit = vi.spyOn(view.data, "completeTaskKeepingWindow");
+        const pause = vi.spyOn(view.data, "pauseTimer");
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = view.current.completion.completeTask("pb");
+            second = view.current.completion.completeTask("pa");
+        });
+        expect(view.current.completion.busy).toBe(true);
+        vi.setSystemTime(new Date("2026-11-09T14:30:00.000Z"));
+        await act(async () => { gate.resolve(); await Promise.all([first, second]); });
+        expect(finalizing.mock.calls).toEqual([["b"], ["a"]]);
+        expect(pause).not.toHaveBeenCalled();
+        expect(commit).not.toHaveBeenCalled();
+        expect(view.current.app.state?.timer?.kind).toBe("ShortBreak");
+        expect(view.current.completion.busy).toBe(false);
+        noSheet(); view.assertNoPending();
+    });
+
+    it("uses the previous completion's latest backend state for the next availability decision", async () => {
+        const view = await setup();
+        const gate = deferred();
+        const finalize = view.data.finalizeTask.bind(view.data);
+        vi.spyOn(view.data, "finalizeTask").mockImplementationOnce(async id => {
+            await gate.promise;
+            return finalize(id);
+        });
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = view.current.completion.completeTask("pb");
+            second = view.current.completion.completeTask("pa");
+        });
+        await act(async () => { gate.resolve(); await Promise.all([first, second]); });
+        expect(screen.getByText("Nothing to switch to right now: 1 task is already finished on the timer.")).toBeVisible();
+        expect(view.current.app.state?.tasks.b.archived).toBe(true);
+        expect(view.current.completion.busy).toBe(false);
+        view.assertNoPending();
+    });
+
+    it("rejects a failed sequence and still runs the next queued completion", async () => {
+        const view = await setup();
+        const gate = deferred();
+        vi.spyOn(view.data, "pauseTimer").mockImplementationOnce(async () => {
+            await gate.promise;
+            throw new Error("Pause unavailable");
+        });
+        const finalize = vi.spyOn(view.data, "finalizeTask");
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = view.current.completion.completeTask("pa");
+            second = view.current.completion.completeTask("pb");
+        });
+        expect(finalize).not.toHaveBeenCalled();
+        await act(async () => {
+            const failure = expect(first).rejects.toThrow("Pause unavailable");
+            gate.resolve();
+            await failure;
+            await second;
+        });
+        expect(finalize).toHaveBeenCalledExactlyOnceWith("b");
+        expect(view.current.app.state?.tasks.b.archived).toBe(true);
+        expect(view.current.completion.busy).toBe(false);
+        noSheet(); view.assertNoPending();
+    });
+
+    it("abandons queued completions on unmount without extra commands or hold releases", async () => {
+        const view = await setup();
+        const gate = deferred();
+        const pause = view.data.pauseTimer.bind(view.data);
+        vi.spyOn(view.data, "pauseTimer").mockImplementation(async () => {
+            const result = await pause();
+            await gate.promise;
+            return result;
+        });
+        const hold = view.current.memo!.holdMemoPresentation;
+        const release = vi.fn();
+        vi.spyOn(view.current.memo!, "holdMemoPresentation").mockImplementation(() => {
+            const original = hold();
+            return () => { release(); original(); };
+        });
+        const finalize = vi.spyOn(view.data, "finalizeTask");
+        const commit = vi.spyOn(view.data, "completeTaskKeepingWindow");
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = view.current.completion.completeTask("pa");
+            second = view.current.completion.completeTask("pb");
+        });
+        view.unmount();
+        expect(release).toHaveBeenCalledTimes(1);
+        await act(async () => { gate.resolve(); await Promise.all([first, second]); });
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(finalize).not.toHaveBeenCalled();
+        expect(commit).not.toHaveBeenCalled();
+        noSheet(); view.assertNoPending();
+    });
+
     it("finalizes a non-occupant without touching the timer (branch 1)", async () => {
         const view = await setup();
         const original = structuredClone(view.data.store.state.timer);
