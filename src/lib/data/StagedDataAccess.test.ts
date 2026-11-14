@@ -347,6 +347,53 @@ describe("StagedDataAccess", () => {
         expect(store.read(OWNER_A).state.timer).toMatchObject({ task_id: "t1", paused: false });
     });
 
+    it("completes the Work owner through completeTaskKeepingWindow and keeps the staged window", async () => {
+        const { executor, sync } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const now = new Date("2026-01-01T00:03:00.000Z");
+        const timer = makeActiveTimer({
+            task_id: "t1",
+            started_at: "2026-01-01T00:00:00.000Z",
+            ends_at: "2026-01-01T00:25:00.000Z",
+            planned_secs: 1500,
+            window_started_at: "2026-01-01T00:00:00.000Z",
+        });
+        await store.update(OWNER_A, current => ({ ...current, state: makeAppState({
+            tasks: { t1: { ...TASK_T1 } }, active_task: "t1", timer,
+        }) }));
+        const data = new StagedDataAccess(OWNER_A, store, executor, { now: () => now });
+
+        const result = await data.completeTaskKeepingWindow("t1");
+
+        expect(result.value).toMatchObject({ id: "t1", completed_at: now.toISOString(), archived: true });
+        const staged = store.read(OWNER_A).state;
+        expect(staged.tasks.t1).toMatchObject({ completed_at: now.toISOString(), archived: true });
+        expect(staged.active_task).toBeNull();
+        expect(staged.timer).toEqual(timer);
+        expect(result.state).toEqual(staged);
+        expect(sync).not.toHaveBeenCalled();
+
+        // A fresh access instance re-reads the persisted staged record unchanged.
+        const reloaded = new StagedDataAccess(OWNER_A, store, executor, { now: () => now });
+        const fetched = await reloaded.fetchState();
+        expect(fetched.state.timer).toEqual(timer);
+        expect(fetched.state.tasks.t1).toMatchObject({ completed_at: now.toISOString(), archived: true });
+        expect(fetched.state.active_task).toBeNull();
+    });
+
+    it("rejects completeTaskKeepingWindow for a missing task without staging a write", async () => {
+        const { executor } = makeSyncExecutor();
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess(OWNER_A, store, executor);
+        const before = store.read(OWNER_A);
+
+        await expect(data.completeTaskKeepingWindow("missing")).rejects.toThrow(/Task not found/);
+
+        const after = store.read(OWNER_A);
+        expect(after.revision).toBe(before.revision);
+        expect(after.state).toEqual(before.state);
+    });
+
     it("executes representative commands locally with zero sync calls", async () => {
         const { executor, sync } = makeSyncExecutor();
         const store = new LocalStagingStore(window.localStorage);

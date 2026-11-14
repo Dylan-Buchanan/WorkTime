@@ -5,6 +5,7 @@ import type { EngineResult } from "../engine";
 import {
     archiveTask,
     cloneAppState,
+    completeTaskKeepingWindow,
     completeTimer as engineCompleteTimer,
     createTask,
     deleteTask,
@@ -394,6 +395,10 @@ export class StagedDataAccess implements DataAccess {
 
     async finalizeTask(taskId: string) {
         return this.transition((state) => finalizeTask(state, taskId, this.now(), this.createLogId()));
+    }
+
+    async completeTaskKeepingWindow(taskId: string) {
+        return this.transition((state) => completeTaskKeepingWindow(state, taskId, this.now()));
     }
 
     async finalizeDeferredTask(taskId: string) {

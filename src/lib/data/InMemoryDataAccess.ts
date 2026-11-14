@@ -7,6 +7,7 @@ import {
     archiveTask,
     EngineError,
     cloneAppState,
+    completeTaskKeepingWindow,
     createTask,
     deleteTask,
     finalizeTask,
@@ -265,6 +266,7 @@ export class InMemoryDataAccess implements DataAccess {
     async skipBreak() { return this.result(skipBreak(this.store.state, this.now(), this.createLogId())); }
     async updateSettings(settings: Settings) { return this.result(updateSettings(this.store.state, settings)); }
     async finalizeTask(taskId: string) { return this.result(finalizeTask(this.store.state, taskId, this.now(), this.createLogId())); }
+    async completeTaskKeepingWindow(taskId: string) { return this.result(completeTaskKeepingWindow(this.store.state, taskId, this.now())); }
     async finalizeDeferredTask(taskId: string) { return this.result(finalizeDeferredTask(this.store.state, taskId, this.now(), this.createLogId())); }
     async archiveDeferredTask(taskId: string) { return this.result(archiveDeferredTask(this.store.state, taskId)); }
     async archiveTask(taskId: string) { return this.result(archiveTask(this.store.state, taskId)); }
