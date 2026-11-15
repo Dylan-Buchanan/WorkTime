@@ -463,7 +463,7 @@ describe("CheckInWizard", () => {
         expect(byKey.has(`${first.id}:2026-11-01`)).toBe(false);
     });
 
-    it("warns when a revision advances the build key, and Continue editing keeps the pinned target", async () => {
+    it("warns when the open period is exported and dismisses without discarding drafts", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();
         const goal = buildGoalFixture({ id: "goal-ship", trackerId: tracker.id, title: "Ship the release" });
@@ -473,6 +473,8 @@ describe("CheckInWizard", () => {
         const { user } = await mountWizard(data, tracker.id, period, onClose);
 
         expect(await screen.findByRole("heading", { name: goal.title })).toBeInTheDocument();
+        const did = screen.getByLabelText(`Did for ${goal.title}`);
+        await user.type(did, "Kept editing the pinned period");
         const staged = await data.loadGoals();
         await data.saveGoals(
             [{ ...staged.trackers[0], lastBuiltPeriodStart: "2026-10-18", updatedAt: new Date().toISOString() }],
@@ -481,13 +483,12 @@ describe("CheckInWizard", () => {
         );
 
         const warning = await screen.findByRole("alert");
-        expect(warning).toHaveTextContent(/already built elsewhere/);
-        expect(warning).toHaveTextContent("Continue editing");
-        expect(warning).toHaveTextContent("Reload current period");
-        await user.click(screen.getByRole("button", { name: "Continue editing" }));
-        expect(screen.queryByText(/already built elsewhere/)).not.toBeInTheDocument();
+        expect(warning).toHaveTextContent("This period’s deck was exported. Rebuild and export the deck again to include your check-in changes.");
+        expect(within(warning).queryByRole("button", { name: "Reload current period" })).not.toBeInTheDocument();
+        await user.click(within(warning).getByRole("button", { name: "Continue editing" }));
+        expect(warning).not.toBeInTheDocument();
+        expect(did).toHaveValue("Kept editing the pinned period");
 
-        await user.type(screen.getByLabelText(`Did for ${goal.title}`), "Kept editing the pinned period");
         await user.click(screen.getByRole("button", { name: "Save check-ins" }));
         await waitFor(() => expect(onClose).toHaveBeenCalled());
 
@@ -511,16 +512,17 @@ describe("CheckInWizard", () => {
 
         expect(await screen.findByRole("heading", { name: goal.title })).toBeInTheDocument();
         expect(screen.getByLabelText("Check-in period")).toHaveValue("2026-10-18");
+        vi.setSystemTime(new Date(2026, 10, 2, 12));
         const staged = await data.loadGoals();
         await data.saveGoals(
             [{ ...staged.trackers[0], lastBuiltPeriodStart: "2026-10-18", updatedAt: new Date().toISOString() }],
             staged.goals,
             staged.checkIns,
         );
-        await screen.findByRole("alert");
-
-        vi.setSystemTime(new Date(2026, 10, 2, 12));
-        await user.click(screen.getByRole("button", { name: "Reload current period" }));
+        const warning = await screen.findByRole("alert");
+        expect(warning).toHaveTextContent("This period was already built elsewhere. You can keep editing it or reload the current period.");
+        expect(within(warning).getByRole("button", { name: "Continue editing" })).toBeEnabled();
+        await user.click(within(warning).getByRole("button", { name: "Reload current period" }));
         await waitFor(() => expect(screen.getByLabelText("Check-in period")).toHaveValue("2026-11-01"));
         expect(screen.queryByText(/already built elsewhere/)).not.toBeInTheDocument();
 

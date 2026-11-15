@@ -11,19 +11,23 @@ const PERIOD: GoalPeriod = {
 };
 
 describe("DeckEntry", () => {
-    it("renders a disabled control with the message and never builds", async () => {
+    it.each([
+        { variant: "settled", label: "Deck not ready", message: "No completed period yet." },
+        { variant: "early", label: "Build deck early", message: "Log a check-in for every active goal to build this period's deck early." },
+    ] as const)("renders the disabled $variant control with the message and never builds", async ({ variant, label, message }) => {
         const onBuild = vi.fn();
         const user = userEvent.setup();
         render(<DeckEntry
             trackerId="tracker-work"
             trackerName="Work"
-            availability={{ kind: "not-ready", message: "No completed period yet. Build the deck after the October 2026 period completes." }}
+            variant={variant}
+            availability={{ kind: "not-ready", message }}
             onBuild={onBuild}
         />);
-        const control = screen.getByRole("button", { name: "Deck not ready" });
+        const control = screen.getByRole("button", { name: label });
         expect(control).toBeDisabled();
         expect(control).toHaveAttribute("aria-disabled", "true");
-        expect(screen.getByText("No completed period yet. Build the deck after the October 2026 period completes.")).toBeInTheDocument();
+        expect(screen.getByText(message)).toBeInTheDocument();
         await user.click(control);
         expect(onBuild).not.toHaveBeenCalled();
     });
@@ -43,6 +47,29 @@ describe("DeckEntry", () => {
         expect(screen.queryByText("Built")).not.toBeInTheDocument();
         await user.click(control);
         expect(onBuild).toHaveBeenCalledWith(PERIOD);
+    });
+
+    it.each([
+        { built: false, label: "Build deck early" },
+        { built: true, label: "Rebuild deck" },
+    ])("shows $label with quiet styling and builds the supplied period", async ({ built, label }) => {
+        const onBuild = vi.fn();
+        const user = userEvent.setup();
+        const { container } = render(<DeckEntry
+            trackerId="tracker-work"
+            trackerName="Work"
+            variant="early"
+            availability={{ kind: "ready", period: PERIOD, built }}
+            onBuild={onBuild}
+        />);
+        expect(container.firstElementChild).toHaveAttribute("data-deck-entry-variant", "early");
+        const control = screen.getByRole("button", { name: label });
+        expect(control).toBeEnabled();
+        expect(control).toHaveClass("border-neutral-700", "text-indigo-200");
+        if (built) expect(screen.getByText("Built")).toHaveClass("text-emerald-200");
+        else expect(screen.queryByText("Built")).not.toBeInTheDocument();
+        await user.click(control);
+        expect(onBuild).toHaveBeenCalledExactlyOnceWith(PERIOD);
     });
 
     it("shows the built cue and stays actionable for a same-period rebuild", async () => {

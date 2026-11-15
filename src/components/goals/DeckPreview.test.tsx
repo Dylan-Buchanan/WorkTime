@@ -213,6 +213,19 @@ beforeEach(() => {
 });
 
 describe("DeckPreview", () => {
+    it.each([true, false, undefined])("keeps the export plan identical with periodInProgress=%s", async periodInProgress => {
+        const plan = buildPlan();
+        const user = userEvent.setup();
+        const onExport = vi.fn();
+        render(<DeckPreview plan={plan} periodInProgress={periodInProgress} onClose={vi.fn()} onExport={onExport} />);
+
+        if (periodInProgress) expect(screen.getByText("Period in progress")).toHaveClass("border-neutral-700");
+        else expect(screen.queryByText("Period in progress")).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Export deck" }));
+        expect(onExport).toHaveBeenCalledExactlyOnceWith(plan);
+    });
+
     function habitPlan(): DeckPlan {
         const tracker = buildGoalTrackerFixture();
         const goal = buildGoalFixture({

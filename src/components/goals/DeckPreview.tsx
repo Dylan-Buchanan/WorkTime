@@ -40,6 +40,7 @@ import type {
 
 export interface DeckPreviewProps {
     plan: DeckPlan;
+    periodInProgress?: boolean;
     onClose: () => void;
     onExport: (plan: DeckPlan) => void | Promise<void>;
 }
@@ -202,7 +203,7 @@ const StaticSlideCard: React.FC<SlideCardProps> = props => <SlideCard {...props}
  * In-memory deck preview. The local plan copy starts from the supplied plan,
  * every edit uses the deterministic deck helpers, and nothing is persisted.
  */
-export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExport }) => {
+export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, periodInProgress, onClose, onExport }) => {
     const [currentPlan, setCurrentPlan] = useState<DeckPlan>(() => plan);
     const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
     const [skippedWarningIds, setSkippedWarningIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -804,6 +805,7 @@ export const DeckPreview: React.FC<DeckPreviewProps> = ({ plan, onClose, onExpor
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    {periodInProgress && <span className="rounded-full border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300">Period in progress</span>}
                     <button type="button" className={toolbarButton} onClick={onClose}>Close preview</button>
                     {polishing && <button type="button" className={toolbarButton} onClick={() => {
                         polishRunId.current += 1;

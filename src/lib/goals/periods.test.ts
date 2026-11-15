@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
     daysUntil,
     dueState,
+    earlyDeckState,
     firstPeriod,
     firstPeriodCandidates,
     goalGrid,
@@ -17,7 +18,7 @@ import type { GoalGridInput, GoalPeriod } from "./periods";
 import type { GoalCadence } from "../../state/types";
 import type { LocalDateKey } from "../todos/types";
 import { addLocalDays, localDateAtNoon, localDateFromKey, localDateKey } from "../todos/calendar";
-import { buildGoalTrackerFixture, buildMonthlyWeekdayTrackerFixture } from "./testFixtures";
+import { buildGoalCheckInFixture, buildGoalFixture, buildGoalTrackerFixture, buildMonthlyWeekdayTrackerFixture } from "./testFixtures";
 
 describe("firstPeriodCandidates", () => {
     it.each<[GoalCadence, LocalDateKey, LocalDateKey]>([
@@ -282,6 +283,54 @@ describe("dueState", () => {
                 lastBuiltPeriodStart: buildKey,
             });
         }
+    });
+});
+
+describe("earlyDeckState", () => {
+    const today = "2026-10-20";
+    const goal = buildGoalFixture();
+    const achieved = buildGoalFixture({ id: "achieved", lifecycle: "achieved" });
+    const dropped = buildGoalFixture({ id: "dropped", lifecycle: "dropped" });
+    const checkIn = buildGoalCheckInFixture({ goalId: goal.id, periodStart: "2026-10-18" });
+
+    it("reports archived before any period math", () => {
+        expect(earlyDeckState(buildGrid({ isArchived: true }), [], [], "2026-10-03")).toEqual({ kind: "archived" });
+    });
+
+    it("reports no open period before the first period starts", () => {
+        expect(earlyDeckState(buildGrid(), [], [], "2026-10-03")).toEqual({ kind: "no-open-period" });
+    });
+
+    it("waits when every goal is dropped, even with a check-in", () => {
+        expect(earlyDeckState(buildGrid(), [dropped], [{ ...checkIn, goalId: dropped.id }], today))
+            .toEqual({ kind: "waiting", recorded: 0, required: 0 });
+    });
+
+    it("counts distinct goals recorded in the open period and waits for an unrecorded achieved goal", () => {
+        const checkIns = [checkIn, { ...checkIn, id: "duplicate" }, {
+            ...checkIn, id: "old", goalId: achieved.id, periodStart: "2026-10-04" as const,
+        }];
+        expect(earlyDeckState(buildGrid(), [goal, achieved, dropped], checkIns, today))
+            .toEqual({ kind: "waiting", recorded: 1, required: 2 });
+    });
+
+    it("is ready once every non-dropped goal is recorded, including achieved goals", () => {
+        const grid = buildGrid();
+        const checkIns = [checkIn, { ...checkIn, id: "achieved-row", goalId: achieved.id }];
+        expect(earlyDeckState(grid, [goal, achieved, dropped], checkIns, today))
+            .toEqual({ kind: "ready", period: periodAt(grid, today), built: false });
+    });
+
+    it("recognizes a stamped one-week period through its last day", () => {
+        const grid = buildGrid({
+            cadence: { kind: "every-n-weeks", weekday: 0, intervalWeeks: 1 },
+            lastBuiltPeriodStart: "2026-10-18",
+        });
+        expect(earlyDeckState(grid, [goal], [checkIn], "2026-10-24")).toEqual({
+            kind: "ready", period: { periodStart: "2026-10-18", periodEnd: "2026-10-25", monthKey: "2026-10" }, built: true,
+        });
+        expect(earlyDeckState(grid, [goal], [checkIn], "2026-10-25"))
+            .toEqual({ kind: "waiting", recorded: 0, required: 1 });
     });
 });
 

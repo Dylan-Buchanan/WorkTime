@@ -11,7 +11,7 @@ import type { Goal, GoalCadence, GoalMetric, GoalTracker, HabitFrequency, Projec
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
 import { habitUnitWord, maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
-import { daysUntil, dueState, firstPeriod, firstPeriodCandidates, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type FirstPeriodCandidate, type GoalPeriod } from "../lib/goals/periods";
+import { daysUntil, dueState, earlyDeckState, firstPeriod, firstPeriodCandidates, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type FirstPeriodCandidate, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { MISSING_PROJECT_LABEL, resolveGoalProject, resolveTrackerProjectId } from "../lib/goals/projectLink";
 import { buildDeckPlan } from "../lib/goals/deck/plan";
@@ -130,26 +130,39 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                     : "No open period.",
             firstPeriodLabel: checkInFirst ? periodLabel(checkInFirst) : null,
         };
-    const deckCompleted = checkInGrid ? mostRecentCompletedPeriod(checkInGrid, today) : null;
-    const deckAvailability: DeckEntryAvailability = hasHabitMetric && !habits.hydrated
-        ? { kind: "not-ready", message: habitsLoadingMessage }
+    const deckBlockMessage = hasHabitMetric && !habits.hydrated
+        ? habitsLoadingMessage
         : tracker === undefined
-        ? { kind: "not-ready", message: "No tracker selected." }
-        : tracker.isArchived
-            ? { kind: "not-ready", message: "This tracker is archived. Reactivate it to build a deck." }
-            : deckCompleted === null
+            ? "No tracker selected."
+            : tracker.isArchived ? "This tracker is archived. Reactivate it to build a deck." : null;
+    const deckCompleted = checkInGrid ? mostRecentCompletedPeriod(checkInGrid, today) : null;
+    const deckAvailability: DeckEntryAvailability = deckBlockMessage !== null
+        ? { kind: "not-ready", message: deckBlockMessage }
+        : deckCompleted
+            ? { kind: "ready", period: deckCompleted, built: tracker?.lastBuiltPeriodStart === deckCompleted.periodStart }
+            : {
+                kind: "not-ready",
+                message: !checkInCurrent && checkInFirst
+                    ? `No completed period yet. Build the deck after the first period completes; it starts on ${checkInFirst.periodStart}.`
+                    : "No completed period yet.",
+            };
+    const checkIns = Object.values(state.checkIns);
+    const early = checkInGrid ? earlyDeckState(checkInGrid, allGoals, checkIns, today) : null;
+    const earlyDeckAvailability: DeckEntryAvailability = deckBlockMessage !== null
+        ? { kind: "not-ready", message: deckBlockMessage }
+        : early?.kind === "ready"
+            ? early
+            : early?.kind === "waiting" && early.required > 0
                 ? {
                     kind: "not-ready",
-                    message: checkInCurrent
-                        ? `No completed period yet. Build the deck after the ${periodLabel(checkInCurrent)} period completes.`
-                        : checkInFirst
-                            ? `No completed period yet. Build the deck after the first period completes; it starts on ${checkInFirst.periodStart}.`
-                            : "No completed period yet.",
+                    message: "Log a check-in for every active goal to build this period's deck early.",
+                    detail: `${early.recorded} of ${early.required} active ${early.required === 1 ? "goal" : "goals"} recorded`,
                 }
                 : {
-                    kind: "ready",
-                    period: deckCompleted,
-                    built: tracker.lastBuiltPeriodStart === deckCompleted.periodStart,
+                    kind: "not-ready",
+                    message: early?.kind === "waiting"
+                        ? "No active goals to build a deck for."
+                        : "Early builds are available once the first period opens.",
                 };
     const slipCount = (goalId: string) => {
         if (!tracker || tracker.isArchived || currentPeriodStart === null) return 0;
@@ -161,10 +174,11 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const progressTotal = activeCount + achievedCount;
     const progressPercent = progressTotal === 0 ? 0 : Math.round((achievedCount / progressTotal) * 100);
     const recordedGoalIds = checkInCurrent
-        ? new Set(Object.values(state.checkIns)
+        ? new Set(checkIns
             .filter(row => row.periodStart === checkInCurrent.periodStart)
             .map(row => row.goalId))
         : new Set<string>();
+    // The recorded bar includes dropped goals. Early deck eligibility counts only non-dropped goals.
     const recordedCount = allGoals.filter(row => recordedGoalIds.has(row.id)).length;
     const checkInComplete = checkInCurrent !== null && allGoals.length > 0 && recordedCount === allGoals.length;
 
@@ -436,6 +450,15 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                         const pinned = periodAt(checkInGrid, periodStart);
                                         if (pinned) setPinnedCheckIn({ trackerId: tracker.id, period: pinned });
                                     }} />
+                                    <div data-goals-slot="early-deck-entry" data-tracker-id={tracker.id}>
+                                        <DeckEntry
+                                            trackerId={tracker.id}
+                                            trackerName={tracker.name}
+                                            availability={earlyDeckAvailability}
+                                            onBuild={buildDeck}
+                                            variant="early"
+                                        />
+                                    </div>
                                 </div>
                             </div>}
                         </div>
@@ -485,6 +508,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
             {deckPreview && deckPreview.trackerId === tracker?.id && <DeckPreview
                 key={`${deckPreview.trackerId}:${deckPreview.plan.period.periodStart}:${deckPreview.plan.generatedAt}`}
                 plan={deckPreview.plan}
+                periodInProgress={deckPreview.plan.period.periodEnd > today}
                 onClose={() => setDeckPreview(null)}
                 onExport={exportDeck}
             />}

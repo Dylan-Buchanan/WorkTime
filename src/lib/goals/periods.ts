@@ -1,4 +1,4 @@
-import type { GoalCadence, GoalTracker, Weekday } from "../../state/types";
+import type { Goal, GoalCadence, GoalCheckIn, GoalTracker, Weekday } from "../../state/types";
 import type { LocalDateKey } from "../todos/types";
 import {
     addLocalDays,
@@ -310,6 +310,31 @@ export function dueState(grid: GoalGridInput, today: LocalDateKey): DueState {
         return { kind: "due", current, mostRecentCompleted: completed, lastBuiltPeriodStart: built };
     }
     return { kind: "not-due", current, mostRecentCompleted: completed, lastBuiltPeriodStart: built };
+}
+
+export type EarlyDeckState =
+    | { readonly kind: "archived" }
+    | { readonly kind: "no-open-period" }
+    | { readonly kind: "waiting"; readonly recorded: number; readonly required: number }
+    | { readonly kind: "ready"; readonly period: GoalPeriod; readonly built: boolean };
+
+export function earlyDeckState(
+    grid: GoalGridInput,
+    goals: readonly Goal[],
+    checkIns: readonly GoalCheckIn[],
+    today: LocalDateKey,
+): EarlyDeckState {
+    if (grid.isArchived) return { kind: "archived" };
+    const period = periodAt(grid, today);
+    if (!period) return { kind: "no-open-period" };
+
+    // Early deck eligibility excludes dropped goals. The page's recorded bar counts all goals.
+    const activeGoals = goals.filter(goal => goal.lifecycle !== "dropped");
+    const recordedGoalIds = new Set(checkIns.filter(row => row.periodStart === period.periodStart).map(row => row.goalId));
+    const required = activeGoals.length;
+    const recorded = activeGoals.filter(goal => recordedGoalIds.has(goal.id)).length;
+    if (required === 0 || recorded < required) return { kind: "waiting", recorded, required };
+    return { kind: "ready", period, built: grid.lastBuiltPeriodStart === period.periodStart };
 }
 
 /** Whole days from today until the period opens; zero or negative once it has started. */

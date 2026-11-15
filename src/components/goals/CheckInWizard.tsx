@@ -133,8 +133,8 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
     const current = periodAt(grid, today);
     const periods = listPeriods(grid, firstPeriod(grid).periodStart, (current ?? activePeriod).periodEnd);
     const lastBuilt = tracker.lastBuiltPeriodStart;
-    // TEST-VERIFIABLE ONLY until #140 stamps lastBuiltPeriodStart: this guard has
-    // no real build key to observe yet, so it is exercised only by simulated data.
+    const editingOpenPeriod = current?.periodStart === activePeriod.periodStart;
+    // An export stamps its period after download starts, including exports of the open period.
     const staleWarning = lastBuilt !== null && lastBuilt >= activePeriod.periodStart && dismissedStamp !== lastBuilt;
     // "Did not do" is derived from the latest stored row before the selected
     // period; no new persisted field is added to GoalCheckIn.
@@ -251,9 +251,11 @@ export const CheckInWizard: React.FC<CheckInWizardProps> = ({ trackerId, period,
             <button type="button" className={`${button} ml-auto`} aria-label="Close check-in wizard" onClick={onClose}>Close</button>
         </header>
         {staleWarning && <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs text-amber-100">
-            <span>This period was already built elsewhere. You can keep editing it or reload the current period.</span>
+            <span>{editingOpenPeriod
+                ? "This period’s deck was exported. Rebuild and export the deck again to include your check-in changes."
+                : "This period was already built elsewhere. You can keep editing it or reload the current period."}</span>
             <button type="button" className={button} onClick={() => setDismissedStamp(lastBuilt)}>Continue editing</button>
-            <button type="button" className={button} onClick={reloadCurrent}>Reload current period</button>
+            {!editingOpenPeriod && <button type="button" className={button} onClick={reloadCurrent}>Reload current period</button>}
         </div>}
         {reloadMessage && <p role="status" className="text-neutral-400">{reloadMessage}</p>}
         {error && <p role="alert" className="text-red-300">{error}</p>}
