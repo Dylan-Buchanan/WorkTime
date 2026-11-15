@@ -830,14 +830,16 @@ describe("GoalsPage", () => {
         const { user } = await mount(data, "2026-11-02");
         const row = screen.getByLabelText(goal.title);
         const rowHint = within(row).getByText("This cadence can hold at most 14 days.");
-        expect(rowHint).toHaveAttribute("data-goals-slot", "goal-metric-hint");
+        expect(rowHint.parentElement).toHaveAttribute("data-goals-slot", "goal-metric-hint");
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
         const editor = screen.getByRole("form", { name: "Edit goal" });
         const editorHint = within(editor).getByText("This cadence can hold at most 14 days.");
+        expect(editorHint.parentElement).toHaveClass("text-amber-300");
         await user.type(screen.getByLabelText("Goal note"), "Note only");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
-        expect(editorHint).toHaveClass("text-red-300");
-        expect(within(editor).getAllByRole("alert")).toEqual([editorHint]);
+        expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].notes).toBe("Note only"));
         expect((await data.loadGoals()).goals[0].metric).toEqual(metric);
     });
 
@@ -852,12 +854,210 @@ describe("GoalsPage", () => {
         expect(within(row).getByText("This cadence can hold at most 14 days.")).toBeInTheDocument();
         await user.click(screen.getByRole("button", { name: "Edit goal" }));
         expect(screen.getAllByText("This cadence can hold at most 14 days.")).toHaveLength(2);
+        const beforeSave = screen.getByRole("form", { name: "Edit goal" }).querySelector('[data-goals-slot="goal-metric-hint"]');
+        expect(beforeSave).toHaveClass("text-amber-300");
+        expect(beforeSave).not.toHaveAttribute("role");
         await user.click(screen.getByRole("button", { name: "Save goal" }));
+        expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        await user.click(within(row).getByRole("button", { name: "Edit goal" }));
         const editor = screen.getByRole("form", { name: "Edit goal" });
-        const editorHint = within(editor).getByText("This cadence can hold at most 14 days.");
-        expect(editorHint).toHaveClass("text-red-300");
-        expect(within(editor).getAllByRole("alert")).toEqual([editorHint]);
+        const editorHint = editor.querySelector('[data-goals-slot="goal-metric-hint"]');
+        expect(editorHint).toHaveTextContent("This cadence can hold at most 14 days.");
+        expect(editorHint).toHaveClass("text-amber-300");
+        expect(editorHint).not.toHaveAttribute("role");
+        expect(within(editor).queryByRole("alert")).not.toBeInTheDocument();
         expect((await data.loadGoals()).goals[0].metric).toEqual(metric);
+    });
+
+    it("repairs a dangling link from the row through the connect wizard", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: "habit-gone" }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-walk", { name: "Daily walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(await within(row).findByText("Linked habit is missing")).toBeInTheDocument();
+        const repair = within(row).getByRole("button", { name: "Repair link" });
+        expect(repair).toHaveAttribute("data-goals-slot", "goal-metric-repair");
+        expect(repair).toHaveAttribute("aria-haspopup", "dialog");
+        await user.click(repair);
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        expect(dialog.querySelector('[data-goals-slot="connect-missing"]')).toHaveTextContent(
+            "The habit this goal tracked (“Read”) no longer exists. Choose a habit to repair the link.",
+        );
+        await user.click(within(dialog).getByRole("radio", { name: "Daily walk" }));
+        await user.click(within(dialog).getByRole("button", { name: "Next" }));
+        await user.click(await within(dialog).findByRole("button", { name: "Save" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({
+            label: "Daily walk", current: 0, target: 14, unit: "days", source: "habit", habitId: "habit-walk", overridePinned: false,
+        }));
+        expect(screen.queryByRole("dialog", { name: "Connect a habit" })).not.toBeInTheDocument();
+        expect(within(row).queryByRole("button", { name: "Repair link" })).not.toBeInTheDocument();
+        expect(within(row).queryByText("Linked habit is missing")).not.toBeInTheDocument();
+    });
+
+    it.each(["Cancel", "Escape", "backdrop"] as const)("leaves a dangling metric untouched when repair closes with %s", async close => {
+        const { data, tracker } = await oneTracker();
+        const original = habitMetric({ habitId: "habit-gone", label: "Old reading", current: 3, unit: "sessions" });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: original });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-walk", { name: "Daily walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(await screen.findByRole("button", { name: "Repair link" }));
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        await user.click(within(dialog).getByRole("radio", { name: "Daily walk" }));
+        if (close === "Cancel") await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        else if (close === "Escape") await user.keyboard("{Escape}");
+        else await user.click(dialog.querySelector('[aria-hidden="true"]')!);
+        expect(screen.queryByRole("dialog", { name: "Connect a habit" })).not.toBeInTheDocument();
+        expect((await data.loadGoals()).goals[0].metric).toStrictEqual(original);
+    });
+
+    it("offers no dangling repair while habits are still hydrating", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: "habit-gone" }) });
+        await data.saveGoals([tracker], [goal], []);
+        vi.spyOn(data, "loadHabits").mockReturnValue(new Promise<never>(() => {}));
+        await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(within(row).getByText("Loading habit progress…")).toBeInTheDocument();
+        expect(within(row).queryByText("Linked habit is missing")).not.toBeInTheDocument();
+        expect(within(row).queryByRole("button", { name: "Repair link" })).not.toBeInTheDocument();
+        expect(row.querySelector('[data-goals-slot="goal-metric-repair"]')).toBeNull();
+    });
+
+    it("recalculates a stale target from the row with the same habit", async () => {
+        const { data, tracker } = await oneTracker();
+        const original = habitMetric({ label: "Old label", target: 20, unit: "sessions" });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: original });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Daily walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        const hint = within(row).getByText("This cadence can hold at most 14 days.");
+        expect(hint.tagName).toBe("SPAN");
+        expect(hint.parentElement).toHaveClass("text-xs", "text-amber-300");
+        expect(hint.parentElement).toHaveAttribute("data-goals-slot", "goal-metric-hint");
+        const recalculate = within(row).getByRole("button", { name: "Recalculate target" });
+        expect(recalculate).toHaveAttribute("aria-haspopup", "dialog");
+        await user.click(recalculate);
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        await waitFor(() => expect(within(dialog).getByRole("radio", { name: "Daily walk" })).toHaveAttribute("aria-checked", "true"));
+        expect(dialog.querySelector('[data-goals-slot="connect-stale"]')).toHaveTextContent(
+            "This tracker’s periods changed. Save again to recalculate the target.",
+        );
+        await user.click(within(dialog).getByRole("button", { name: "Next" }));
+        expect(await within(dialog).findByLabelText("Target")).toHaveValue(14);
+        await user.click(within(dialog).getByRole("button", { name: "Save" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({
+            label: "Daily walk", current: 0, target: 14, unit: "days", source: "habit", habitId: "habit-read", overridePinned: false,
+        }));
+        expect(row.querySelector('[data-goals-slot="goal-metric-hint"]')).toBeNull();
+        expect(within(row).queryByRole("button", { name: "Recalculate target" })).not.toBeInTheDocument();
+    });
+
+    it("opens target recalculation from the editor hint without discarding the note", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ target: 20 }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Daily walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        await user.type(within(editor).getByLabelText("Goal note"), "Keep this note");
+        const recalculate = within(editor).getByRole("button", { name: "Recalculate target" });
+        expect(recalculate).toHaveAttribute("aria-haspopup", "dialog");
+        await user.click(recalculate);
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        await waitFor(() => expect(within(dialog).getByRole("button", { name: "Next" })).toBeEnabled());
+        await user.click(within(dialog).getByRole("button", { name: "Next" }));
+        await user.click(await within(dialog).findByRole("button", { name: "Save" }));
+        expect(within(editor).getByLabelText("Goal note")).toHaveValue("Keep this note");
+        expect(editor.querySelector('[data-goals-slot="goal-metric-hint"]')).toBeNull();
+        await user.click(within(editor).getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0]).toMatchObject({ notes: "Keep this note", metric: { target: 14 } }));
+    });
+
+    it.each(["manual", "liftingtracker"] as const)("renders a large %s target plainly without habit repair controls", async source => {
+        const { data, tracker } = await oneTracker();
+        const metric: GoalMetric = { label: "Pages", current: 0, target: 400, unit: "pages", source, overridePinned: false };
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read")], []);
+        const { user } = await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        expect(row.querySelector('[data-goals-slot="goal-metric"]')).toHaveTextContent("Pages: 0 / 400 pages");
+        expect(row.querySelector('[data-goals-slot="goal-metric-hint"]')).toBeNull();
+        expect(within(row).queryByRole("button", { name: "Recalculate target" })).not.toBeInTheDocument();
+        expect(within(row).queryByRole("button", { name: "Repair link" })).not.toBeInTheDocument();
+        await user.click(within(row).getByRole("button", { name: "Edit goal" }));
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        expect(editor.querySelector('[data-goals-slot="goal-metric-hint"]')).toBeNull();
+        expect(within(editor).queryByRole("button", { name: "Recalculate target" })).not.toBeInTheDocument();
+    });
+
+    it("explains an archived row link and recomputes it when saving the same habit", async () => {
+        const { data, tracker } = await oneTracker();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ label: "Old label", current: 3, target: 6, unit: "sessions" }) });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([
+            habit("habit-read", { name: "Read", isArchived: true }),
+            habit("habit-old", { name: "Other archived", isArchived: true, position: 1 }),
+        ], []);
+        const { user } = await mount(data, "2026-11-02");
+        const row = screen.getByLabelText(goal.title);
+        await user.click(within(row).getByRole("button", { name: /Old label:/ }));
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        await waitFor(() => expect(within(dialog).getByRole("radio", { name: "Read (archived)" })).toHaveAttribute("aria-checked", "true"));
+        expect(dialog.querySelector('[data-goals-slot="connect-archived"]')).toHaveTextContent(
+            "“Read” is archived. It still counts toward this goal; choose another habit to switch.",
+        );
+        expect(within(dialog).queryByRole("radio", { name: "Other archived (archived)" })).not.toBeInTheDocument();
+        await user.click(within(dialog).getByRole("button", { name: "Next" }));
+        await user.click(await within(dialog).findByRole("button", { name: "Save" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({
+            label: "Read", current: 0, target: 14, unit: "days", source: "habit", habitId: "habit-read", overridePinned: false,
+        }));
+    });
+
+    it("preserves unsaved manual fields across an equal-metric goals refresh", async () => {
+        const { data, tracker } = await oneTracker();
+        const metric: GoalMetric = { label: "Pages", current: 0, target: 400, unit: "pages", source: "manual", overridePinned: false };
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        const other = buildGoalFixture({ id: "goal-other", trackerId: tracker.id, title: "Another goal", sortOrder: 1 });
+        await data.saveGoals([tracker], [goal, other], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(within(screen.getByLabelText(goal.title)).getByRole("button", { name: "Edit goal" }));
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        await user.clear(within(editor).getByLabelText("Metric label"));
+        await user.type(within(editor).getByLabelText("Metric label"), "Typed label");
+        await user.click(within(screen.getByLabelText(other.title)).getByRole("button", { name: "Achieve" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals.find(row => row.id === other.id)?.lifecycle).toBe("achieved"));
+        expect(within(editor).getByLabelText("Metric label")).toHaveValue("Typed label");
+        await user.click(within(editor).getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals.find(row => row.id === goal.id)?.metric).toEqual({ ...metric, label: "Typed label" }));
+    });
+
+    it.each(["achieved", "dropped"] as const)("opens dangling repair with Disconnect only on a %s goal", async lifecycle => {
+        const { data, tracker } = await oneTracker();
+        const original = habitMetric({ habitId: "habit-gone" });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: original, lifecycle });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-walk", { name: "Walk" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.selectOptions(screen.getByLabelText("Goal status"), lifecycle);
+        await user.click(within(screen.getByLabelText(goal.title)).getByRole("button", { name: "Repair link" }));
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        expect(within(dialog).getByRole("button", { name: "Disconnect habit" })).toBeInTheDocument();
+        expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+        expect(within(dialog).queryByRole("radiogroup")).not.toBeInTheDocument();
+        expect(within(dialog).queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
+        expect(within(dialog).queryByRole("button", { name: "Create a new habit" })).not.toBeInTheDocument();
+        await user.click(within(dialog).getByRole("button", { name: "Disconnect habit" }));
+        expect(screen.queryByRole("dialog", { name: "Connect a habit" })).not.toBeInTheDocument();
+        const { habitId: _habitId, ...manual } = original;
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].metric).toEqual({ ...manual, source: "manual" }));
     });
 
     it("shows a quiet missing-habit note instead of a zero reading on a broken link", async () => {
