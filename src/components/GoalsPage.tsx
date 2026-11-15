@@ -6,11 +6,10 @@ import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import { useHabits } from "../state/HabitContext";
 import { usePM } from "../state/ProjectManagerContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { HABIT_COLORS } from "../lib/habits";
-import type { Goal, GoalCadence, GoalMetric, GoalTracker, Habit, HabitFrequency, Project, Weekday } from "../state/types";
+import type { Goal, GoalCadence, GoalMetric, GoalTracker, HabitFrequency, Project, Weekday } from "../state/types";
 import { normalizeGoalCadence } from "../lib/goals/cadence";
 import { isGoalDateKey } from "../lib/goals/factories";
-import { maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
+import { habitUnitWord, maxHabitMetricBuckets, readHabitMetric } from "../lib/goals/habitMetric";
 import { daysUntil, dueState, firstPeriod, firstPeriodCandidates, goalGrid, mostRecentCompletedPeriod, periodAt, periodLabel, periodRangeLabel, type FirstPeriodCandidate, type GoalPeriod } from "../lib/goals/periods";
 import { slipSummary } from "../lib/goals/slips";
 import { MISSING_PROJECT_LABEL, resolveGoalProject, resolveTrackerProjectId } from "../lib/goals/projectLink";
@@ -21,7 +20,6 @@ import { localDateFromKey, localDateKey } from "../lib/todos/calendar";
 import type { LocalDateKey } from "../lib/todos/types";
 import { CheckInEntry, type CheckInAvailability } from "./goals/CheckInEntry";
 import { CheckInWizard } from "./goals/CheckInWizard";
-import { CreateHabitModal, type NewHabitDraft } from "./goals/CreateHabitModal";
 import { DeckEntry, type DeckEntryAvailability } from "./goals/DeckEntry";
 import { DeckPreview } from "./goals/DeckPreview";
 import { GoalCountdownBadge } from "./goals/GoalCountdownBadge";
@@ -29,6 +27,8 @@ import { GoalDueNudge } from "./goals/GoalDueNudge";
 import { GoalSetActions } from "./goals/GoalSetActions";
 import { GoalSlipBadge } from "./goals/GoalSlipBadge";
 import { GoalStatusBadge } from "./goals/GoalStatusBadge";
+import { HabitConnectWizard } from "./goals/HabitConnectWizard";
+import { habitMetricReadingCopy } from "./goals/HabitMetricStrip";
 import { ProjectLink } from "./goals/ProjectLink";
 import { TrackerDueBadge } from "./goals/TrackerDueBadge";
 import { TrackerRail } from "./goals/TrackerRail";
@@ -46,23 +46,9 @@ const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
 const habitsLoadingMessage = "Habits are still loading. Try again when they finish.";
-const missingHabitMessage = "The linked habit is missing. Choose another habit or switch Source to Manual.";
-/** Singular/plural words for a habit frequency; the count only ever affects the plural. */
-const HABIT_UNIT_WORDS: Record<HabitFrequency, readonly [string, string]> = {
-    daily: ["day", "days"],
-    weekly: ["week", "weeks"],
-    monthly: ["month", "months"],
-};
-const habitUnitWord = (count: number, frequency: HabitFrequency) => HABIT_UNIT_WORDS[frequency][count === 1 ? 0 : 1];
-const habitUnitSuggestion = (frequency: HabitFrequency) => HABIT_UNIT_WORDS[frequency][1];
 const cadenceHoldMessage = (max: number, frequency: HabitFrequency) => `This cadence can hold at most ${max} ${habitUnitWord(max, frequency)}.`;
-const orderedHabits = (habits: Record<string, Habit>) => Object.values(habits)
-    .sort((left, right) => left.position - right.position || left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
 const orderedProjects = (projects: Record<string, Project>) => Object.values(projects)
     .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
-/** Sentinel option values; neither can collide with a generated habit id. */
-const CREATE_HABIT = "__create-habit__";
-const DRAFT_HABIT = "__draft-habit__";
 /** One clock read per render; the optional prop is a test-only seam. */
 const pageToday = (today?: LocalDateKey): LocalDateKey => {
     if (today !== undefined) return today;
@@ -81,6 +67,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [showArchived, setShowArchived] = useState(false);
     const [lifecycle, setLifecycle] = useState<Goal["lifecycle"] | "all">("active");
     const [editingGoal, setEditingGoal] = useState<string | null>(null);
+    const [connectingGoal, setConnectingGoal] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [pinnedCheckIn, setPinnedCheckIn] = useState<{ trackerId: string; period: GoalPeriod } | null>(null);
     const [deckPreview, setDeckPreview] = useState<{ trackerId: string; plan: DeckPlan } | null>(null);
@@ -120,6 +107,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const hasHabitMetric = allGoals.some(goal => goal.metric?.source === "habit");
     const visible = allGoals.filter(row => lifecycle === "all" || row.lifecycle === lifecycle);
     const edit = editingGoal ? state.goals[editingGoal] : null;
+    const connecting = connectingGoal ? state.goals[connectingGoal] : null;
     const due = tracker ? dueState(goalGrid(tracker), today) : null;
     const dueTracker = due !== null && due.kind === "due" ? due : null;
     const currentPeriodStart = due !== null && (due.kind === "due" || due.kind === "not-due") ? due.current.periodStart : null;
@@ -189,6 +177,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     function selectTracker(id: string | null) {
         goals.selectTracker(id);
         setEditingGoal(null);
+        setConnectingGoal(null);
         setPinnedCheckIn(null);
         setDeckPreview(null);
         setTrackerForm(null);
@@ -465,11 +454,11 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                                 {visible.map(row => <GoalRow key={row.id} goal={row} tracker={tracker} consecutiveSlips={slipCount(row.id)} expanded={!!state.ui.expandedGoalIds[row.id]}
                                     cadence={tracker.cadence} period={checkInCurrent} today={today}
                                     onExpand={() => goals.setGoalExpanded(row.id, !state.ui.expandedGoalIds[row.id])}
-                                    onEdit={() => setEditingGoal(row.id)} onLifecycle={value => attempt(() => goals.setGoalLifecycle(row.id, value))} />)}
+                                    onEdit={() => setEditingGoal(row.id)} onConnectHabit={() => setConnectingGoal(row.id)} onLifecycle={value => attempt(() => goals.setGoalLifecycle(row.id, value))} />)}
                             </div>
                         </SortableContext>
                     </DndContext>
-                    {edit && edit.trackerId === tracker.id && <GoalEditor key={edit.id} goal={edit} tracker={tracker} cadence={tracker.cadence} onCancel={() => setEditingGoal(null)} onSave={patch => {
+                    {edit && edit.trackerId === tracker.id && <GoalEditor key={edit.id} goal={edit} tracker={tracker} cadence={tracker.cadence} period={checkInCurrent} today={today} onCancel={() => setEditingGoal(null)} onConnectHabit={() => setConnectingGoal(edit.id)} onSave={patch => {
                         goals.updateGoal(edit.id, patch);
                         setEditingGoal(null);
                     }} />}
@@ -484,6 +473,15 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
                 plan={deckPreview.plan}
                 onClose={() => setDeckPreview(null)}
                 onExport={exportDeck}
+            />}
+        </div>
+        <div data-goals-slot="habit-connect">
+            {connecting && tracker && connecting.trackerId === tracker.id && <HabitConnectWizard
+                key={connecting.id}
+                goal={connecting}
+                cadence={tracker.cadence}
+                linkedHabitId={connecting.metric?.source === "habit" ? connecting.metric.habitId ?? null : null}
+                onClose={() => setConnectingGoal(null)}
             />}
         </div>
         <div data-goals-slot="due-nudge"><GoalDueNudge today={today} /></div>
@@ -644,29 +642,31 @@ function MetricBadge({ metric }: { metric: GoalMetric }) {
     return <span className="text-neutral-400">{source}{metric.source !== "habit" && metric.overridePinned ? " · Override" : ""}</span>;
 }
 
-function GoalMetricLine({ metric, period, today, cadence }: {
+function GoalMetricLine({ metric, period, today, cadence, onConnectHabit }: {
     metric: GoalMetric;
     period: GoalPeriod | null;
     today: LocalDateKey;
     cadence: GoalCadence;
+    onConnectHabit: () => void;
 }) {
     if (metric.source !== "habit") {
         return <p className="mt-2" data-goals-slot="goal-metric">{metric.label}: {metric.current} / {metric.target} {metric.unit} <MetricBadge metric={metric} /></p>;
     }
-    return <HabitMetricLine metric={metric} period={period} today={today} cadence={cadence} />;
+    return <HabitMetricLine metric={metric} period={period} today={today} cadence={cadence} onConnectHabit={onConnectHabit} />;
 }
 
 /** The live reading is derived from habit completions; the stored `current` is never shown. */
-function HabitMetricLine({ metric, period, today, cadence }: {
+function HabitMetricLine({ metric, period, today, cadence, onConnectHabit }: {
     metric: GoalMetric;
     period: GoalPeriod | null;
     today: LocalDateKey;
     cadence: GoalCadence;
+    onConnectHabit: () => void;
 }) {
     const habits = useHabits();
     const habit = metric.habitId ? habits.state.habits[metric.habitId] : undefined;
     const max = habit ? maxHabitMetricBuckets(cadence, habit.frequency) : null;
-    const hint = habit && max !== null && Number.isFinite(metric.target) && metric.target > max
+    const hint = habits.hydrated && habit && max !== null && Number.isFinite(metric.target) && metric.target > max
         ? cadenceHoldMessage(max, habit.frequency)
         : null;
     let body: React.ReactNode;
@@ -685,12 +685,17 @@ function HabitMetricLine({ metric, period, today, cadence }: {
             : <span>{metric.label}: {reading.completed} / {metric.target}{unit}{left}</span>;
     }
     return <>
-        <p className="mt-2" data-goals-slot="goal-metric">{body} <MetricBadge metric={metric} /></p>
-        {hint && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">{hint}</p>}
+        <p className="mt-2" data-goals-slot="goal-metric">
+            <button type="button" className="text-left hover:underline" aria-haspopup="dialog" onClick={onConnectHabit}>{body}</button> <MetricBadge metric={metric} />
+            {habits.hydrated && !habit && <> <button type="button" aria-haspopup="dialog" data-goals-slot="goal-metric-repair" onClick={onConnectHabit}>Repair link</button></>}
+        </p>
+        {hint && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">
+            <span>{hint}</span>{" "}<button type="button" aria-haspopup="dialog" onClick={onConnectHabit}>Recalculate target</button>
+        </p>}
     </>;
 }
 
-function GoalRow({ goal, tracker, consecutiveSlips, expanded, cadence, period, today, onExpand, onEdit, onLifecycle }: {
+function GoalRow({ goal, tracker, consecutiveSlips, expanded, cadence, period, today, onExpand, onEdit, onConnectHabit, onLifecycle }: {
     goal: Goal;
     tracker: GoalTracker;
     consecutiveSlips: number;
@@ -700,6 +705,7 @@ function GoalRow({ goal, tracker, consecutiveSlips, expanded, cadence, period, t
     today: LocalDateKey;
     onExpand: () => void;
     onEdit: () => void;
+    onConnectHabit: () => void;
     onLifecycle: (value: Goal["lifecycle"]) => void;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id });
@@ -721,12 +727,25 @@ function GoalRow({ goal, tracker, consecutiveSlips, expanded, cadence, period, t
                 <button className={dropButton} onClick={() => onLifecycle("dropped")}>Drop</button>
             </> : <button className={button} onClick={() => onLifecycle("active")}>Reactivate</button>}
         </div>
-        {goal.metric && <GoalMetricLine metric={goal.metric} period={period} today={today} cadence={cadence} />}
+        {goal.metric
+            ? <GoalMetricLine metric={goal.metric} period={period} today={today} cadence={cadence} onConnectHabit={onConnectHabit} />
+            : goal.lifecycle === "active" && <p className="mt-2" data-goals-slot="goal-metric-connect"><span>No metric</span> · <button type="button" aria-haspopup="dialog" onClick={onConnectHabit}>Connect a habit</button></p>}
         {expanded && <p className="mt-2 whitespace-pre-wrap text-neutral-400">{goal.notes || "No note."}</p>}
     </article>;
 }
 
-function GoalEditor({ goal, tracker, cadence, onSave, onCancel }: { goal: Goal; tracker: GoalTracker; cadence: GoalCadence; onSave: (patch: Partial<Goal>) => void; onCancel: () => void }) {
+type MetricChoice = "keep" | "manual" | "none";
+
+function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, onConnectHabit }: {
+    goal: Goal;
+    tracker: GoalTracker;
+    cadence: GoalCadence;
+    period: GoalPeriod | null;
+    today: LocalDateKey;
+    onSave: (patch: Partial<Goal>) => void;
+    onCancel: () => void;
+    onConnectHabit: () => void;
+}) {
     const pm = usePM();
     const habits = useHabits();
     const projects = orderedProjects(pm.state.projects);
@@ -738,201 +757,163 @@ function GoalEditor({ goal, tracker, cadence, onSave, onCancel }: { goal: Goal; 
     const resolved = resolveGoalProject({ ...goal, projectLink: link }, tracker);
     const missingProject = link.mode === "project" && !projects.some(project => project.id === link.projectId);
     const canChooseProject = projects.length > 0 || link.mode === "project";
-    const [metric, setMetric] = useState(goal.metric !== null);
-    const [label, setLabel] = useState(goal.metric?.label ?? "");
-    const [current, setCurrent] = useState(String(goal.metric?.current ?? 0));
-    const [target, setTarget] = useState(String(goal.metric?.target ?? 0));
-    const [unit, setUnit] = useState(goal.metric?.unit ?? "");
-    const [source, setSource] = useState<GoalMetric["source"]>(goal.metric?.source ?? "manual");
-    const [sourceTouched, setSourceTouched] = useState(false);
-    const [habitId, setHabitId] = useState(goal.metric?.source === "habit" ? goal.metric.habitId ?? "" : "");
-    // A drafted habit is committed only by Save goal, never by the modal.
-    const [draft, setDraft] = useState<NewHabitDraft | null>(null);
-    const [createHabitOpen, setCreateHabitOpen] = useState(false);
-    const habitSelectRef = useRef<HTMLSelectElement>(null);
+    const storedMetric = goal.metric;
+    const storedMetricValue = JSON.stringify(storedMetric);
+    const storedHabitMetric = storedMetric?.source === "habit" ? storedMetric : null;
+    const [metricChoice, setMetricChoice] = useState<MetricChoice>(storedMetric?.source === "manual" ? "manual" : "keep");
+    const [label, setLabel] = useState(storedMetric?.source === "manual" ? storedMetric.label : "");
+    const [current, setCurrent] = useState(storedMetric?.source === "manual" ? String(storedMetric.current) : "0");
+    const [target, setTarget] = useState(storedMetric?.source === "manual" ? String(storedMetric.target) : "");
+    const [unit, setUnit] = useState(storedMetric?.source === "manual" ? storedMetric.unit : "");
     const [error, setError] = useState<string | null>(null);
-    // A save attempt escalates the live cadence hint instead of stacking a second message.
-    const [attemptedUnreachable, setAttemptedUnreachable] = useState(false);
-    // A stored link that no longer resolves is shown explicitly, not as a blank select.
-    const [attemptedMissingHabit, setAttemptedMissingHabit] = useState(false);
-    // Linked habits stay visible even after archiving; only fresh options are active.
-    const habitOptions = orderedHabits(habits.state.habits).filter(habit => !habit.isArchived || habit.id === habitId);
-    // The draft is a name/frequency stand-in, so every derived read below behaves
-    // exactly as it does for a picked habit without inventing an id, position, or timestamp.
-    const selectedHabit: Pick<Habit, "name" | "frequency"> | undefined = draft
-        ?? (habitId ? habits.state.habits[habitId] : undefined);
-    const selectedHabitId = draft ? DRAFT_HABIT : habitId;
-    // The modal names the link this creation will replace: the pending picker
-    // selection, or the goal's saved link when the picker has been cleared.
-    const replacingHabit = habitId
-        ? habits.state.habits[habitId]
-        : goal.metric?.source === "habit" && goal.metric.habitId
-            ? habits.state.habits[goal.metric.habitId]
-            : undefined;
-    const missingHabit = habits.hydrated && habitId !== "" && draft === null && habits.state.habits[habitId] === undefined;
-    const targetValue = target.trim() === "" ? Number.NaN : Number(target);
-    const maxBuckets = selectedHabit ? maxHabitMetricBuckets(cadence, selectedHabit.frequency) : null;
-    const unreachable = selectedHabit && maxBuckets !== null && Number.isFinite(targetValue) && targetValue > maxBuckets
-        ? cadenceHoldMessage(maxBuckets, selectedHabit.frequency)
+    // The wizard owns every habit write. Re-derive the local choice from the live
+    // metric value so equal objects from a refresh preserve unsaved manual edits.
+    useEffect(() => {
+        if (storedMetric?.source === "manual") {
+            setMetricChoice("manual");
+            setLabel(storedMetric.label);
+            setCurrent(String(storedMetric.current));
+            setTarget(String(storedMetric.target));
+            setUnit(storedMetric.unit);
+        } else {
+            setMetricChoice("keep");
+        }
+    }, [storedMetricValue]);
+
+    const connectHabit = () => {
+        if (storedMetric?.source === "manual") {
+            setMetricChoice("manual");
+            setLabel(storedMetric.label);
+            setCurrent(String(storedMetric.current));
+            setTarget(String(storedMetric.target));
+            setUnit(storedMetric.unit);
+        } else {
+            setMetricChoice("keep");
+        }
+        onConnectHabit();
+    };
+
+    const linkedHabit = storedHabitMetric?.habitId ? habits.state.habits[storedHabitMetric.habitId] : undefined;
+    const habitMax = linkedHabit ? maxHabitMetricBuckets(cadence, linkedHabit.frequency) : null;
+    const unreachable = habits.hydrated && linkedHabit && habitMax !== null && storedHabitMetric !== null
+        && Number.isFinite(storedHabitMetric.target) && storedHabitMetric.target > habitMax
+        ? cadenceHoldMessage(habitMax, linkedHabit.frequency)
         : null;
-    function changeSource(next: GoalMetric["source"]) {
-        if (next === source) return;
-        // A source change never carries the other source's stored reading forward.
+    const habitSummary = (() => {
+        if (!storedHabitMetric) return null;
+        if (!habits.hydrated) return "Loading habit progress…";
+        if (!linkedHabit) return "Linked habit is missing";
+        const name = linkedHabit.isArchived ? `${linkedHabit.name} (archived)` : linkedHabit.name;
+        if (!period) return `${name} · No current period`;
+        const reading = readHabitMetric(storedHabitMetric, [linkedHabit], Object.values(habits.state.completions), period, today);
+        if (reading.unavailable) return "Linked habit is missing";
+        const copy = reading.totalBuckets === 0
+            ? "No buckets in this period."
+            : habitMetricReadingCopy(reading, storedHabitMetric.target, storedHabitMetric.unit);
+        return `${name} · ${copy}`;
+    })();
+    const startManual = () => {
+        setMetricChoice("manual");
+        setLabel("");
         setCurrent("0");
-        setSourceTouched(true);
-        setAttemptedMissingHabit(false);
-        setSource(next);
-        if (next !== "habit") {
-            setHabitId("");
-            setDraft(null);
-            setCreateHabitOpen(false);
-        }
-    }
-    function chooseHabit(nextId: string) {
-        if (nextId === CREATE_HABIT) {
-            setCreateHabitOpen(true);
-            return;
-        }
-        if (nextId === DRAFT_HABIT) return;
-        const next = habits.state.habits[nextId];
-        const previous = selectedHabit;
-        setHabitId(nextId);
-        setDraft(null);
-        setAttemptedUnreachable(false);
-        setAttemptedMissingHabit(false);
-        if (!next) return;
-        // Only default the label while it is empty or untouched from the prior selection.
-        if (!label.trim() || (previous !== undefined && label === previous.name)) setLabel(next.name);
-        setUnit(habitUnitSuggestion(next.frequency));
-    }
-    function confirmDraft(next: NewHabitDraft) {
-        const previous = selectedHabit;
-        setDraft(next);
-        setCreateHabitOpen(false);
-        setAttemptedUnreachable(false);
-        setAttemptedMissingHabit(false);
-        if (!label.trim() || (previous !== undefined && label === previous.name)) setLabel(next.name);
-        setUnit(habitUnitSuggestion(next.frequency));
-        habitSelectRef.current?.focus({ preventScroll: true });
-    }
-    function cancelCreateHabit() {
-        setCreateHabitOpen(false);
-        habitSelectRef.current?.focus({ preventScroll: true });
-    }
-    return <>
-        <form aria-label="Edit goal" className="space-y-3 rounded border border-neutral-800 p-4" onSubmit={event => {
-            event.preventDefault();
-            let created: Habit | null = null;
-            try {
-                if (!title.trim()) throw new RangeError("Give this goal a name.");
-                let nextMetric: GoalMetric | null = null;
-                if (metric && source === "habit") {
-                    if (!label.trim() || !target.trim() || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and a finite target value.");
-                    const existing = draft ? undefined : habits.state.habits[habitId];
-                    if (!draft && !existing) {
-                        if (missingHabit) {
-                            // Reuse the visible state as the error instead of stacking a second message.
-                            setError(null);
-                            setAttemptedMissingHabit(true);
-                            return;
-                        }
-                        throw new RangeError("Choose a habit for this metric.");
-                    }
-                    const frequency = draft ? draft.frequency : existing!.frequency;
-                    const max = maxHabitMetricBuckets(cadence, frequency);
-                    if (Number(target) > max) {
-                        // Reuse the visible hint as the error state; never duplicate the message.
-                        setError(null);
-                        setAttemptedUnreachable(true);
-                        return;
-                    }
-                    // The guard runs before creation: a rejected target never writes a habit.
-                    let habit: Habit;
-                    if (draft) {
-                        habit = habits.createHabit({ name: draft.name.trim(), color: draft.color, frequency: draft.frequency });
-                        created = habit;
-                    } else {
-                        habit = existing!;
-                    }
-                    nextMetric = { label: label.trim(), current: 0, target: Number(target), unit, source: "habit", habitId: habit.id, overridePinned: false };
-                } else if (metric) {
-                    if (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target))) throw new RangeError("Metric needs a label and finite current and target values.");
-                    nextMetric = { label: label.trim(), current: Number(current), target: Number(target), unit, source, overridePinned: !sourceTouched && source === goal.metric?.source ? goal.metric.overridePinned : false };
+        setTarget("");
+        setUnit("");
+    };
+    const stopTracking = () => {
+        setMetricChoice("none");
+    };
+    return <form aria-label="Edit goal" className="space-y-3 rounded border border-neutral-800 p-4" onSubmit={event => {
+        event.preventDefault();
+        try {
+            if (!title.trim()) throw new RangeError("Give this goal a name.");
+            let nextMetric: GoalMetric | null | undefined;
+            if (metricChoice === "none") {
+                nextMetric = null;
+            } else if (metricChoice === "manual") {
+                if (!label.trim() || !current.trim() || !target.trim() || !Number.isFinite(Number(current)) || !Number.isFinite(Number(target))) {
+                    throw new RangeError("Metric needs a label and finite current and target values.");
                 }
-                const projectLink: Goal["projectLink"] = link;
-                onSave({ title, notes, projectLink, metric: nextMetric });
-            } catch (error) {
-                if (created) {
-                    // The habit is already stored; keep it selected so a retry never creates a duplicate.
-                    setDraft(null);
-                    setHabitId(created.id);
-                    setError(`Habit “${created.name}” was created, but this goal could not be saved with it. Link it from /habits.`);
-                } else {
-                    setError(errorMessage(error));
+                const unchanged = storedMetric?.source === "manual"
+                    && label.trim() === storedMetric.label
+                    && Number(current) === storedMetric.current
+                    && Number(target) === storedMetric.target
+                    && unit === storedMetric.unit;
+                if (!unchanged) {
+                    nextMetric = {
+                        label: label.trim(),
+                        current: Number(current),
+                        target: Number(target),
+                        unit,
+                        source: "manual",
+                        overridePinned: storedMetric?.source === "manual" && Number(target) === storedMetric.target
+                            ? storedMetric.overridePinned
+                            : false,
+                    };
                 }
             }
-        }}>
-            <h3 className="font-medium">Edit goal</h3>
-            <label className="grid gap-1">Name<input className={control} value={title} onChange={event => setTitle(event.target.value)} /></label>
-            <label className="grid gap-1">Goal note<textarea className={control} value={notes} onChange={event => setNotes(event.target.value)} /></label>
-            <fieldset className="grid gap-1">
-                <legend>Project link</legend>
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "inherit"} onChange={() => setLink({ mode: "inherit" })} />Use tracker project</label>
-                    <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "none"} onChange={() => setLink({ mode: "none" })} />No project</label>
-                    <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "project"} disabled={!canChooseProject}
-                        onChange={() => setLink(previous => previous.mode === "project" ? previous : { mode: "project", projectId: projects[0]?.id ?? "" })} />Specific project</label>
-                </div>
-                {link.mode === "project" && <select className={control} aria-label="Project" value={link.projectId} onChange={event => setLink({ mode: "project", projectId: event.target.value })}>
-                    {missingProject && <option value={link.projectId}>{MISSING_PROJECT_LABEL}</option>}
-                    {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-                </select>}
-                <p className="text-xs text-neutral-500" data-goals-slot="goal-project-summary">
-                    {resolved.projectId === null
-                        ? link.mode === "inherit" ? "Inherits the tracker’s project, which is not set." : "No project."
-                        : link.mode === "inherit"
-                            ? <>Inherits <ProjectLink projectId={resolved.projectId} /> from the tracker.</>
-                            : <>Links to <ProjectLink projectId={resolved.projectId} />.</>}
-                </p>
-            </fieldset>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={metric} onChange={event => setMetric(event.target.checked)} />Track one metric</label>
-            {metric && <fieldset className="flex flex-wrap gap-3"><legend className="mb-2">Metric {goal.metric && <MetricBadge metric={goal.metric} />}</legend>
+            // Choice "keep" omits the key entirely so a wizard write made while the
+            // editor is open survives an unrelated edit.
+            const patch: Partial<Goal> = { title, notes, projectLink: link };
+            if (nextMetric !== undefined) patch.metric = nextMetric;
+            onSave(patch);
+        } catch (error) {
+            setError(errorMessage(error));
+        }
+    }}>
+        <h3 className="font-medium">Edit goal</h3>
+        <label className="grid gap-1">Name<input className={control} value={title} onChange={event => setTitle(event.target.value)} /></label>
+        <label className="grid gap-1">Goal note<textarea className={control} value={notes} onChange={event => setNotes(event.target.value)} /></label>
+        <fieldset className="grid gap-1">
+            <legend>Project link</legend>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "inherit"} onChange={() => setLink({ mode: "inherit" })} />Use tracker project</label>
+                <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "none"} onChange={() => setLink({ mode: "none" })} />No project</label>
+                <label className="flex items-center gap-2"><input type="radio" name="goal-project-link" checked={link.mode === "project"} disabled={!canChooseProject}
+                    onChange={() => setLink(previous => previous.mode === "project" ? previous : { mode: "project", projectId: projects[0]?.id ?? "" })} />Specific project</label>
+            </div>
+            {link.mode === "project" && <select className={control} aria-label="Project" value={link.projectId} onChange={event => setLink({ mode: "project", projectId: event.target.value })}>
+                {missingProject && <option value={link.projectId}>{MISSING_PROJECT_LABEL}</option>}
+                {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>}
+            <p className="text-xs text-neutral-500" data-goals-slot="goal-project-summary">
+                {resolved.projectId === null
+                    ? link.mode === "inherit" ? "Inherits the tracker’s project, which is not set." : "No project."
+                    : link.mode === "inherit"
+                        ? <>Inherits <ProjectLink projectId={resolved.projectId} /> from the tracker.</>
+                        : <>Links to <ProjectLink projectId={resolved.projectId} />.</>}
+            </p>
+        </fieldset>
+        <fieldset className="space-y-3">
+            <legend>Metric</legend>
+            {metricChoice === "manual" ? <div className="flex flex-wrap gap-3">
                 <label className="grid gap-1">Metric label<input className={control} value={label} onChange={event => setLabel(event.target.value)} /></label>
-                {source !== "habit" && <label className="grid gap-1">Current<input className={`${control} w-28`} type="number" step="any" value={current} onChange={event => setCurrent(event.target.value)} /></label>}
-                <label className="grid gap-1">Target<input className={`${control} w-28`} type="number" step="any" value={target} onChange={event => { setTarget(event.target.value); setAttemptedUnreachable(false); }} /></label>
+                <label className="grid gap-1">Current<input className={`${control} w-28`} type="number" step="any" value={current} onChange={event => setCurrent(event.target.value)} /></label>
+                <label className="grid gap-1">Target<input className={`${control} w-28`} type="number" step="any" value={target} onChange={event => setTarget(event.target.value)} /></label>
                 <label className="grid gap-1">Unit<input className={control} value={unit} onChange={event => setUnit(event.target.value)} /></label>
-                <label className="grid gap-1">Source<select className={control} value={source} onChange={event => changeSource(event.target.value as typeof source)}>
-                    <option value="manual">Manual</option>
-                    <option value="habit">Habit</option>
-                    {goal.metric?.source === "liftingtracker" && <option value="liftingtracker" disabled>Auto</option>}
-                </select></label>
-                {source === "habit" && <>
-                    <label className="grid gap-1">Habit<select ref={habitSelectRef} className={control} value={selectedHabitId} onChange={event => chooseHabit(event.target.value)}>
-                        <option value="">Select a habit</option>
-                        {missingHabit && <option value={habitId} disabled>Missing habit</option>}
-                        {habitOptions.map(habit => {
-                            const habitMax = maxHabitMetricBuckets(cadence, habit.frequency);
-                            const impossible = Number.isFinite(targetValue) && targetValue > habitMax;
-                            return <option key={habit.id} value={habit.id} disabled={impossible}>
-                                {habit.name}{habit.isArchived ? " (archived)" : ""}{impossible ? ` (max ${habitMax} ${habitUnitWord(habitMax, habit.frequency)} for this cadence)` : ""}
-                            </option>;
-                        })}
-                        {draft && <option value={DRAFT_HABIT}>{`New habit: ${draft.name} (not saved yet)`}</option>}
-                        {goal.lifecycle === "active" && <option value={CREATE_HABIT}>+ Create new habit…</option>}
-                    </select></label>
-                    {missingHabit && <p role={attemptedMissingHabit ? "alert" : undefined} className={`w-full text-xs ${attemptedMissingHabit ? "font-semibold text-red-300" : "text-amber-300"}`} data-goals-slot="goal-metric-hint">{missingHabitMessage}</p>}
-                    {unreachable && <p role={attemptedUnreachable ? "alert" : undefined} className={`w-full text-xs ${attemptedUnreachable ? "font-semibold text-red-300" : "text-amber-300"}`} data-goals-slot="goal-metric-hint">{unreachable}</p>}
-                    <p className="w-full text-xs text-neutral-500">Current progress is counted from this habit's completions in each goal period.</p>
-                </>}
-            </fieldset>}
-            {error && <p role="alert" className="text-red-300">{error}</p>}
-            <div className="flex gap-2"><button className={primary} type="submit">Save goal</button><button className={button} type="button" onClick={onCancel}>Cancel</button></div>
-        </form>
-        {createHabitOpen && <CreateHabitModal
-            initial={draft ?? { name: title, color: HABIT_COLORS[0], frequency: "daily" }}
-            replacing={replacingHabit?.name ?? null}
-            onConfirm={confirmDraft}
-            onCancel={cancelCreateHabit}
-        />}
-    </>;
+                <div className="w-full"><button type="button" className={button} onClick={stopTracking}>Stop tracking</button></div>
+            </div> : metricChoice === "none" || storedMetric === null ? <>
+                <div className="flex flex-wrap gap-2">
+                    <button type="button" className={button} onClick={startManual}>Track manually</button>
+                    {goal.lifecycle === "active" && <button type="button" className={button} onClick={connectHabit}>Connect a habit</button>}
+                </div>
+                {metricChoice === "none" && storedMetric !== null && <p>Tracking stops when you save.</p>}
+            </> : storedHabitMetric ? <>
+                <p data-goals-slot="goal-metric-summary">Tracked by habit: {habitSummary}</p>
+                {unreachable && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">
+                    <span>{unreachable}</span>{" "}<button type="button" aria-haspopup="dialog" onClick={connectHabit}>Recalculate target</button>
+                </p>}
+                <div className="flex flex-wrap gap-2">
+                    <button type="button" className={button} onClick={connectHabit}>Change habit</button>
+                    <button type="button" className={button} onClick={stopTracking}>Stop tracking</button>
+                </div>
+            </> : <>
+                <p data-goals-slot="goal-metric-summary">{storedMetric.label}: {storedMetric.current} / {storedMetric.target} {storedMetric.unit}</p>
+                <div className="flex flex-wrap gap-2">
+                    <button type="button" className={button} onClick={stopTracking}>Stop tracking</button>
+                </div>
+            </>}
+        </fieldset>
+        {error && <p role="alert" className="text-red-300">{error}</p>}
+        <div className="flex gap-2"><button className={primary} type="submit">Save goal</button><button className={button} type="button" onClick={onCancel}>Cancel</button></div>
+    </form>;
 }

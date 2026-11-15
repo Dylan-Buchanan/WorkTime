@@ -112,7 +112,45 @@ class DelayedReloadDataAccess extends InMemoryDataAccess {
 
 beforeEach(() => localStorage.clear());
 
+function RollbackProbe({ capture }: { capture: (state: ReturnType<typeof useHabits>["state"]) => void }) {
+    const { state, hydrated, createHabit, deleteHabit } = useHabits();
+    capture(state);
+    return <>
+        <button disabled={!hydrated} onClick={() => {
+            const created = createHabit({ name: "Rolled back", color: "#000", frequency: "daily" });
+            deleteHabit(created.id);
+        }}>create and delete</button>
+        <button disabled={!hydrated} onClick={() => deleteHabit("unknown")}>delete unknown</button>
+    </>;
+}
+
 describe("HabitContext", () => {
+    it("creates and deletes in the same handler without saving the transient habit", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const saveSpy = vi.spyOn(data, "saveHabits");
+        const capture = vi.fn();
+        render(wrap(data, <RollbackProbe capture={capture} />));
+        await waitFor(() => expect(screen.getByText("create and delete")).toBeEnabled());
+        await act(async () => screen.getByText("create and delete").click());
+        expect(capture.mock.lastCall![0].habits).toEqual({});
+        expect((await data.loadHabits()).habits).toEqual([]);
+        expect(saveSpy).not.toHaveBeenCalled();
+    });
+
+    it("deleting an unknown habit preserves the state object and does not save", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        await data.saveHabits([habit("h1")], [completion("c1", "h1")]);
+        const saveSpy = vi.spyOn(data, "saveHabits");
+        const capture = vi.fn();
+        render(wrap(data, <RollbackProbe capture={capture} />));
+        await waitFor(() => expect(screen.getByText("delete unknown")).toBeEnabled());
+        const before = capture.mock.lastCall![0];
+        await act(async () => screen.getByText("delete unknown").click());
+        expect(capture.mock.lastCall![0]).toBe(before);
+        expect(saveSpy).not.toHaveBeenCalled();
+        expect((await data.loadHabits()).habits).toEqual([habit("h1")]);
+    });
+
     it("hydrates staged habits and restores only device-local UI", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         await data.saveHabits([habit("h1", { name: "Morning" })], [completion("c1", "h1")]);

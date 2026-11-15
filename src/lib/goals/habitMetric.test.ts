@@ -2,7 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { Goal, GoalCadence, Habit, HabitCompletion, HabitFrequency, Weekday } from "../../state/types";
 import { addLocalDays, dayBucket } from "../habits/calendar";
 import type { LocalDateKey } from "../todos/types";
-import { habitMetricBuckets, habitMetricHit, habitMetricStreak, maxHabitMetricBuckets, readHabitMetric } from "./habitMetric";
+import {
+    connectableHabitFrequencies,
+    habitMetricBuckets,
+    habitMetricHit,
+    habitMetricStreak,
+    habitUnitPlural,
+    habitUnitWord,
+    maxHabitMetricBuckets,
+    minHabitMetricBuckets,
+    readHabitMetric,
+} from "./habitMetric";
 import { listPeriods, type GoalGridInput, type PeriodBounds } from "./periods";
 
 const metric = { label: "Practice", current: 999, target: 3, unit: "sessions", source: "habit" as const, habitId: "h", overridePinned: false };
@@ -136,5 +146,84 @@ describe("habit metric streak", () => {
     it("uses local calendar days for a supplied Date converted to today", () => {
         const date = new Date(2026, 0, 20, 12);
         expect(habitMetricStreak(oneTarget, grid(), [habit("weekly")], history, dayBucket(addLocalDays(date, 0)) as LocalDateKey)).toBe(2);
+    });
+});
+
+describe("cadence bucket minima", () => {
+    it.each([1, 2, 3])("matches the maximum for daily and weekly strides of %s weeks", intervalWeeks => {
+        for (const weekday of [0, 1, 2, 3, 4, 5, 6] as Weekday[]) {
+            const cadence: GoalCadence = { kind: "every-n-weeks", weekday, intervalWeeks };
+            expect(minHabitMetricBuckets(cadence, "daily")).toBe(maxHabitMetricBuckets(cadence, "daily"));
+            expect(minHabitMetricBuckets(cadence, "weekly")).toBe(maxHabitMetricBuckets(cadence, "weekly"));
+        }
+    });
+
+    it.each<[number, number]>([[1, 0], [2, 0], [3, 0], [4, 0], [5, 1], [8, 1], [12, 2], [26, 5], [52, 11]])(
+        "counts the fewest month-firsts for a %s-week stride",
+        (intervalWeeks, months) => {
+            for (const weekday of [0, 3] as Weekday[]) {
+                expect(minHabitMetricBuckets({ kind: "every-n-weeks", weekday, intervalWeeks }, "monthly")).toBe(months);
+            }
+        },
+    );
+
+    it.each([0, 1, 2, 3, 4, 5, 6] as Weekday[])("uses the snapping worst case for monthly weekday %s", weekday => {
+        const cadence: GoalCadence = { kind: "monthly-weekday", weekday };
+        const short = weekday === 0 || weekday === 1;
+        expect(minHabitMetricBuckets(cadence, "daily")).toBe(short ? 28 : 21);
+        expect(minHabitMetricBuckets(cadence, "weekly")).toBe(short ? 4 : 3);
+        expect(minHabitMetricBuckets(cadence, "monthly")).toBe(0);
+    });
+
+    it.each([0, 1, 2, 3, 4, 5, 6] as Weekday[])("attains the monthly weekday %s minimum in real periods", weekday => {
+        const cadence: GoalCadence = { kind: "monthly-weekday", weekday };
+        const periods = listPeriods({ ...grid(cadence), cadenceAnchorAt: "2020-01-01", createdOn: "2019-12-01" }, "2020-01-01", "2052-01-01");
+        for (const frequency of ["daily", "weekly", "monthly"] as const) {
+            const counts = periods.map(period => habitMetricBuckets(frequency, period).length);
+            const min = minHabitMetricBuckets(cadence, frequency);
+            expect(counts.every(count => count >= min)).toBe(true);
+            expect(counts).toContain(min);
+            expect(min).toBeLessThanOrEqual(maxHabitMetricBuckets(cadence, frequency));
+        }
+    });
+
+    it.each<[number, Weekday, LocalDateKey]>([
+        [1, 0, "2020-01-05"], [1, 3, "2020-01-08"],
+        [2, 0, "2020-01-05"], [2, 3, "2020-01-08"],
+        [5, 0, "2020-01-05"], [5, 3, "2020-01-08"],
+        [1, 3, "2021-06-02"], [5, 0, "2021-06-06"],
+    ])("attains the every-n-weeks minimum for %s weeks on weekday %s", (intervalWeeks, weekday, anchor) => {
+        const cadence: GoalCadence = { kind: "every-n-weeks", weekday, intervalWeeks };
+        const periods = listPeriods({ ...grid(cadence), cadenceAnchorAt: anchor, createdOn: "2019-12-01" }, anchor, "2052-01-01");
+        for (const frequency of ["daily", "weekly", "monthly"] as const) {
+            const counts = periods.map(period => habitMetricBuckets(frequency, period).length);
+            const min = minHabitMetricBuckets(cadence, frequency);
+            expect(counts.every(count => count >= min)).toBe(true);
+            expect(counts).toContain(min);
+            expect(min).toBeLessThanOrEqual(maxHabitMetricBuckets(cadence, frequency));
+        }
+    });
+});
+
+describe("connectable habit frequencies", () => {
+    it("offers only daily and weekly when a monthly habit cannot fit every period", () => {
+        for (const weekday of [0, 1, 2, 3, 4, 5, 6] as Weekday[]) {
+            expect(connectableHabitFrequencies({ kind: "monthly-weekday", weekday })).toEqual(["daily", "weekly"]);
+        }
+        expect(connectableHabitFrequencies({ kind: "every-n-weeks", weekday: 0, intervalWeeks: 4 })).toEqual(["daily", "weekly"]);
+        expect(connectableHabitFrequencies({ kind: "every-n-weeks", weekday: 0, intervalWeeks: 5 })).toEqual(["daily", "weekly", "monthly"]);
+    });
+});
+
+describe("habit unit words", () => {
+    it("uses the singular only for a count of one and always stores the plural", () => {
+        expect(habitUnitWord(0, "daily")).toBe("days");
+        expect(habitUnitWord(1, "daily")).toBe("day");
+        expect(habitUnitWord(2, "daily")).toBe("days");
+        expect(habitUnitWord(1, "weekly")).toBe("week");
+        expect(habitUnitWord(1, "monthly")).toBe("month");
+        expect(habitUnitPlural("daily")).toBe("days");
+        expect(habitUnitPlural("weekly")).toBe("weeks");
+        expect(habitUnitPlural("monthly")).toBe("months");
     });
 });
