@@ -119,6 +119,27 @@ describe("EnergyProvider", () => {
         await act(async () => { expect(await result.current.setRating("missing", { clarity: 3 })).toBe(false); });
         expect(result.current.error).toBe("rating failed");
     });
+    it("clears a stale rating error after the next successful rating", async () => {
+        const data = new InMemoryDataAccess(); await seed(data);
+        vi.spyOn(data, "setEnergyRating").mockRejectedValueOnce(new Error("rating failed"));
+        const { result } = setup(data);
+        await waitFor(() => expect(result.current.entries[local(9)]).toBeDefined());
+        await act(async () => { expect(await result.current.setRating(local(9), { energy: 2 })).toBe(false); });
+        expect(result.current.error).toBe("rating failed");
+        await act(async () => { expect(await result.current.setRating(local(9), { energy: 5 })).toBe(true); });
+        expect(result.current.error).toBeNull();
+        expect(result.current.entries[local(9)]).toMatchObject({ energy: 5, energy_carried: false });
+    });
+    it("clears a stale start-create error after the next successful create", async () => {
+        const data = new InMemoryDataAccess();
+        vi.spyOn(data, "createEnergyEntry").mockRejectedValueOnce(new Error("create failed"));
+        const { result } = setup(data);
+        act(() => { publish("start"); });
+        await waitFor(() => expect(result.current.error).toBe("create failed"));
+        act(() => { publish("start", 12); });
+        await waitFor(() => expect(result.current.error).toBeNull());
+        expect(result.current.entries[local(12)]).toBeDefined();
+    });
     it("reloads subscriptions and own writes, resolving prefill with latest settings and fresh data", async () => {
         const { data, result, rerender } = setup();
         await act(async () => { await seed(data); });
