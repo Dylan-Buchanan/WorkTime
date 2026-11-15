@@ -803,6 +803,48 @@ describe("GoalsPage", () => {
         });
     });
 
+    it("preserves an identical habit link after Stop tracking and reconnecting in the editor", async () => {
+        const { data, tracker } = await oneTracker();
+        const metric = habitMetric({ target: 14 });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        await user.click(within(editor).getByRole("button", { name: "Stop tracking" }));
+        await user.click(within(editor).getByRole("button", { name: "Connect a habit" }));
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        await user.click(within(dialog).getByRole("button", { name: "Next" }));
+        await user.click(within(dialog).getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(dialog).not.toBeInTheDocument());
+        await user.type(screen.getByLabelText("Goal note"), "Reconnected");
+        await user.click(within(editor).getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].notes).toBe("Reconnected"));
+        expect((await data.loadGoals()).goals[0].metric).toStrictEqual(metric);
+    });
+
+    it("restores the stored manual metric after Stop tracking and cancelling Connect a habit", async () => {
+        const { data, tracker } = await oneTracker();
+        const metric: GoalMetric = { label: "Pages", current: 3, target: 25, unit: "pages", source: "manual", overridePinned: true };
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric });
+        await data.saveGoals([tracker], [goal], []);
+        await data.saveHabits([habit("habit-read", { name: "Read" })], []);
+        const { user } = await mount(data, "2026-11-02");
+        await user.click(screen.getByRole("button", { name: "Edit goal" }));
+        const editor = screen.getByRole("form", { name: "Edit goal" });
+        await user.clear(within(editor).getByLabelText("Metric label"));
+        await user.type(within(editor).getByLabelText("Metric label"), "Unsaved label");
+        await user.click(within(editor).getByRole("button", { name: "Stop tracking" }));
+        await user.click(within(editor).getByRole("button", { name: "Connect a habit" }));
+        const dialog = screen.getByRole("dialog", { name: "Connect a habit" });
+        await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await user.type(screen.getByLabelText("Goal note"), "Keep manual");
+        await user.click(within(editor).getByRole("button", { name: "Save goal" }));
+        await waitFor(async () => expect((await data.loadGoals()).goals[0].notes).toBe("Keep manual"));
+        expect((await data.loadGoals()).goals[0].metric).toEqual(metric);
+    });
+
     it.each<[string, GoalMetric | null]>([
         ["no metric", null],
         ["manual", { label: "Lifts", current: 4, target: 8, unit: "sessions", source: "manual", overridePinned: false }],

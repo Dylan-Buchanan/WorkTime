@@ -780,6 +780,19 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
         }
     }, [storedMetricValue]);
 
+    const connectHabit = () => {
+        if (storedMetric?.source === "manual") {
+            setMetricChoice("manual");
+            setLabel(storedMetric.label);
+            setCurrent(String(storedMetric.current));
+            setTarget(String(storedMetric.target));
+            setUnit(storedMetric.unit);
+        } else {
+            setMetricChoice("keep");
+        }
+        onConnectHabit();
+    };
+
     const linkedHabit = storedHabitMetric?.habitId ? habits.state.habits[storedHabitMetric.habitId] : undefined;
     const habitMax = linkedHabit ? maxHabitMetricBuckets(cadence, linkedHabit.frequency) : null;
     const unreachable = habits.hydrated && linkedHabit && habitMax !== null && storedHabitMetric !== null
@@ -881,16 +894,16 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
             </div> : metricChoice === "none" || storedMetric === null ? <>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" className={button} onClick={startManual}>Track manually</button>
-                    {goal.lifecycle === "active" && <button type="button" className={button} onClick={onConnectHabit}>Connect a habit</button>}
+                    {goal.lifecycle === "active" && <button type="button" className={button} onClick={connectHabit}>Connect a habit</button>}
                 </div>
                 {metricChoice === "none" && storedMetric !== null && <p>Tracking stops when you save.</p>}
             </> : storedHabitMetric ? <>
                 <p data-goals-slot="goal-metric-summary">Tracked by habit: {habitSummary}</p>
                 {unreachable && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">
-                    <span>{unreachable}</span>{" "}<button type="button" aria-haspopup="dialog" onClick={onConnectHabit}>Recalculate target</button>
+                    <span>{unreachable}</span>{" "}<button type="button" aria-haspopup="dialog" onClick={connectHabit}>Recalculate target</button>
                 </p>}
                 <div className="flex flex-wrap gap-2">
-                    <button type="button" className={button} onClick={onConnectHabit}>Change habit</button>
+                    <button type="button" className={button} onClick={connectHabit}>Change habit</button>
                     <button type="button" className={button} onClick={stopTracking}>Stop tracking</button>
                 </div>
             </> : <>

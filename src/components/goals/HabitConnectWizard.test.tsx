@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { HabitConnectWizard } from "./HabitConnectWizard";
 import { GoalProvider, useGoals } from "../../state/GoalContext";
@@ -122,6 +123,30 @@ async function waitForNextEnabled() {
     await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
 }
 
+function DismissibleWizard({ data, tracker, goal }: { data: InMemoryDataAccess; tracker: GoalTracker; goal: Goal }) {
+    const [open, setOpen] = useState(false);
+    return <>
+        <button onClick={() => setOpen(true)}>Open habit wizard</button>
+        {open && tree(data, tracker, goal, null, () => setOpen(false))}
+    </>;
+}
+
+async function mountDismissibleWizard(data: InMemoryDataAccess, tracker: GoalTracker, goal: Goal) {
+    const user = userEvent.setup();
+    const view = render(<DismissibleWizard data={data} tracker={tracker} goal={goal} />);
+    await user.click(screen.getByRole("button", { name: "Open habit wizard" }));
+    await screen.findByRole("dialog", { name: "Connect a habit" });
+    return { user, ...view };
+}
+
+async function prepareNewHabitSave(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByRole("heading", { name: "New habit" });
+    await user.clear(screen.getByLabelText("Habit name"));
+    await user.type(screen.getByLabelText("Habit name"), "Walk outside");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await screen.findByRole("heading", { name: "Set the target" });
+}
+
 beforeEach(() => {
     localStorage.clear();
     goalWrite.failNext = false;
@@ -129,6 +154,172 @@ beforeEach(() => {
 });
 
 describe("HabitConnectWizard", () => {
+    it("focuses an enabled control inside the panel on open", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal, [habit("first")]);
+        await mountDismissibleWizard(data, tracker, goal);
+        const radio = await screen.findByRole("radio", { name: "first" });
+        await waitFor(() => expect(radio).toHaveFocus());
+        expect(radio.closest("[role='dialog']")).toBe(screen.getByRole("dialog"));
+        expect(radio).toBeEnabled();
+    });
+
+    it("traps Shift+Tab from the first control and from the dialog container", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal, [habit("first"), habit("second", { position: 1 })]);
+        const { user } = await mountDismissibleWizard(data, tracker, goal);
+        const first = await screen.findByRole("radio", { name: "first" });
+        await waitFor(() => expect(first).toHaveFocus());
+        await user.tab({ shift: true });
+        expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+        const dialog = screen.getByRole("dialog");
+        dialog.focus();
+        await user.tab({ shift: true });
+        expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+        expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    });
+
+    it("returns focus to the opening button after Escape", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal, [habit("first")]);
+        const { user } = await mountDismissibleWizard(data, tracker, goal);
+        await screen.findByRole("radio", { name: "first" });
+        await user.keyboard("{Escape}");
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Open habit wizard" })).toHaveFocus();
+    });
+
+    it("owns Escape before a document keydown listener can receive it", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal, [habit("first")]);
+        const onDocumentKeyDown = vi.fn();
+        document.addEventListener("keydown", onDocumentKeyDown);
+        try {
+            await mountDismissibleWizard(data, tracker, goal);
+            onDocumentKeyDown.mockClear();
+            const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+            fireEvent(document.activeElement!, event);
+            expect(event.defaultPrevented).toBe(true);
+            expect(onDocumentKeyDown).not.toHaveBeenCalled();
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        } finally {
+            document.removeEventListener("keydown", onDocumentKeyDown);
+        }
+    });
+
+    it("moves and selects radios with ArrowDown while skipping disabled habits", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture({ cadence: { kind: "monthly-weekday", weekday: 2 } });
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal, [
+            habit("first"),
+            habit("disabled", { position: 1, frequency: "monthly" }),
+            habit("last", { position: 2, frequency: "weekly" }),
+        ]);
+        const { user } = await mountDismissibleWizard(data, tracker, goal);
+        const first = await screen.findByRole("radio", { name: "first" });
+        const last = screen.getByRole("radio", { name: "last" });
+        const disabled = screen.getByRole("radio", { name: "disabled" });
+        await waitFor(() => expect(first).toHaveFocus());
+        expect(first).toHaveAttribute("tabindex", "0");
+        expect(last).toHaveAttribute("tabindex", "-1");
+        expect(disabled).toBeDisabled();
+        await user.keyboard("{ArrowDown}");
+        expect(last).toHaveFocus();
+        expect(last).toHaveAttribute("aria-checked", "true");
+        expect(last).toHaveAttribute("tabindex", "0");
+        expect(first).toHaveAttribute("tabindex", "-1");
+        expect(disabled).toHaveAttribute("aria-checked", "false");
+        await user.keyboard("{ArrowRight}");
+        expect(first).toHaveFocus();
+        expect(first).toHaveAttribute("aria-checked", "true");
+        await user.keyboard("{ArrowUp}");
+        expect(last).toHaveFocus();
+        await user.keyboard("{ArrowLeft}");
+        expect(first).toHaveFocus();
+        await user.keyboard("{End}");
+        expect(last).toHaveFocus();
+        await user.keyboard("{Home}");
+        expect(first).toHaveFocus();
+        expect(first).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("keeps habits empty after a failed Save followed immediately by Escape", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal);
+        const saveSpy = vi.spyOn(data, "saveHabits");
+        const { user } = await mountDismissibleWizard(data, tracker, goal);
+        await prepareNewHabitSave(user);
+        goalWrite.failNext = true;
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        fireEvent.keyDown(window, { key: "Escape" });
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        await waitFor(async () => expect((await data.loadHabits()).habits).toEqual([]));
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+        expect((await data.loadHabits()).habits).toEqual([]);
+        expect(saveSpy).not.toHaveBeenCalled();
+    });
+
+    it("never persists a failed Save even when saveHabits is deferred and then released", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal);
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const originalSave = data.saveHabits.bind(data);
+        const saveSpy = vi.spyOn(data, "saveHabits").mockImplementation(async (...args) => {
+            await gate;
+            return originalSave(...args);
+        });
+        const { user } = await mountWizard(data, tracker, goal, null, vi.fn());
+        await prepareNewHabitSave(user);
+        goalWrite.failNext = true;
+        await user.click(screen.getByRole("button", { name: "Save" }));
+        expect(await screen.findByRole("alert")).toHaveTextContent("This goal couldn’t be saved, so the new habit wasn’t kept. Try again.");
+        expect(saveSpy).not.toHaveBeenCalled();
+        expect((await data.loadHabits()).habits).toEqual([]);
+        await act(async () => {
+            release();
+            await gate;
+            await new Promise(resolve => setTimeout(resolve, 0));
+        });
+        expect(saveSpy).not.toHaveBeenCalled();
+        expect((await data.loadHabits()).habits).toEqual([]);
+    });
+
+    it("retries immediately after a failed Save and links exactly one habit", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id });
+        await saveData(data, tracker, goal);
+        const saveSpy = vi.spyOn(data, "saveHabits");
+        const onClose = vi.fn();
+        const { user } = await mountWizard(data, tracker, goal, null, onClose);
+        await prepareNewHabitSave(user);
+        goalWrite.failNext = true;
+        const save = screen.getByRole("button", { name: "Save" });
+        fireEvent.click(save);
+        fireEvent.click(save);
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        await waitFor(async () => expect((await data.loadHabits()).habits).toHaveLength(1));
+        const [created] = (await data.loadHabits()).habits;
+        expect(saveSpy).toHaveBeenCalledTimes(1);
+        expect((await data.loadGoals()).goals[0].metric).toStrictEqual({
+            label: "Walk outside", current: 0, target: 14, unit: "days", source: "habit", habitId: created.id, overridePinned: false,
+        });
+    });
+
     it.each([
         { archived: true, target: 14 },
         { archived: true, target: 15 },

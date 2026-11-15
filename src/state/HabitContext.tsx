@@ -304,8 +304,8 @@ export const HabitProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const archiveHabit = (id: string, archive = true) => updateHabit(id, { isArchived: archive });
 
     const deleteHabit = (id: string) => {
-        if (!state.habits[id]) return;
         persist((previous) => {
+            if (!previous.habits[id]) return previous;
             const habits = { ...previous.habits };
             delete habits[id];
             const completions = Object.fromEntries(Object.entries(previous.completions).filter(([, completion]) => completion.habitId !== id));
