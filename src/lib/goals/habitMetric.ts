@@ -126,6 +126,83 @@ export function maxHabitMetricBuckets(cadence: GoalCadence, frequency: HabitFreq
     return 2;
 }
 
+/** Count month-firsts in the half-open offset interval [from, to), across cycle wraps. */
+function monthStartsIn(from: number, to: number): number {
+    const countBefore = (offset: number): number => {
+        let low = 0;
+        let high = CYCLE_MONTHS;
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (MONTH_STARTS[mid] < offset) low = mid + 1;
+            else high = mid;
+        }
+        return low;
+    };
+    const fromCycle = Math.floor(from / CYCLE_DAYS);
+    const toCycle = Math.floor(to / CYCLE_DAYS);
+    const localFrom = from - fromCycle * CYCLE_DAYS;
+    const localTo = to - toCycle * CYCLE_DAYS;
+    return toCycle === fromCycle
+        ? countBefore(localTo) - countBefore(localFrom)
+        : CYCLE_MONTHS - countBefore(localFrom) + countBefore(localTo);
+}
+
+function minMonthStarts(weeks: number, weekday: number): number {
+    // Split whole 400-year cycles out first so arbitrarily long strides stay exact.
+    const cycles = Math.floor(weeks / 20_871);
+    const days = (weeks % 20_871) * 7;
+    if (days === 0) return cycles * CYCLE_MONTHS;
+    let minimum = Number.POSITIVE_INFINITY;
+    for (let first = 0; first < CYCLE_MONTHS; first += 1) {
+        const start = MONTH_STARTS[first];
+        const offset = ((weekday - ((6 + start) % 7)) % 7 + 7) % 7;
+        // The fewest month-firsts start at the earliest cadence weekday strictly
+        // after this month-first, leaving the widest gap before the next one.
+        const windowStart = start + (offset === 0 ? 7 : offset);
+        minimum = Math.min(minimum, monthStartsIn(windowStart, windowStart + days));
+    }
+    return cycles * CYCLE_MONTHS + minimum;
+}
+
+/** Exact guaranteed minimum bucket count over every period of this cadence. */
+export function minHabitMetricBuckets(cadence: GoalCadence, frequency: HabitFrequency): number {
+    const rule = normalizeGoalCadence(cadence);
+    if (rule.kind === "every-n-weeks") {
+        if (frequency === "daily") return rule.intervalWeeks * 7;
+        if (frequency === "weekly") return rule.intervalWeeks;
+        return minMonthStarts(rule.intervalWeeks, rule.weekday);
+    }
+    // The snapping rule can make a period three weeks long; some windows of every
+    // monthly-weekday tracker contain no month-first at all.
+    const short = rule.weekday === 0 || rule.weekday === 1;
+    if (frequency === "daily") return short ? 28 : 21;
+    if (frequency === "weekly") return short ? 4 : 3;
+    return 0;
+}
+
+const FREQUENCY_ORDER: readonly HabitFrequency[] = ["daily", "weekly", "monthly"];
+
+/** Frequencies whose guaranteed minimum is at least 1, in order daily, weekly, monthly. */
+export function connectableHabitFrequencies(cadence: GoalCadence): HabitFrequency[] {
+    return FREQUENCY_ORDER.filter(frequency => minHabitMetricBuckets(cadence, frequency) >= 1);
+}
+
+const HABIT_UNIT_WORDS: Record<HabitFrequency, readonly [string, string]> = {
+    daily: ["day", "days"],
+    weekly: ["week", "weeks"],
+    monthly: ["month", "months"],
+};
+
+/** "day"/"days", "week"/"weeks", "month"/"months"; singular only when count === 1. */
+export function habitUnitWord(count: number, frequency: HabitFrequency): string {
+    return HABIT_UNIT_WORDS[frequency][count === 1 ? 0 : 1];
+}
+
+/** Always the plural: "days" | "weeks" | "months". This is the stored metric unit. */
+export function habitUnitPlural(frequency: HabitFrequency): string {
+    return HABIT_UNIT_WORDS[frequency][1];
+}
+
 /** Current misses are provisional; completed misses break the streak. */
 export function habitMetricStreak(
     goal: Pick<Goal, "metric" | "createdAt">,
