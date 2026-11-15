@@ -26,7 +26,7 @@ const legacySnapshot = {
     settings: { value: defaultAppState().settings, updatedAt: T0 },
     timerState: { value: { active_task: null, current_cycle_pomodoros: 0, timer: null }, updatedAt: T0, completed: false },
     pmState: { value: { projects: {}, tasks: {}, meta: { initializedAt: T0 } }, updatedAt: T0 },
-    petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {}, petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
+    petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {}, petNapRecords: {}, energyEntries: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
 };
 function baseline(): SyncSnapshot { return structuredClone({ ...legacySnapshot, ...emptyGoals }); }
 function setup() {
@@ -57,7 +57,7 @@ describe("goals staged sync foundation", () => {
             habitUpdatedAt: { habit: T1 }, habitTombstones: {}, habitCompletionTombstones: {}, todos: { todo }, todoUpdatedAt: { todo: T1 }, todoTombstones: {}, todoCompletions: {}, todoCompletionTombstones: {},
             petActivityRecords: {}, petActivityUpdatedAt: {}, petActivityTombstones: {}, petProfile: profile, petProfileUpdatedAt: T1, petProfileTombstone: null,
             petScheduleItems: {}, petScheduleUpdatedAt: {}, petScheduleTombstones: {}, petReminderMarks: { reminder: { id: "reminder", itemId: "item", dueAt: T0, remindedAt: T1 } },
-            petNapRecords: {}, petNapUpdatedAt: {}, petNapTombstones: {}, petWeightEntries: {}, petWeightUpdatedAt: {}, petWeightTombstones: {},
+            petNapRecords: {}, petNapUpdatedAt: {}, petNapTombstones: {}, energyEntries: {}, petWeightEntries: {}, energyUpdatedAt: {}, petWeightUpdatedAt: {}, petWeightTombstones: {},
             petTrainingSkills: {}, petTrainingSkillUpdatedAt: {}, petTrainingSkillTombstones: {}, petFixations: {}, petFixationUpdatedAt: {}, petFixationTombstones: {}, petNotableEvents: {}, petNotableEventUpdatedAt: {}, petNotableEventTombstones: {} };
         window.localStorage.setItem(stagingKey(OWNER), JSON.stringify(v8));
         const { store, data } = setup();
@@ -69,12 +69,12 @@ describe("goals staged sync foundation", () => {
         }
         render(<DataProvider dataAccess={data}><Consumer /></DataProvider>);
         await waitFor(() => expect(loaded).toHaveBeenCalledWith({ trackers: [], goals: [], checkIns: [] }));
-        const expected = { ...v8, ...emptyGoals, schemaVersion: 11, lastSynced: { ...snapshot, ...emptyGoals } };
+        const expected = { ...v8, ...emptyGoals, schemaVersion: 12, lastSynced: { ...snapshot, ...emptyGoals } };
         expect(store.read(OWNER)).toEqual(expected);
         // Persist by the ordinary full-set writer, then load from a new store instance.
         await data.saveGoals([], [], []);
         expect(new LocalStagingStore(window.localStorage).read(OWNER)).toEqual({ ...expected, revision: 18 });
-        expect(JSON.parse(window.localStorage.getItem(stagingKey(OWNER))!).schemaVersion).toBe(11);
+        expect(JSON.parse(window.localStorage.getItem(stagingKey(OWNER))!).schemaVersion).toBe(12);
     });
 
     it("stamps changed rows only, clones inputs, isolates owners and rejects backwards built keys atomically", async () => {

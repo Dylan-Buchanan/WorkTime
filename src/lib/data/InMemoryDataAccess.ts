@@ -1,3 +1,5 @@
+import type { EnergyEntry, EnergyRatingPatch } from "../../state/types";
+import { applyEnergyRating } from "../energy";
 import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { EngineResult } from "../engine";
@@ -81,6 +83,7 @@ export interface InMemoryDataStore {
     petScheduleItems: PetScheduleItem[];
     petReminderMarks: PetReminderMark[];
     petNapRecords: PetNapRecord[];
+    energyEntries: EnergyEntry[];
     petWeightEntries: PetWeightEntry[];
     petTrainingSkills: PetTrainingSkill[];
     petFixations: PetFixation[];
@@ -129,8 +132,9 @@ export class InMemoryDataAccess implements DataAccess {
                 timer: null,
                 ...(initial ?? {}),
             };
-            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], goalTrackers: [], goals: [], goalCheckIns: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petReminderMarks: [], petNapRecords: [], petWeightEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
+            this.store = { state: cloneAppState(base), pmState: null, habits: [], habitCompletions: [], todos: [], todoCompletions: [], goalTrackers: [], goals: [], goalCheckIns: [], petActivityRecords: [], petProfile: null, petScheduleItems: [], petReminderMarks: [], petNapRecords: [], petWeightEntries: [], energyEntries: [], petTrainingSkills: [], petFixations: [], petNotableEvents: [], completed: false };
         }
+        this.store.energyEntries = clone(this.store.energyEntries ?? []);
         this.store.goalTrackers = clone(this.store.goalTrackers ?? []);
         this.store.goals = clone(this.store.goals ?? []);
         this.store.goalCheckIns = clone(this.store.goalCheckIns ?? []);
@@ -392,6 +396,25 @@ export class InMemoryDataAccess implements DataAccess {
         return this.store.petNapRecords.map((nap) => clone(nap));
     }
 
+    async loadEnergyEntries(): Promise<EnergyEntry[]> { return clone(this.store.energyEntries); }
+
+    async createEnergyEntry(entry: EnergyEntry): Promise<boolean> {
+        if (this.store.energyEntries.some(row => row.work_window_id === entry.work_window_id)) return false;
+        this.store.energyEntries.push(clone(entry));
+        this.pending += 1;
+        this.notify();
+        return true;
+    }
+
+    async setEnergyRating(workWindowId: string, patch: EnergyRatingPatch, updatedAt: string): Promise<boolean> {
+        const index = this.store.energyEntries.findIndex(row => row.work_window_id === workWindowId);
+        if (index < 0 || Object.keys(patch).length === 0) return false;
+        this.store.energyEntries[index] = applyEnergyRating(this.store.energyEntries[index], clone(patch), updatedAt);
+        this.pending += 1;
+        this.notify();
+        return true;
+    }
+
     async savePetWeightEntries(entries: PetWeightEntry[]): Promise<void> {
         this.store.petWeightEntries = entries.map((entry) => clone(entry));
         this.pending += 1;
@@ -467,6 +490,7 @@ export class InMemoryDataAccess implements DataAccess {
         this.store.petTrainingSkills = this.baseline.petTrainingSkills.map((skill) => clone(skill));
         this.store.petFixations = this.baseline.petFixations.map((fixation) => clone(fixation));
         this.store.petNotableEvents = this.baseline.petNotableEvents.map((event) => clone(event));
+        this.store.energyEntries = clone(this.baseline.energyEntries);
         this.store.goalTrackers = clone(this.baseline.goalTrackers);
         this.store.goals = clone(this.baseline.goals);
         this.store.goalCheckIns = clone(this.baseline.goalCheckIns);
@@ -514,7 +538,7 @@ export function makeSharedInMemoryDataAccess(initial?: Partial<AppStateData>, op
         petScheduleItems: [],
         petReminderMarks: [],
         petNapRecords: [],
-        petWeightEntries: [],
+        petWeightEntries: [], energyEntries: [],
         petTrainingSkills: [],
         petFixations: [],
         petNotableEvents: [],

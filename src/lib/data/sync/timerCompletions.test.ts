@@ -102,7 +102,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         pmState: { value: null, updatedAt: null },
         petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
         goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
-        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
+        petNapRecords: {}, energyEntries: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -110,7 +110,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const base = snapshot();
     return {
-        schemaVersion: 11,
+        schemaVersion: 12,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -157,8 +157,8 @@ function record(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
         petNapRecords: {},
         petNapUpdatedAt: {},
         petNapTombstones: {},
-        petWeightEntries: {},
-        petWeightUpdatedAt: {},
+        energyEntries: {}, petWeightEntries: {},
+        energyUpdatedAt: {}, petWeightUpdatedAt: {},
         petWeightTombstones: {},
         petTrainingSkills: {},
         petTrainingSkillUpdatedAt: {},

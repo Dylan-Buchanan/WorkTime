@@ -1,3 +1,4 @@
+import { composeEnergyEntry } from "../energy";
 import { createGoalTracker, createGoal, createGoalCheckIn } from "../goals/factories";
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -414,7 +415,7 @@ describe("goal row transport", () => {
         ],
         goal_check_ins: [{ id: check.id, goal_id: check.goalId, period_start: check.periodStart, did: check.did, current: check.current, planned: check.planned, status_pill: check.statusPill, miss_reason: check.missReason, is_focus: check.isFocus, evidence_task_ids: check.evidenceTaskIds, created_at: t, updated_at: t }],
     };
-    it("round trips every row field and sends exactly 42 named RPC inputs", async () => {
+    it("round trips every row field and sends exactly 43 named RPC inputs", async () => {
         const pulled = await new SupabaseDataAccess(pullClient({ work_minutes: 25, short_break_minutes: 5, long_break_minutes: 20, segment_length: 4, start_of_day: "00:00", end_of_day: "22:00" }, rows)).pull(OWNER);
         expect(pulled.goalTrackers.tracker).toEqual({ value: tracker, updatedAt: t });
         for (const value of [goal, inherit, none]) expect(pulled.goals[value.id]).toEqual({ value, updatedAt: t });
@@ -422,7 +423,7 @@ describe("goal row transport", () => {
         const { client, rpc } = mockClient(); const data = new SupabaseDataAccess(client);
         await data.push(OWNER, { ...emptyPlan(), goalTrackerUpserts: [pulled.goalTrackers.tracker], goalUpserts: Object.values(pulled.goals), goalCheckInUpserts: [pulled.goalCheckIns.check] });
         const args = rpc.mock.calls[0][1];
-        expect(Object.keys(args)).toHaveLength(42);
+        expect(Object.keys(args)).toHaveLength(43);
         expect(args.p_goal_tracker_upserts).toEqual(rows.goal_trackers);
         expect(args.p_goal_upserts).toEqual(rows.goals);
         expect(args.p_goal_check_in_upserts).toEqual(rows.goal_check_ins);
@@ -478,4 +479,31 @@ describe("pomodoro log window transport", () => {
         expect(rpc).toHaveBeenCalledWith("apply_staged_sync", expect.objectContaining({ p_log_upserts: [log] }));
         expect(rpc.mock.calls[0][1].p_log_upserts[0]).not.toBe(log);
     });
+});
+
+describe("energy remote transport", () => {
+    const row = () => composeEnergyEntry({ workWindowId: "2026-11-15T10:00:00.000Z",
+        prefill: { energy: 4, clarity: 3 }, explicit: { caffeine: true }, now: "2026-11-15T10:00:00.000Z" });
+    it("sends column-named energy upserts and null for an empty batch", async () => {
+        const { client, rpc } = mockClient();
+        const remote = new SupabaseDataAccess(client);
+        await remote.push(OWNER, { ...emptyPlan(), energyUpserts: [{ value: row(), updatedAt: "2026-11-15T11:00:00.000Z" }] });
+        expect(rpc).toHaveBeenLastCalledWith("apply_staged_sync", expect.objectContaining({
+            p_energy_upserts: [{ ...row(), updated_at: "2026-11-15T11:00:00.000Z" }],
+        }));
+        await remote.push(OWNER, emptyPlan());
+        expect(rpc).toHaveBeenLastCalledWith("apply_staged_sync", expect.objectContaining({ p_energy_upserts: null }));
+    });
+    it("keys remote rows by work_window_id, normalizing missing ratings and provenance", async () => {
+        const raw = { ...row(), energy: undefined, clarity: null, energy_carried: undefined, clarity_carried: undefined };
+        const remote = new SupabaseDataAccess(pullClient(undefined, { energy_sessions: [raw] }));
+        expect((await remote.pull(OWNER)).energyEntries).toEqual({
+            [raw.work_window_id]: { value: { ...row(), energy: null, clarity: null, energy_carried: false, clarity_carried: false }, updatedAt: raw.updated_at },
+        });
+    });
+    it.each([{ energy: "3" }, { energy: 0 }, { clarity: 2.5 }, { caffeine: undefined }, { energy_carried: 1 }])(
+        "follows existing fail-closed remote validation for %j", async patch => {
+            const remote = new SupabaseDataAccess(pullClient(undefined, { energy_sessions: [{ ...row(), ...patch }] }));
+            await expect(remote.pull(OWNER)).rejects.toThrow("energy_sessions");
+        });
 });

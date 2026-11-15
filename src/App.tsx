@@ -1,3 +1,4 @@
+import { EnergyProvider } from "./state/EnergyContext";
 import { TaskCompletionProvider } from "./state/TaskCompletionContext";
 import { SWITCH_SHEET_FOCUS_FALLBACK_ID } from "./components/SwitchSheet";
 import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
@@ -179,6 +180,7 @@ const AuthenticatedShell: React.FC = () => {
                                             <PetActivityProvider>
                                                 <CalendarBusyProvider>
                                                 <PetReminderProvider>
+                                                <EnergyProvider>
                                                 <ResumeMemoProvider>
                                                 <StateSyncBridge />
                                                 <TaskCompletionProvider>
@@ -189,6 +191,7 @@ const AuthenticatedShell: React.FC = () => {
                                                 </div>
                                                 </TaskCompletionProvider>
                                                 </ResumeMemoProvider>
+                                                </EnergyProvider>
                                                 </PetReminderProvider>
                                                 </CalendarBusyProvider>
                                             </PetActivityProvider>

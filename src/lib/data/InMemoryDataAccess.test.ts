@@ -1,3 +1,4 @@
+import { composeEnergyEntry } from "../energy";
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryDataAccess } from "./InMemoryDataAccess";
 import { defaultSettings, makeAppState, makeActiveTimer } from "../../test/mockTauri";
@@ -407,5 +408,30 @@ describe("InMemoryDataAccess", () => {
 
         await data.savePetNotableEvents([]);
         expect(await data.loadPetNotableEvents()).toEqual([]);
+    });
+});
+
+describe("energy data access", () => {
+    it("inserts once, patches existing fields only, and preserves energy on reset", async () => {
+        const data = new InMemoryDataAccess();
+        const row = composeEnergyEntry({ workWindowId: "2026-11-15T10:00:00.000Z",
+            prefill: { energy: 4, clarity: 3 }, explicit: {}, now: "2026-11-15T10:00:00.000Z" });
+        expect(await data.setEnergyRating("missing", { energy: 2 }, "later")).toBe(false);
+        expect(await data.loadEnergyEntries()).toEqual([]);
+        expect(await data.createEnergyEntry(row)).toBe(true);
+        expect(await data.createEnergyEntry({ ...row, energy: 1 })).toBe(false);
+        expect(await data.loadEnergyEntries()).toEqual([row]);
+        const pending = data.pendingCount();
+        expect(await data.setEnergyRating(row.work_window_id, {}, "ignored")).toBe(false);
+        expect(data.pendingCount()).toBe(pending);
+        expect(await data.loadEnergyEntries()).toEqual([row]);
+        expect(await data.setEnergyRating(row.work_window_id, { clarity: 5 }, "2026-11-15T11:00:00.000Z")).toBe(true);
+        expect(await data.loadEnergyEntries()).toEqual([{ ...row, clarity: 5, clarity_carried: false, updated_at: "2026-11-15T11:00:00.000Z" }]);
+        expect(await data.setEnergyRating(row.work_window_id, { energy: null, caffeine: true }, "2026-11-15T12:00:00.000Z")).toBe(true);
+        const final = [{ ...row, energy: null, energy_carried: false, clarity: 5, clarity_carried: false,
+            caffeine: true, updated_at: "2026-11-15T12:00:00.000Z" }];
+        expect(await data.loadEnergyEntries()).toEqual(final);
+        await data.resetAppState();
+        expect(await data.loadEnergyEntries()).toEqual(final);
     });
 });

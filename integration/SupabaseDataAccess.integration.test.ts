@@ -1,4 +1,5 @@
 import { createGoalTracker, createGoal, createGoalCheckIn } from "../src/lib/goals/factories";
+import { composeEnergyEntry } from "../src/lib/energy";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,6 +107,57 @@ function todo(id = TODO_ID) {
 const epoch = (value: string | null): number | null => (value === null ? null : new Date(value).getTime());
 
 describe("SupabaseDataAccess transport", () => {
+    it("keeps one energy row per owner/window and accepts only newer RPC writes", async () => {
+        user = await createLocalUser();
+        const remote = new SupabaseDataAccess(user.client);
+        const row = composeEnergyEntry({ workWindowId: T0, prefill: { energy: 4, clarity: 3 }, explicit: {}, now: T0 });
+        const newer = { ...row, energy: 2, energy_carried: false, caffeine: true, updated_at: LATER };
+        const push = (value: typeof row) => remote.push(user!.userId, {
+            ...emptyPlan(), energyUpserts: [{ value, updatedAt: value.updated_at }],
+        });
+        await push(row);
+        await push(newer);
+        await push(newer); // Replay and an older insert must preserve the newer answer.
+        await push(row);
+        const rows = await user.client.from("energy_sessions").select("*").eq("work_window_id", T0);
+        expect(rows.error).toBeNull();
+        expect(rows.data).toHaveLength(1);
+        expect(rows.data![0]).toMatchObject({ owner_id: user.userId, work_window_id: T0, energy: 2,
+            clarity: 3, caffeine: true, energy_carried: false, clarity_carried: true });
+        expect(epoch(rows.data![0].updated_at)).toBe(epoch(LATER));
+        const pulled = (await remote.pull(user.userId)).energyEntries;
+        expect(Object.keys(pulled)).toEqual([T0]);
+        expect(pulled[T0].value).toMatchObject({ work_window_id: T0, energy: 2, caffeine: true });
+        expect(epoch(pulled[T0].updatedAt)).toBe(epoch(LATER));
+    });
+
+    it("enforces energy RLS for cross-owner select, insert and update", async () => {
+        user = await createLocalUser();
+        const other = await createLocalUser();
+        try {
+            const row = composeEnergyEntry({ workWindowId: T0, prefill: { energy: null, clarity: null }, explicit: { energy: 4 }, now: T0 });
+            await new SupabaseDataAccess(user.client).push(user.userId, {
+                ...emptyPlan(), energyUpserts: [{ value: row, updatedAt: T0 }],
+            });
+            const selected = await other.client.from("energy_sessions").select("*").eq("owner_id", user.userId);
+            expect(selected.error).toBeNull();
+            expect(selected.data).toEqual([]);
+            const inserted = await other.client.from("energy_sessions").insert({ ...row, owner_id: user.userId, work_window_id: LATER });
+            expect(inserted.error).toMatchObject({ code: "42501" });
+            const updated = await other.client.from("energy_sessions").update({ energy: 1 }).eq("owner_id", user.userId).select();
+            expect(updated.error).toBeNull();
+            expect(updated.data).toEqual([]);
+            // The update policy's WITH CHECK also prevents transferring an owned row.
+            const ownInsert = await other.client.from("energy_sessions").insert(row);
+            expect(ownInsert.error).toBeNull();
+            const reassigned = await other.client.from("energy_sessions").update({ owner_id: user.userId }).eq("work_window_id", T0);
+            expect(reassigned.error).toMatchObject({ code: "42501" });
+            const original = await user.client.from("energy_sessions").select("energy").eq("work_window_id", T0).single();
+            expect(original.error).toBeNull();
+            expect(original.data!.energy).toBe(4);
+        } finally { await other.cleanup(); }
+    });
+
     it("requires an authenticated session before pulling", async () => {
         const config = localSupabaseConfig();
         const anon = createClient(config.url, config.anonKey, { auth: { persistSession: false } });

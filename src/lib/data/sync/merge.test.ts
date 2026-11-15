@@ -1,3 +1,4 @@
+import { composeEnergyEntry } from "../../energy";
 import { describe, expect, it } from "vitest";
 import type { ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetProfile, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
@@ -106,7 +107,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         pmState: { value: null, updatedAt: null },
         petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
         goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
-        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
+        petNapRecords: {}, energyEntries: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -115,7 +116,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     const slice = baseline.timerState.value ?? { active_task: null, current_cycle_pomodoros: 0, timer: null };
     return {
-        schemaVersion: 11,
+        schemaVersion: 12,
         ownerId: "owner-a",
         revision: 1,
         initialized: true,
@@ -164,8 +165,8 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
         petNapRecords: {},
         petNapUpdatedAt: {},
         petNapTombstones: {},
-        petWeightEntries: {},
-        petWeightUpdatedAt: {},
+        energyEntries: {}, petWeightEntries: {},
+        energyUpdatedAt: {}, petWeightUpdatedAt: {},
         petWeightTombstones: {},
         petTrainingSkills: {},
         petTrainingSkillUpdatedAt: {},
@@ -183,7 +184,7 @@ function recordFromBaseline(baseline: SyncSnapshot, overrides: Partial<StagedOwn
 
 function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): StagedOwnerRecord {
     return {
-        schemaVersion: 11,
+        schemaVersion: 12,
         ownerId: "owner-a",
         revision: 0,
         initialized: false,
@@ -223,8 +224,8 @@ function uninitializedRecord(overrides: Partial<StagedOwnerRecord> = {}): Staged
         petNapRecords: {},
         petNapUpdatedAt: {},
         petNapTombstones: {},
-        petWeightEntries: {},
-        petWeightUpdatedAt: {},
+        energyEntries: {}, petWeightEntries: {},
+        energyUpdatedAt: {}, petWeightUpdatedAt: {},
         petWeightTombstones: {},
         petTrainingSkills: {},
         petTrainingSkillUpdatedAt: {},
@@ -1741,5 +1742,44 @@ describe("PM waiting whole-blob merge", () => {
         expect(merged.record.pmState?.tasks.waiting.waiting).toEqual(expected.tasks.waiting.waiting);
         expect(merged.pendingCount).toBe(winner === "local" ? 1 : 0);
         expect(buildPushPlan(merged.record).pmState?.value ?? null).toEqual(winner === "local" ? localPm : null);
+    });
+});
+
+describe("energy sync domain", () => {
+    const energy = (stamp: string, rating = 4) => composeEnergyEntry({ workWindowId: T1,
+        prefill: { energy: rating, clarity: null }, explicit: {}, now: stamp });
+    it("plans, acknowledges and merges energy without changing other domains", () => {
+        const base = snapshot();
+        const row = energy(T2);
+        const record = recordFromBaseline(base, { energyEntries: { [T1]: row }, energyUpdatedAt: { [T1]: T2 } });
+        const plan = buildPushPlan(record);
+        expect(plan.energyUpserts).toEqual([{ value: row, updatedAt: T2 }]);
+        expect(isPlanNonEmpty(plan)).toBe(true);
+        expect(plan.taskUpserts).toEqual([]); expect(plan.logUpserts).toEqual([]);
+        const pushed = pushedSnapshotFromPlan(record, plan);
+        const committed = commitAcknowledgedPush(record, plan, pushed);
+        expect(committed.energyUpdatedAt).toEqual({});
+        expect(committed.energyEntries).toEqual({ [T1]: row });
+        const merged = mergePulledSnapshot(committed, pushed, new Date(T3)).record;
+        expect(merged.energyEntries).toEqual({ [T1]: row });
+        expect({ ...merged, energyEntries: {}, energyUpdatedAt: {}, lastSynced: base })
+            .toEqual({ ...recordFromBaseline(base), revision: merged.revision,
+                settingsUpdatedAt: null, timerUpdatedAt: null });
+    });
+    it("adopts untouched remote energy and uses existing versioned LWW conflicts", () => {
+        const base = snapshot({ energyEntries: { [T1]: { value: energy(T1), updatedAt: T1 } } });
+        const remote = snapshot({ energyEntries: { [T1]: { value: energy(T2, 2), updatedAt: T2 } } });
+        const untouched = recordFromBaseline(base, { energyEntries: { [T1]: energy(T1) } });
+        expect(mergePulledSnapshot(untouched, remote, new Date(T3)).record.energyEntries[T1].energy).toBe(2);
+        const local = { ...untouched, energyEntries: { [T1]: energy(T3, 5) }, energyUpdatedAt: { [T1]: T3 } };
+        expect(mergePulledSnapshot(local, remote, new Date(T3)).record.energyEntries[T1].energy).toBe(5);
+        const stale = { ...local, energyUpdatedAt: { [T1]: T1 } };
+        expect(mergePulledSnapshot(stale, remote, new Date(T3)).record.energyEntries[T1].energy).toBe(2);
+    });
+    it("keeps a later rating dirty when an older create is acknowledged", () => {
+        const record = recordFromBaseline(snapshot(), { energyEntries: { [T1]: energy(T2) }, energyUpdatedAt: { [T1]: T2 } });
+        const plan = buildPushPlan(record);
+        const newer = { ...record, energyEntries: { [T1]: energy(T3, 5) }, energyUpdatedAt: { [T1]: T3 } };
+        expect(commitAcknowledgedPush(newer, plan, pushedSnapshotFromPlan(record, plan)).energyUpdatedAt).toEqual({ [T1]: T3 });
     });
 });
