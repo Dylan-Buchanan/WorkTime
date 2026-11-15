@@ -36,8 +36,12 @@ import {
 import { isWorkWindowLive, workStartOccupation } from "../lib/engine";
 import { useTaskCompletion } from "../state/TaskCompletionContext";
 import { useOptionalResumeMemo } from "../state/ResumeMemoContext";
+import { useOptionalEnergy } from "../state/EnergyContext";
+import type { EnergyRatingPatch } from "../state/types";
 import { getResumeNote } from "../lib/resume";
 import { ResumeCard } from "./ResumeCard";
+import { EnergyStartRow } from "./energy/EnergyStartRow";
+import { LogEnergyChip } from "./energy/LogEnergyChip";
 
 const DAILY_PROJECTED_FINISH_RULES = "Includes no due date and due today/overdue. Projects must be workable today. Unfinished tasks at or over estimate count as 1p remaining. Excludes future-due, Done, archived, and no-estimate.";
 const WEEKLY_PROJECTED_FINISH_RULES = "Includes no due date, due today/overdue, and due later this week. Unfinished tasks at or over estimate count as 1p remaining. Excludes later-due, Done, archived, and no-estimate.";
@@ -265,6 +269,20 @@ export const TimerPanel: React.FC = () => {
     const autoSelectedTaskRef = useRef<string | null>(null);
     const timer = state?.timer;
     const resumeMemo = useOptionalResumeMemo();
+    const energy = useOptionalEnergy();
+    const startEnergyPatch = useRef<EnergyRatingPatch>({});
+    const startFocus = async () => {
+        if (!energy) {
+            await startWork();
+            return;
+        }
+        const disarm = energy.armStart({ ...startEnergyPatch.current });
+        try {
+            await startWork();
+        } finally {
+            disarm();
+        }
+    };
     const lastEnter = resumeMemo?.lastEnter;
     const notesVersion = resumeMemo?.notesVersion;
     const cardTaskId = timer?.kind === "Work" ? timer.task_id : state?.active_task;
@@ -750,7 +768,7 @@ export const TimerPanel: React.FC = () => {
                             )}
                             {!timer && !taskName && <span className="text-[10px] text-neutral-500">Select or create a task</span>}
                         </div>
-                        {error && <div className="text-red-400 text-[10px] font-medium">{error}</div>}
+                        {(error ?? energy?.error) && <div className="text-red-400 text-[10px] font-medium">{error ?? energy?.error}</div>}
                         {timer && (
                             <div className="text-[10px] text-neutral-500">
                                 {/* Show elapsed/planned minutes */}
@@ -766,6 +784,7 @@ export const TimerPanel: React.FC = () => {
                             else resumeMemo.dismissEmptyCard(cardTask.id);
                         }} />}
                     <div className="flex flex-col items-center gap-2 text-xs">
+                        {energy && <LogEnergyChip />}
                         {isWorkWindowLive(timer ?? null, new Date()) && (
                             <div className="flex flex-wrap justify-center gap-2">
                                 <button type="button" className={`${ACTION_BUTTON} border-amber-700 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50`} disabled={!waitingTask} title={!waitingTask ? "This timer task has no linked project-manager task to mark waiting." : undefined} onClick={(event) =>  { event.currentTarget.focus(); openSwitchSheet("waiting"); }}>Waiting</button>
@@ -774,16 +793,21 @@ export const TimerPanel: React.FC = () => {
                         )}
                         <div className="flex flex-wrap justify-center gap-2">
                             {!timer && (
-                                <button
-                                    className={ACTION_PRIMARY}
-                                    onMouseEnter={() => play("hover")}
-                                    onClick={() => {
-                                        startWork();
-                                        play("startPomodoro");
-                                    }}
-                                >
-                                    Start Focus
-                                </button>
+                                <div className="flex w-full flex-col items-center gap-3">
+                                    {energy && (
+                                        <EnergyStartRow onExplicitChange={(explicit) => { startEnergyPatch.current = explicit; }} />
+                                    )}
+                                    <button
+                                        className={ACTION_PRIMARY}
+                                        onMouseEnter={() => play("hover")}
+                                        onClick={() => {
+                                            void startFocus();
+                                            play("startPomodoro");
+                                        }}
+                                    >
+                                        Start Focus
+                                    </button>
+                                </div>
                             )}
                             {occupantCompleted && (
                                 <button
