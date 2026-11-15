@@ -51,18 +51,14 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
     const [targetText, setTargetText] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [skippedHabitStep, setSkippedHabitStep] = useState(false);
-    const [pendingRollbackId, setPendingRollbackId] = useState<string | null>(null);
     const initializedRef = useRef(false);
-    const rollingBackRef = useRef(false);
-    const deleteHabitRef = useRef(habits.deleteHabit);
     const dialogRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        deleteHabitRef.current = habits.deleteHabit;
-    }, [habits.deleteHabit]);
+    const panelRef = useRef<HTMLDivElement>(null);
 
     const offered = connectableHabitFrequencies(cadence);
     const listable = listableHabits(habits.state.habits, linkedHabitId);
+    const enabledHabits = listable.filter(habit => offered.includes(habit.frequency));
+    const tabStopId = enabledHabits.find(habit => habit.id === selectedId)?.id ?? enabledHabits[0]?.id;
     const linkedHabit = linkedHabitId !== null ? habits.state.habits[linkedHabitId] : undefined;
     const selectedHabit = selectedId !== null ? habits.state.habits[selectedId] : undefined;
     const storedHabitMetric = goal.metric?.source === "habit" ? goal.metric : null;
@@ -71,30 +67,40 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
     const targetFrequency = draft?.frequency ?? selectedHabit?.frequency;
 
     useEffect(() => {
-        dialogRef.current?.focus();
+        const opener = document.activeElement;
+        return () => {
+            if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true });
+        };
     }, []);
+
+    useEffect(() => {
+        const panel = panelRef.current;
+        const first = panel?.querySelector<HTMLElement>("button:not(:disabled):not([tabindex='-1']), input:not(:disabled), select:not(:disabled)");
+        (first ?? panel)?.focus();
+    }, [step, habits.hydrated]);
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
                 event.preventDefault();
+                event.stopPropagation();
                 onClose();
                 return;
             }
             if (event.key !== "Tab") return;
             const dialog = dialogRef.current;
             if (!dialog) return;
-            const controls = dialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled)");
+            const controls = dialog.querySelectorAll<HTMLElement>("button:not(:disabled):not([tabindex='-1']), input:not(:disabled), select:not(:disabled)");
             const first = controls[0];
             const last = controls[controls.length - 1];
             const boundary = event.shiftKey ? first : last;
-            if (document.activeElement === boundary || !dialog.contains(document.activeElement)) {
+            if (document.activeElement === boundary || document.activeElement === dialog || document.activeElement === panelRef.current || !dialog.contains(document.activeElement)) {
                 event.preventDefault();
-                (event.shiftKey ? last : first)?.focus();
+                ((event.shiftKey ? last : first) ?? panelRef.current)?.focus();
             }
         };
-        document.addEventListener("keydown", onKeyDown);
-        return () => document.removeEventListener("keydown", onKeyDown);
+        window.addEventListener("keydown", onKeyDown, true);
+        return () => window.removeEventListener("keydown", onKeyDown, true);
     }, [onClose]);
 
     // Apply the link and skip rules exactly once, when habits finish hydrating.
@@ -108,35 +114,6 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
             setStep("create");
         }
     }, [habits.hydrated]);
-
-    // HabitContext.deleteHabit reads the provider state captured at render time, so
-    // a habit minted in this click handler is only deletable after it renders here.
-    // The macrotask also lets the provider's create save settle, so the empty
-    // follow-up state is not mistaken for the already-saved pre-create slice.
-    useEffect(() => {
-        if (pendingRollbackId === null || !habits.hydrated || rollingBackRef.current) return;
-        const created = habits.state.habits[pendingRollbackId];
-        if (!created) return;
-        rollingBackRef.current = true;
-        const id = pendingRollbackId;
-        const timer = setTimeout(() => {
-            try {
-                deleteHabitRef.current(id);
-                setError("This goal couldn’t be saved, so the new habit wasn’t kept. Try again.");
-            } catch {
-                setDraft(null);
-                setSelectedId(id);
-                setError(`Habit “${created.name}” was created, but this goal could not be saved with it. Link it from /habits.`);
-            } finally {
-                rollingBackRef.current = false;
-                setPendingRollbackId(current => current === id ? null : current);
-            }
-        }, 0);
-        return () => {
-            clearTimeout(timer);
-            rollingBackRef.current = false;
-        };
-    }, [pendingRollbackId, habits.state.habits, habits.hydrated]);
 
     const goalCount = (habitId: string) => Object.values(goals.state.goals)
         .filter(row => row.metric?.source === "habit" && row.metric.habitId === habitId)
@@ -211,6 +188,20 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
                         aria-checked={selectedId === habit.id}
                         aria-label={label}
                         disabled={!connectable}
+                        tabIndex={habit.id === tabStopId ? 0 : -1}
+                        onKeyDown={event => {
+                            const radios = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']:not(:disabled)") ?? []);
+                            const index = radios.indexOf(event.currentTarget);
+                            let next: number;
+                            if (event.key === "ArrowDown" || event.key === "ArrowRight") next = (index + 1) % radios.length;
+                            else if (event.key === "ArrowUp" || event.key === "ArrowLeft") next = (index - 1 + radios.length) % radios.length;
+                            else if (event.key === "Home") next = 0;
+                            else if (event.key === "End") next = radios.length - 1;
+                            else return;
+                            event.preventDefault();
+                            radios[next]?.click();
+                            radios[next]?.focus();
+                        }}
                         onClick={() => {
                             setSelectedId(habit.id);
                             setDraft(null);
@@ -311,8 +302,16 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
                 });
                 onClose();
             } catch (failure) {
-                if (created) setPendingRollbackId(created.id);
-                else setError(errorMessage(failure));
+                if (created) {
+                    try {
+                        habits.deleteHabit(created.id);
+                        setError("This goal couldn’t be saved, so the new habit wasn’t kept. Try again.");
+                    } catch {
+                        setDraft(null);
+                        setSelectedId(created.id);
+                        setError(`Habit “${created.name}” was created, but this goal could not be saved with it. Link it from /habits.`);
+                    }
+                } else setError(errorMessage(failure));
             }
         };
 
@@ -365,7 +364,7 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
         tabIndex={-1}
     >
         <div className="absolute inset-0 bg-black/60" aria-hidden="true" onClick={onClose} />
-        <div className="absolute inset-x-0 top-24 mx-auto w-[28rem] max-w-[calc(100vw-2rem)] rounded border border-neutral-800 bg-neutral-950 p-4 shadow-2xl">
+        <div ref={panelRef} tabIndex={-1} className="absolute inset-x-0 top-24 mx-auto w-[28rem] max-w-[calc(100vw-2rem)] rounded border border-neutral-800 bg-neutral-950 p-4 shadow-2xl">
             {step === "habit" ? renderHabitStep() : step === "create" ? renderCreateStep() : renderTargetStep()}
             {error && <p role="alert" className="mt-2 text-[11px] text-red-300">{error}</p>}
         </div>
