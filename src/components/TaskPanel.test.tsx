@@ -1,7 +1,7 @@
 import * as completionHooks from "../state/TaskCompletionContext";
 import { TaskCompletionProvider } from "../state/TaskCompletionContext";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TASK_SORT_LS_KEY, TaskPanel } from "./TaskPanel";
 import { AppStateProvider, useAppState } from "../state/AppStateContext";
 import { SyncProvider } from "../state/SyncContext";
@@ -10,8 +10,9 @@ import { DataProvider } from "../state/DataContext";
 import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
-import type { PMTask } from "../state/types";
+import type { PMTask, Project, Task } from "../state/types";
 import { resetQuickAddSession, setTimerPageMode } from "../lib/pm/quickAddSession";
+import { resetTaskGroupCollapseSession } from "../lib/pm/taskGroupCollapseSession";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -40,6 +41,7 @@ function sortSelect(): HTMLSelectElement {
 beforeEach(() => {
     localStorage.clear();
     resetQuickAddSession();
+    resetTaskGroupCollapseSession();
 });
 
 describe("TaskPanel waiting", () => {
@@ -153,5 +155,137 @@ describe("TaskPanel Quick add mode", () => {
 
         expect(screen.getByPlaceholderText("Task name")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+    });
+});
+
+const FIXTURE_NOW = "2026-01-01T00:00:00Z";
+
+function fixtureAppTask(id: string, name: string): Task {
+    return {
+        id, name, target_pomodoros: 1, completed_pomodoros: 0,
+        created_at: FIXTURE_NOW, completed_at: null, break_skips: 0, archived: false,
+    };
+}
+
+function fixturePMTask(id: string, title: string, projectId: string | null, appTaskId: string): PMTask {
+    return {
+        id, title, appTaskId, projectId, status: "In Progress", priority: "Medium",
+        estimatePomos: 1, timeSpentMinutes: 0, tags: [], links: [], checklist: [],
+        sortOrder: 0, isArchived: false, relatedTo: [],
+        createdAt: FIXTURE_NOW, updatedAt: FIXTURE_NOW,
+    };
+}
+
+function fixtureProject(id: string, name: string): Project {
+    return {
+        id, name, color: "#6366f1", workableStart: "09:00", workableEnd: "17:00",
+        workableDays: [1, 2, 3, 4, 5], isArchived: false, sortOrder: 0,
+        createdAt: FIXTURE_NOW, updatedAt: FIXTURE_NOW,
+    };
+}
+
+/** Two project groups plus the synthetic "No project" bucket. */
+async function groupedTaskData(): Promise<InMemoryDataAccess> {
+    const data = new InMemoryDataAccess(makeAppState({
+        tasks: {
+            a1: fixtureAppTask("a1", "Alpha task"),
+            b1: fixtureAppTask("b1", "Beta task"),
+            n1: fixtureAppTask("n1", "Loose task"),
+        },
+    }));
+    await data.savePMState({
+        projects: {
+            "p-a": fixtureProject("p-a", "Alpha project"),
+            "p-b": fixtureProject("p-b", "Beta project"),
+        },
+        tasks: {
+            pa: fixturePMTask("pa", "Alpha task", "p-a", "a1"),
+            pb: fixturePMTask("pb", "Beta task", "p-b", "b1"),
+            pn: fixturePMTask("pn", "Loose task", null, "n1"),
+        },
+        meta: { initializedAt: FIXTURE_NOW },
+    });
+    return data;
+}
+
+function groupToggle(label: string, root: HTMLElement = document.body): HTMLElement {
+    const span = within(root).getByText(label);
+    const button = span.closest("button");
+    if (!button) throw new Error(`Group toggle not found for ${label}`);
+    return button;
+}
+
+describe("TaskPanel group collapse session", () => {
+    it("keeps collapsed groups collapsed across a remount", async () => {
+        const data = await groupedTaskData();
+        const first = render(wrap(data, <TaskPanel />));
+        await screen.findByText("Alpha task (0/1)");
+
+        fireEvent.click(groupToggle("Alpha project"));
+        expect(screen.queryByText("Alpha task (0/1)")).toBeNull();
+        expect(screen.getByText("Beta task (0/1)")).toBeInTheDocument();
+
+        first.unmount();
+        render(wrap(data, <TaskPanel />));
+        await screen.findByText("Beta task (0/1)");
+        expect(screen.queryByText("Alpha task (0/1)")).toBeNull();
+    });
+
+    it("preserves the expanded state after expanding a previously collapsed group and remounting", async () => {
+        const data = await groupedTaskData();
+        const first = render(wrap(data, <TaskPanel />));
+        await screen.findByText("Alpha task (0/1)");
+
+        fireEvent.click(groupToggle("Alpha project"));
+        fireEvent.click(groupToggle("Alpha project"));
+        expect(screen.getByText("Alpha task (0/1)")).toBeInTheDocument();
+
+        first.unmount();
+        render(wrap(data, <TaskPanel />));
+        expect(await screen.findByText("Alpha task (0/1)")).toBeInTheDocument();
+        expect(screen.getByText("Beta task (0/1)")).toBeInTheDocument();
+    });
+
+    it("shares collapse state between two mounted panels", async () => {
+        const data = await groupedTaskData();
+        const first = render(wrap(data, <TaskPanel />));
+        const second = render(wrap(data, <TaskPanel />));
+        await within(first.container).findByText("Alpha task (0/1)");
+        await within(second.container).findByText("Alpha task (0/1)");
+
+        fireEvent.click(groupToggle("Alpha project", first.container));
+
+        expect(within(first.container).queryByText("Alpha task (0/1)")).toBeNull();
+        expect(within(second.container).queryByText("Alpha task (0/1)")).toBeNull();
+        expect(within(second.container).getByText("Beta task (0/1)")).toBeInTheDocument();
+    });
+
+    it("renders groups expanded again after the session reset", async () => {
+        const data = await groupedTaskData();
+        const first = render(wrap(data, <TaskPanel />));
+        await screen.findByText("Alpha task (0/1)");
+        fireEvent.click(groupToggle("Alpha project"));
+        expect(screen.queryByText("Alpha task (0/1)")).toBeNull();
+
+        act(() => { resetTaskGroupCollapseSession(); });
+        first.unmount();
+
+        render(wrap(data, <TaskPanel />));
+        expect(await screen.findByText("Alpha task (0/1)")).toBeInTheDocument();
+    });
+
+    it("remembers the synthetic No project group like any other group", async () => {
+        const data = await groupedTaskData();
+        const first = render(wrap(data, <TaskPanel />));
+        await screen.findByText("Loose task (0/1)");
+
+        fireEvent.click(groupToggle("No project"));
+        expect(screen.queryByText("Loose task (0/1)")).toBeNull();
+
+        first.unmount();
+        render(wrap(data, <TaskPanel />));
+        await screen.findByText("Alpha task (0/1)");
+        expect(screen.queryByText("Loose task (0/1)")).toBeNull();
+        expect(screen.queryByText("Beta task (0/1)")).toBeInTheDocument();
     });
 });

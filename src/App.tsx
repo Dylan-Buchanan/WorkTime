@@ -40,6 +40,7 @@ import { supabase } from "./lib/supabase";
 import { TAURI_WINDOWS_ENTRY_PATH } from "./lib/integrations/githubOAuthReturn";
 import { ResumeMemoProvider, useOptionalResumeMemo } from "./state/ResumeMemoContext";
 import { resetQuickAddSession } from "./lib/pm/quickAddSession";
+import { resetTaskGroupCollapseSession } from "./lib/pm/taskGroupCollapseSession";
 
 // Route-level code splitting: heavy pages (recharts, @dnd-kit, date-fns) are
 // only downloaded when their route is visited, keeping the entry chunk small.
@@ -154,10 +155,12 @@ const AuthenticatedIntegrationsRoute: React.FC = () => {
 const AuthenticatedShell: React.FC = () => {
     const { session } = useAuth();
     const ownerId = session!.user.id;
-    // The Timer page mode and Quick add draft are surface-local. Keep them
-    // across route changes but drop them when the signed-in identity changes.
+    // The Timer page mode, Quick add draft, and task-group collapse state are
+    // surface-local. Keep them across route changes but drop them when the
+    // signed-in identity changes.
     useEffect(() => {
         resetQuickAddSession();
+        resetTaskGroupCollapseSession();
     }, [ownerId]);
     // The shell only renders behind RequireAuth, so the session is present. A
     // user change produces a fresh owner-scoped graph; never reuse one across

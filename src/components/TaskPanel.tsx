@@ -9,6 +9,11 @@ import { waitingOf } from "../lib/pm/waiting";
 import { useTaskCompletion } from "../state/TaskCompletionContext";
 import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
 import { getTimerPageMode, subscribeToQuickAddSession } from "../lib/pm/quickAddSession";
+import {
+    getCollapsedTaskGroups,
+    subscribeToTaskGroupCollapseSession,
+    toggleTaskGroupCollapsed,
+} from "../lib/pm/taskGroupCollapseSession";
 import { WaitingDot } from "./WaitingIndicator";
 
 export const TASK_SORT_LS_KEY = "task_panel_sort_v1";
@@ -43,7 +48,11 @@ export const TaskPanel: React.FC = () => {
     const [name, setName] = useState("");
     const [targetInput, setTargetInput] = useState("4");
     const [sortOption, setSortOption] = useState<TaskSortOption>(loadSavedTaskSort);
-    const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+    const collapsedGroups = useSyncExternalStore(
+        subscribeToTaskGroupCollapseSession,
+        getCollapsedTaskGroups,
+        getCollapsedTaskGroups,
+    );
     const timerPageMode = useSyncExternalStore(subscribeToQuickAddSession, getTimerPageMode, getTimerPageMode);
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
     const todoTaskIds = useMemo(() => new Set(Object.values(todoContext?.state.todos ?? {})
@@ -205,10 +214,7 @@ export const TaskPanel: React.FC = () => {
     }, [sortedTasks]);
 
     const toggleGroup = useCallback((groupKey: string) => {
-        setCollapsedGroups((prev) => ({
-            ...prev,
-            [groupKey]: !prev[groupKey],
-        }));
+        toggleTaskGroupCollapsed(groupKey);
     }, []);
 
     const sanitizeTarget = (raw: string): number => {
