@@ -807,6 +807,7 @@ export class StagedDataAccess implements DataAccess {
     }
 
     async createEnergyEntry(entry: EnergyEntry): Promise<boolean> {
+        if (this.store.read(this.ownerId).energyEntries[entry.work_window_id]) return false;
         let inserted = false;
         await this.store.update(this.ownerId, current => {
             if (current.energyEntries[entry.work_window_id]) return current;
@@ -819,6 +820,7 @@ export class StagedDataAccess implements DataAccess {
 
     async setEnergyRating(workWindowId: string, patch: EnergyRatingPatch, updatedAt: string): Promise<boolean> {
         if (Object.keys(patch).length === 0) return false;
+        if (!this.store.read(this.ownerId).energyEntries[workWindowId]) return false;
         let written = false;
         await this.store.update(this.ownerId, current => {
             const entry = current.energyEntries[workWindowId];

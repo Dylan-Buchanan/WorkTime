@@ -484,6 +484,52 @@ describe("pomodoro log window transport", () => {
 describe("energy remote transport", () => {
     const row = () => composeEnergyEntry({ workWindowId: "2026-11-15T10:00:00.000Z",
         prefill: { energy: 4, clarity: 3 }, explicit: { caffeine: true }, now: "2026-11-15T10:00:00.000Z" });
+    it("drops malformed energy siblings without rejecting the pull or changing other domains", async () => {
+        const valid = row();
+        const habit = H("energy-sibling-habit");
+        const remote = new SupabaseDataAccess(pullClient(undefined, {
+            energy_sessions: [valid, { ...valid, work_window_id: "" },
+                { ...valid, work_window_id: "2026-11-15T11:00:00.000Z", energy: 7 }],
+            habits: [{ id: habit.id, name: habit.name, description: habit.description, color: habit.color,
+                frequency: habit.frequency, position: habit.position, is_archived: habit.isArchived,
+                created_at: habit.createdAt, updated_at: habit.updatedAt }],
+        }));
+        const snapshot = await remote.pull(OWNER);
+        expect(snapshot.energyEntries).toEqual({
+            [valid.work_window_id]: { value: valid, updatedAt: valid.updated_at },
+        });
+        expect(snapshot.habits).toEqual({ [habit.id]: { value: habit, updatedAt: habit.updatedAt } });
+    });
+    it.each([
+        { work_window_id: null }, { clarity: 6 }, { caffeine: "false" },
+        { energy_carried: null }, { clarity_carried: 0 }, { created_at: null }, { updated_at: 123 },
+    ])("drops an energy row with invalid fields: %j", async patch => {
+        const valid = row();
+        const remote = new SupabaseDataAccess(pullClient(undefined, {
+            energy_sessions: [valid, { ...valid, work_window_id: "2026-11-15T11:00:00.000Z", ...patch }],
+        }));
+        expect((await remote.pull(OWNER)).energyEntries).toEqual({
+            [valid.work_window_id]: { value: valid, updatedAt: valid.updated_at },
+        });
+    });
+    it.each([
+        ["energy", null], ["clarity", null], ["energy_carried", false], ["clarity_carried", false],
+    ] as const)("normalizes missing %s before validating each energy row", async (field, fallback) => {
+        const valid = row();
+        const raw = { ...valid, work_window_id: "2026-11-15T11:00:00.000Z", [field]: undefined };
+        const remote = new SupabaseDataAccess(pullClient(undefined, { energy_sessions: [valid, raw] }));
+        expect((await remote.pull(OWNER)).energyEntries).toEqual({
+            [valid.work_window_id]: { value: valid, updatedAt: valid.updated_at },
+            [raw.work_window_id]: { value: { ...raw, [field]: fallback }, updatedAt: raw.updated_at },
+        });
+    });
+    it("retains valid null energy ratings", async () => {
+        const valid = { ...row(), energy: null, clarity: null, energy_carried: false, clarity_carried: false };
+        const remote = new SupabaseDataAccess(pullClient(undefined, { energy_sessions: [valid] }));
+        expect((await remote.pull(OWNER)).energyEntries).toEqual({
+            [valid.work_window_id]: { value: valid, updatedAt: valid.updated_at },
+        });
+    });
     it("sends column-named energy upserts and null for an empty batch", async () => {
         const { client, rpc } = mockClient();
         const remote = new SupabaseDataAccess(client);
@@ -502,8 +548,13 @@ describe("energy remote transport", () => {
         });
     });
     it.each([{ energy: "3" }, { energy: 0 }, { clarity: 2.5 }, { caffeine: undefined }, { energy_carried: 1 }])(
-        "follows existing fail-closed remote validation for %j", async patch => {
-            const remote = new SupabaseDataAccess(pullClient(undefined, { energy_sessions: [{ ...row(), ...patch }] }));
-            await expect(remote.pull(OWNER)).rejects.toThrow("energy_sessions");
+        "drops a malformed energy row while preserving its valid sibling for %j", async patch => {
+            const valid = row();
+            const remote = new SupabaseDataAccess(pullClient(undefined, {
+                energy_sessions: [valid, { ...valid, work_window_id: "2026-11-15T11:00:00.000Z", ...patch }],
+            }));
+            expect((await remote.pull(OWNER)).energyEntries).toEqual({
+                [valid.work_window_id]: { value: valid, updatedAt: valid.updated_at },
+            });
         });
 });
