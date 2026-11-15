@@ -17,6 +17,8 @@ import { toLocalDateKey } from "../lib/timer";
 import { makeActiveTimer, makeAppState } from "../test/mockTauri";
 import type { AppStateData, PMTask, Project, Task } from "../state/types";
 import { ResumeMemoProvider } from "../state/ResumeMemoContext";
+import { EnergyProvider } from "../state/EnergyContext";
+import { composeEnergyEntry } from "../lib/energy";
 import { TodoProvider, useOptionalTodos } from "../state/TodoContext";
 import * as resumeStore from "../lib/resume";
 import { resetQuickAddSession } from "../lib/pm/quickAddSession";
@@ -109,7 +111,7 @@ const TodoLinkProbe = () => {
         .map((todo) => todo.currentTaskId ?? "").join(",")}</span>;
 };
 
-function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode, memoEnabled = false, todoEnabled = false) {
+function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode, memoEnabled = false, todoEnabled = false, energyEnabled = false) {
     const content = <>
         <SelectionProbe />
         {children}
@@ -130,7 +132,8 @@ function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.
                 <DataProvider dataAccess={data}>
                     <SyncProvider ownerId={OWNER}>
                         <AppStateProvider>
-                            {todoEnabled ? <TodoProvider>{shell}</TodoProvider> : shell}
+                            {energyEnabled ? <EnergyProvider>{todoEnabled ? <TodoProvider>{shell}</TodoProvider> : shell}</EnergyProvider>
+                                : todoEnabled ? <TodoProvider>{shell}</TodoProvider> : shell}
                         </AppStateProvider>
                     </SyncProvider>
                 </DataProvider>
@@ -1684,5 +1687,132 @@ describe("TimerPanel Quick add", () => {
 
         expect(screen.queryByText("Task details")).toBeNull();
         expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "true");
+    });
+});
+
+describe("TimerPanel energy capture", () => {
+    const rowGroup = () => screen.queryByRole("group", { name: "Energy" });
+
+    async function renderHome(
+        overrides: Partial<AppStateData> = {},
+        seed?: { windowId: string; energy: number | null; clarity: number | null },
+    ) {
+        const data = new InMemoryDataAccess(makeAppState(overrides));
+        if (seed) {
+            await data.createEnergyEntry(composeEnergyEntry({
+                workWindowId: seed.windowId,
+                prefill: { energy: seed.energy, clarity: seed.clarity },
+                explicit: {},
+                now: seed.windowId,
+            }));
+        }
+        render(wrap(data, undefined, undefined, false, false, true));
+        return data;
+    }
+
+    it("renders the energy row above Start Focus only with no timer", async () => {
+        await renderHome();
+
+        const row = await screen.findByRole("group", { name: "Energy" });
+        expect(screen.getByRole("group", { name: "Clarity" })).toBeInTheDocument();
+        const pill = screen.getByRole("button", { name: "Caffeine" });
+        expect(pill).toHaveAttribute("aria-pressed", "false");
+        expect(pill).toHaveTextContent("No");
+
+        const start = screen.getByRole("button", { name: "Start Focus" });
+        expect(row.compareDocumentPosition(start) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it.each(["Work", "ShortBreak", "LongBreak", "paused Work"] as const)("hides the row while the timer is %s", async (kind) => {
+        const timer = kind === "paused Work"
+            ? makeActiveTimer({ paused: true, paused_remaining_secs: 900 })
+            : kind === "Work" ? makeActiveTimer() : makeActiveTimer({ kind });
+        await renderHome({ tasks: { a: makeAppTask("a", "Task A") }, active_task: "a", timer });
+
+        await screen.findByText(timer.paused ? "PAUSED" : timer.kind.toUpperCase());
+        expect(rowGroup()).toBeNull();
+        expect(screen.queryByRole("button", { name: "Start Focus" })).toBeNull();
+    });
+
+    it("shows an earlier same-day prefill at full size with no provenance marker", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            vi.setSystemTime(new Date(2026, 10, 15, 12, 0, 0));
+            const earlier = new Date(2026, 10, 15, 9, 0, 0).toISOString();
+            await renderHome({}, { windowId: earlier, energy: 4, clarity: 3 });
+
+            expect(await screen.findByRole("button", { name: "Energy 4 of 5" })).toHaveAttribute("aria-pressed", "true");
+            expect(screen.getByRole("button", { name: "Clarity 3 of 5" })).toHaveAttribute("aria-pressed", "true");
+            expect(screen.getByRole("button", { name: "Energy 5 of 5" })).toHaveAttribute("aria-pressed", "false");
+            expect(screen.queryByText(/carried/i)).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("writes the explicit tap and the carried prefill once on Start Focus", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            vi.setSystemTime(new Date(2026, 10, 15, 12, 0, 0));
+            const earlier = new Date(2026, 10, 15, 9, 0, 0).toISOString();
+            const data = await renderHome(
+                { tasks: { a: makeAppTask("a", "Task A") }, active_task: "a", timer: null },
+                { windowId: earlier, energy: 4, clarity: 3 },
+            );
+
+            fireEvent.click(await screen.findByRole("button", { name: "Energy 2 of 5" }));
+            fireEvent.click(screen.getByRole("button", { name: "Start Focus" }));
+
+            await waitFor(() => expect(data.store.energyEntries).toHaveLength(2));
+            const created = data.store.energyEntries.filter(row => row.work_window_id !== earlier);
+            expect(created).toHaveLength(1);
+            expect(created[0]).toMatchObject({
+                energy: 2, energy_carried: false, clarity: 3, clarity_carried: true, caffeine: false,
+            });
+            expect(data.store.energyEntries.filter(row => row.work_window_id === created[0].work_window_id)).toHaveLength(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("keeps the touched row values when Start Focus fails", async () => {
+        const data = await renderHome({
+            tasks: { a: makeAppTask("a", "Task A"), b: makeAppTask("b", "Task B") },
+            active_task: null,
+            timer: null,
+        });
+
+        fireEvent.click(await screen.findByRole("button", { name: "Energy 5 of 5" }));
+        fireEvent.click(screen.getByRole("button", { name: "Start Focus" }));
+
+        expect(await screen.findByText("Select a task first")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Energy 5 of 5" })).toHaveAttribute("aria-pressed", "true");
+        expect(data.store.energyEntries).toHaveLength(0);
+        expect(data.store.state.timer).toBeNull();
+    });
+
+    it("surfaces a failed chip rating write in the existing error line without stopping the timer", async () => {
+        const started = new Date(Date.now() - 10_000).toISOString();
+        const timer = makeActiveTimer({
+            task_id: "a",
+            started_at: started,
+            window_started_at: started,
+            ends_at: new Date(Date.now() + 1_400_000).toISOString(),
+        });
+        const data = await renderHome(
+            { tasks: { a: makeAppTask("a", "Task A") }, active_task: "a", timer },
+            { windowId: started, energy: 2, clarity: 3 },
+        );
+
+        fireEvent.click(await screen.findByRole("button", { name: "Log Energy" }));
+        const write = vi.spyOn(data, "setEnergyRating").mockRejectedValue(new Error("rating failed"));
+        fireEvent.click(screen.getByRole("button", { name: "Energy 4 of 5" }));
+
+        expect(await screen.findByText("rating failed")).toBeInTheDocument();
+        expect(write).toHaveBeenCalledWith(started, { energy: 4 }, expect.any(String));
+        expect(screen.getByRole("button", { name: "End focus" })).toBeInTheDocument();
+        expect(data.store.state.timer).not.toBeNull();
+        expect(data.store.state.timer?.paused).toBe(false);
+        expect(screen.getByRole("button", { name: "Energy 2 of 5" })).toHaveAttribute("aria-pressed", "true");
     });
 });
