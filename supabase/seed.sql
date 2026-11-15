@@ -1069,3 +1069,91 @@ on conflict (owner_id, id) do update set
     schedule_occurrence_start = excluded.schedule_occurrence_start,
     created_at = excluded.created_at,
     updated_at = now();
+
+-- Energy check-in history: two weeks of Work-window ratings so the Analytics
+-- Wellbeing heatmap, the rated-sessions footnote, and the recent list are
+-- populated on any reset date. `clarity` is the mental rating the app labels
+-- "Clarity". `work_window_id` is the text ISO window start the app writes (no
+-- foreign key; sessions are task-blind), built from relative dates at typical
+-- work hours. Rows flagged carried skipped a rating and reuse the previous
+-- same-day value, matching `resolveEnergyPrefill`. A row exists for today only
+-- once its start time has passed, and the (owner_id, work_window_id) conflict
+-- target keeps the block safe to replay.
+
+insert into public.energy_sessions (
+    owner_id, work_window_id, energy, clarity, caffeine,
+    energy_carried, clarity_carried, created_at, updated_at
+)
+select
+    owner.owner_id,
+    to_char(stamp.window_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    seed.energy,
+    seed.clarity,
+    seed.caffeine,
+    seed.energy_carried,
+    seed.clarity_carried,
+    stamp.window_at,
+    now()
+from (
+    values
+        (13, interval '9 hours', 4, 4, false, false, false),
+        (13, interval '10 hours 30 minutes', 3, 3, true, false, false),
+        (13, interval '13 hours 30 minutes', 2, 3, true, false, false),
+        (13, interval '16 hours', 3, 2, false, false, false),
+        (12, interval '9 hours', 5, 4, true, false, false),
+        (12, interval '11 hours 15 minutes', 4, 3, true, false, false),
+        (12, interval '14 hours', 3, 2, false, false, false),
+        (11, interval '9 hours', 3, 2, false, false, false),
+        (11, interval '10 hours 30 minutes', 3, 2, false, true, true),
+        (11, interval '14 hours', 2, 2, true, false, false),
+        (11, interval '16 hours 15 minutes', 2, 1, true, false, false),
+        (10, interval '8 hours 45 minutes', 4, 5, false, false, false),
+        (10, interval '11 hours', null, null, false, false, false),
+        (10, interval '15 hours', 3, 3, true, false, false),
+        (9, interval '9 hours', 5, 4, true, false, false),
+        (9, interval '10 hours 30 minutes', 5, 4, false, true, true),
+        (9, interval '14 hours 45 minutes', 3, 3, false, false, false),
+        (8, interval '9 hours', 2, 2, false, false, false),
+        (8, interval '11 hours 30 minutes', 2, 1, true, false, false),
+        (8, interval '15 hours', 3, 2, true, false, false),
+        (7, interval '9 hours 15 minutes', 4, 4, false, false, false),
+        (7, interval '13 hours 30 minutes', 4, 3, true, false, false),
+        (6, interval '9 hours 30 minutes', 3, 4, false, false, false),
+        (6, interval '11 hours 15 minutes', 3, 4, false, true, true),
+        (6, interval '14 hours 30 minutes', 2, 2, false, false, false),
+        (5, interval '8 hours 45 minutes', 4, 3, true, false, false),
+        (5, interval '10 hours 45 minutes', 4, 2, true, false, false),
+        (5, interval '16 hours 15 minutes', 2, 2, false, false, false),
+        (4, interval '9 hours 15 minutes', 3, 3, false, false, false),
+        (4, interval '11 hours 45 minutes', 2, 2, true, false, false),
+        (4, interval '13 hours 45 minutes', 1, 2, true, false, false),
+        (4, interval '16 hours', 3, 3, false, false, false),
+        (3, interval '9 hours', 4, 4, false, false, false),
+        (3, interval '10 hours 45 minutes', 4, 4, false, true, true),
+        (3, interval '14 hours 15 minutes', 2, 3, true, false, false),
+        (2, interval '8 hours 45 minutes', 5, 4, true, false, false),
+        (2, interval '12 hours 30 minutes', 3, 2, true, false, false),
+        (2, interval '15 hours 30 minutes', 3, 3, false, false, false),
+        (1, interval '9 hours', 3, 4, false, false, false),
+        (1, interval '11 hours', 4, 3, true, false, false),
+        (1, interval '14 hours', 2, 2, false, false, false),
+        (1, interval '16 hours 30 minutes', 3, 2, true, false, false),
+        (0, interval '8 hours 30 minutes', 4, 4, false, false, false)
+) as seed(days_ago, at, energy, clarity, caffeine, energy_carried, clarity_carried)
+cross join (
+    select id as owner_id
+    from auth.users
+    where email = 'dbuchananh@gmail.com'
+) owner
+cross join lateral (
+    select date_trunc('day', now()) - (seed.days_ago || ' days')::interval + seed.at as window_at
+) stamp
+where stamp.window_at <= now()
+on conflict (owner_id, work_window_id) do update set
+    energy = excluded.energy,
+    clarity = excluded.clarity,
+    caffeine = excluded.caffeine,
+    energy_carried = excluded.energy_carried,
+    clarity_carried = excluded.clarity_carried,
+    created_at = excluded.created_at,
+    updated_at = now();

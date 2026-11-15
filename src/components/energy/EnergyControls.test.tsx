@@ -33,8 +33,8 @@ describe("EnergyControls", () => {
     it("shows scale anchors at the extremes only and leaves intermediate dots unlabelled", () => {
         setup();
 
-        expect(screen.getAllByText(/^(drained|sharp|foggy|crystal)$/).map((element) => element.textContent))
-            .toEqual(["drained", "sharp", "foggy", "crystal"]);
+        expect(screen.getAllByText(/^(Drained|Sharp|Foggy|Crystal)$/).map((element) => element.textContent))
+            .toEqual(["Drained", "Sharp", "Foggy", "Crystal"]);
         expect(screen.queryByText("2")).toBeNull();
         expect(screen.queryByText("3")).toBeNull();
         expect(screen.queryByText("4")).toBeNull();
@@ -108,6 +108,46 @@ describe("EnergyControls", () => {
             reached.push(document.activeElement?.getAttribute("aria-label") ?? "");
         }
         expect(reached).toEqual(expected);
+    });
+
+    it("labels each scale with a visible title", () => {
+        setup();
+
+        const energyTitle = screen.getByText("Physical energy");
+        const clarityTitle = screen.getByText("Mental clarity");
+        const energyGroup = screen.getByRole("group", { name: "Energy" });
+        const clarityGroup = screen.getByRole("group", { name: "Clarity" });
+        expect(energyTitle.compareDocumentPosition(energyGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(clarityTitle.compareDocumentPosition(clarityGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("colours each rating of both scales with a distinct bad-to-good tone", () => {
+        setup();
+
+        for (const label of ["Energy", "Clarity"]) {
+            const tones = [1, 2, 3, 4, 5].map((rating) =>
+                screen.getByRole("button", { name: `${label} ${rating} of 5` }).firstElementChild?.className ?? "",
+            );
+            expect(new Set(tones).size).toBe(5);
+            expect(tones[0]).toContain("rose-");
+            expect(tones[4]).toContain("emerald-");
+        }
+        expect(screen.getByText("Drained").className).toContain("rose-");
+        expect(screen.getByText("Sharp").className).toContain("emerald-");
+        expect(screen.getByText("Foggy").className).toContain("rose-");
+        expect(screen.getByText("Crystal").className).toContain("emerald-");
+    });
+
+    it("keeps the tone of the rated end when a dot is selected", () => {
+        setup({ energy: 1, clarity: 5 });
+
+        const energyOne = screen.getByRole("button", { name: "Energy 1 of 5" });
+        const clarityFive = screen.getByRole("button", { name: "Clarity 5 of 5" });
+        expect(energyOne.className).toContain("border-rose-");
+        expect(energyOne.firstElementChild?.className).toContain("bg-rose-200");
+        expect(clarityFive.className).toContain("border-emerald-");
+        expect(clarityFive.firstElementChild?.className).toContain("bg-emerald-200");
+        expect(energyOne.className).not.toBe(screen.getByRole("button", { name: "Energy 5 of 5" }).className);
     });
 
     it("gives each target at least a 20x20 px hit area", () => {
