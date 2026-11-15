@@ -1,4 +1,5 @@
 import { StagedDataAccess } from "../src/lib/data/StagedDataAccess";
+import { composeEnergyEntry } from "../src/lib/energy";
 import { createGoalTracker, createGoal, createGoalCheckIn } from "../src/lib/goals/factories";
 import { afterEach, describe, expect, it } from "vitest";
 import { SupabaseDataAccess } from "../src/lib/data/SupabaseDataAccess";
@@ -116,6 +117,49 @@ function todoCompletion(id: string, todoId: string) {
 }
 
 describe("local-first staged sync transport", () => {
+    it("round-trips staged energy, clears acknowledgments and preserves it through reset", async () => {
+        const owner = track(await createLocalUser());
+        const makeStore = () => {
+            const values = new Map<string, string>();
+            return new LocalStagingStore({
+                getItem: key => values.get(key) ?? null,
+                setItem: (key, value) => { values.set(key, value); },
+                removeItem: key => { values.delete(key); },
+            });
+        };
+        const storeA = makeStore();
+        const storeB = makeStore();
+        const a = new StagedDataAccess(owner.userId, storeA, new SyncCoordinator(owner.userId, storeA, remote(owner)));
+        const b = new StagedDataAccess(owner.userId, storeB, new SyncCoordinator(owner.userId, storeB, remote(owner)));
+        await a.sync({ reason: "manual" });
+        const unrelatedBefore = await remote(owner).pull(owner.userId);
+        const row = composeEnergyEntry({ workWindowId: T0, prefill: { energy: 4, clarity: 3 }, explicit: {}, now: T0 });
+        expect(await a.createEnergyEntry(row)).toBe(true);
+        expect(a.pendingCount()).toBe(1);
+        await a.sync({ reason: "manual" });
+        expect(a.pendingCount()).toBe(0);
+        expect(storeA.read(owner.userId).energyUpdatedAt).toEqual({});
+        expect(storeA.read(owner.userId).lastSynced!.energyEntries[T0].value.energy).toBe(4);
+        const after = await remote(owner).pull(owner.userId);
+        expect({ ...after, energyEntries: {} }).toEqual(unrelatedBefore);
+        await b.sync({ reason: "manual" });
+        expect(await b.loadEnergyEntries()).toHaveLength(1);
+        expect((await b.loadEnergyEntries())[0]).toMatchObject({ work_window_id: T0, energy: 4, clarity: 3, energy_carried: true });
+        expect(await b.setEnergyRating(T0, { energy: 2 }, LATER)).toBe(true);
+        await b.sync({ reason: "manual" });
+        await a.sync({ reason: "manual" });
+        for (const data of [a, b]) {
+            expect(data.pendingCount()).toBe(0);
+            expect((await data.loadEnergyEntries())[0]).toMatchObject({ work_window_id: T0, energy: 2, energy_carried: false, clarity: 3, clarity_carried: true });
+        }
+        await a.resetAppState();
+        await a.sync({ reason: "manual" });
+        const preserved = (await remote(owner).pull(owner.userId)).energyEntries;
+        expect(Object.keys(preserved)).toEqual([T0]);
+        expect(preserved[T0].value.energy).toBe(2);
+        expect(Date.parse(preserved[T0].updatedAt)).toBe(Date.parse(LATER));
+    });
+
     it("round-trips inserted, edited and cleared to-do descriptions", async () => {
         const owner = track(await createLocalUser());
         const data = remote(owner);

@@ -1,3 +1,5 @@
+import type { EnergyEntry } from "../../state/types";
+import { isEnergyRating } from "../energy";
 import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -367,6 +369,20 @@ export class SupabaseDataAccess implements SyncRemote {
         if (typeof row.started_at !== "string" || (row.ended_at !== null && typeof row.ended_at !== "string")) this.fail("pet_nap_records", new Error(`invalid row for ${row.id}`));
         return { id: row.id, start: row.started_at, end: row.ended_at, createdAt: row.created_at, updatedAt: row.updated_at };
     }
+    private validateEnergy(row: any): EnergyEntry {
+        const value = { work_window_id: row.work_window_id, energy: row.energy ?? null, clarity: row.clarity ?? null,
+            caffeine: row.caffeine,
+            energy_carried: row.energy_carried === undefined ? false : row.energy_carried,
+            clarity_carried: row.clarity_carried === undefined ? false : row.clarity_carried,
+            created_at: row.created_at, updated_at: row.updated_at };
+        if (typeof value.work_window_id !== "string" || !value.work_window_id ||
+            !isEnergyRating(value.energy) || !isEnergyRating(value.clarity) ||
+            typeof value.caffeine !== "boolean" || typeof value.energy_carried !== "boolean" ||
+            typeof value.clarity_carried !== "boolean" || typeof value.created_at !== "string" ||
+            typeof value.updated_at !== "string") this.fail("energy_sessions", new Error("invalid energy row"));
+        return value;
+    }
+
     private validatePetWeight(row: any): PetWeightEntry {
         this.validPetBase("pet_weight_entries", row);
         if (typeof row.measured_at !== "string" || typeof row.weight !== "number" || !Number.isFinite(row.weight)) this.fail("pet_weight_entries", new Error(`invalid row for ${row.id}`));
@@ -431,7 +447,7 @@ export class SupabaseDataAccess implements SyncRemote {
         const ownerId = await this.requireSessionOwner(expectedOwnerId);
 
         const [taskRows, logRows, habitRows, completionRows, todoRows, todoCompletionRows, settingsResponse, timerResponse, pmResponse,
-            petActivityRows, petProfileRows, petScheduleRows, petNapRows, petWeightRows, petTrainingRows, petFixationRows, petEventRows, goalTrackerRows, goalRows, goalCheckInRows] = await Promise.all([
+            petActivityRows, petProfileRows, petScheduleRows, petNapRows, petWeightRows, petTrainingRows, petFixationRows, petEventRows, goalTrackerRows, goalRows, goalCheckInRows, energyRows] = await Promise.all([
             this.page("tasks", ownerId, [{ column: "id" }]),
             this.page("pomodoro_logs", ownerId, [{ column: "finished_at" }, { column: "id" }]),
             this.page("habits", ownerId, [{ column: "id" }]),
@@ -452,6 +468,7 @@ export class SupabaseDataAccess implements SyncRemote {
             this.page("goal_trackers", ownerId, [{ column: "id" }]),
             this.page("goals", ownerId, [{ column: "id" }]),
             this.page("goal_check_ins", ownerId, [{ column: "id" }]),
+            this.page("energy_sessions", ownerId, [{ column: "work_window_id" }]),
         ]);
         if (settingsResponse.error) this.fail("settings", settingsResponse.error);
         if (timerResponse.error) this.fail("timer_state", timerResponse.error);
@@ -539,6 +556,7 @@ export class SupabaseDataAccess implements SyncRemote {
             petProfile: profileRow ? { value: this.validatePetProfile(profileRow), updatedAt: profileRow.updated_at } : { value: null, updatedAt: null },
             petScheduleItems: versionedMap(petScheduleRows, (row) => this.validatePetSchedule(row)),
             petNapRecords: versionedMap(petNapRows, (row) => this.validatePetNap(row)),
+            energyEntries: Object.fromEntries(energyRows.map(row => [row.work_window_id, { value: this.validateEnergy(row), updatedAt: row.updated_at }])),
             petWeightEntries: versionedMap(petWeightRows, (row) => this.validatePetWeight(row)),
             petTrainingSkills: versionedMap(petTrainingRows, (row) => this.validatePetTrainingSkill(row)),
             petFixations: versionedMap(petFixationRows, (row) => this.validatePetFixation(row)),
@@ -679,6 +697,7 @@ export class SupabaseDataAccess implements SyncRemote {
             p_goal_tombstones: tombstones(plan.goalTombstones),
             p_goal_check_in_upserts: plan.goalCheckInUpserts?.length ? plan.goalCheckInUpserts.map(({ value, updatedAt }) => goalCheckInRow(value, updatedAt)) : null,
             p_goal_check_in_tombstones: tombstones(plan.goalCheckInTombstones),
+            p_energy_upserts: plan.energyUpserts?.length ? plan.energyUpserts.map(({ value, updatedAt }) => ({ ...value, updated_at: updatedAt })) : null,
             p_full_wipe: plan.fullWipe,
         });
         if (response.error) this.fail("apply_staged_sync", response.error);

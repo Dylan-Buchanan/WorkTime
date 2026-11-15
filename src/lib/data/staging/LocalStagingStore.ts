@@ -86,6 +86,7 @@ function freshRecord(ownerId: string): StagedOwnerRecord {
         petNapRecords: {},
         petNapUpdatedAt: {},
         petNapTombstones: {},
+        energyEntries: {}, energyUpdatedAt: {},
         petWeightEntries: {},
         petWeightUpdatedAt: {},
         petWeightTombstones: {},
@@ -237,6 +238,7 @@ function countPetDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
     let count = countVersionedDeltas(record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
     count += countVersionedDeltas(record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
     count += countVersionedDeltas(record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords);
+    count += countVersionedDeltas(record.energyEntries, record.energyUpdatedAt, {}, base.energyEntries);
     count += countVersionedDeltas(record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries);
     count += countVersionedDeltas(record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills);
     count += countVersionedDeltas(record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations);
@@ -257,6 +259,7 @@ function countUninitializedPetDeltas(record: StagedOwnerRecord): number {
     return Object.keys(record.petActivityRecords).length + Object.keys(record.petActivityTombstones).length +
         Object.keys(record.petScheduleItems).length + Object.keys(record.petScheduleTombstones).length +
         Object.keys(record.petNapRecords).length + Object.keys(record.petNapTombstones).length +
+        Object.keys(record.energyEntries).length +
         Object.keys(record.petWeightEntries).length + Object.keys(record.petWeightTombstones).length +
         Object.keys(record.petTrainingSkills).length + Object.keys(record.petTrainingSkillTombstones).length +
         Object.keys(record.petFixations).length + Object.keys(record.petFixationTombstones).length +
@@ -495,6 +498,8 @@ export class LocalStagingStore {
                     petReminderMarks: { ...current.petReminderMarks },
                     petNapRecords: Object.fromEntries(Object.entries(baseline.petNapRecords).map(([id, row]) => [id, row.value])),
                     petNapUpdatedAt: {}, petNapTombstones: {},
+                    energyEntries: Object.fromEntries(Object.entries(baseline.energyEntries).map(([id, row]) => [id, row.value])),
+                    energyUpdatedAt: {},
                     petWeightEntries: Object.fromEntries(Object.entries(baseline.petWeightEntries).map(([id, row]) => [id, row.value])),
                     petWeightUpdatedAt: {}, petWeightTombstones: {},
                     petTrainingSkills: Object.fromEntries(Object.entries(baseline.petTrainingSkills).map(([id, row]) => [id, row.value])),

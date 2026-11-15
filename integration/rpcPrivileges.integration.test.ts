@@ -61,6 +61,7 @@ describe("security-definer RPC privileges", () => {
             p_goal_check_in_upserts: null,
             p_goal_check_in_tombstones: null,
             p_full_wipe: false,
+            p_energy_upserts: null,
         }));
     });
 

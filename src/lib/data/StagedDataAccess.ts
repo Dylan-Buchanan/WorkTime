@@ -1,3 +1,5 @@
+import type { EnergyEntry, EnergyRatingPatch } from "../../state/types";
+import { applyEnergyRating } from "../energy";
 import { isGoalTracker, isGoal, isGoalCheckIn } from "../goals/factories";
 import { archiveDeferredTask, finalizeDeferredTask } from "../engine/pendingFinalize";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
@@ -798,6 +800,35 @@ export class StagedDataAccess implements DataAccess {
     async loadPetNapRecords(): Promise<PetNapRecord[]> {
         const record = this.store.read(this.ownerId);
         return Object.values(record.petNapRecords).map((entry) => clone(entry));
+    }
+
+    async loadEnergyEntries(): Promise<EnergyEntry[]> {
+        return clone(Object.values(this.store.read(this.ownerId).energyEntries));
+    }
+
+    async createEnergyEntry(entry: EnergyEntry): Promise<boolean> {
+        let inserted = false;
+        await this.store.update(this.ownerId, current => {
+            if (current.energyEntries[entry.work_window_id]) return current;
+            inserted = true;
+            return { ...current, energyEntries: { ...current.energyEntries, [entry.work_window_id]: clone(entry) },
+                energyUpdatedAt: { ...current.energyUpdatedAt, [entry.work_window_id]: entry.updated_at } };
+        });
+        return inserted;
+    }
+
+    async setEnergyRating(workWindowId: string, patch: EnergyRatingPatch, updatedAt: string): Promise<boolean> {
+        if (Object.keys(patch).length === 0) return false;
+        let written = false;
+        await this.store.update(this.ownerId, current => {
+            const entry = current.energyEntries[workWindowId];
+            if (!entry) return current;
+            written = true;
+            return { ...current, energyEntries: { ...current.energyEntries,
+                [workWindowId]: applyEnergyRating(entry, clone(patch), updatedAt) },
+                energyUpdatedAt: { ...current.energyUpdatedAt, [workWindowId]: updatedAt } };
+        });
+        return written;
     }
 
     async savePetWeightEntries(entries: PetWeightEntry[]): Promise<void> {

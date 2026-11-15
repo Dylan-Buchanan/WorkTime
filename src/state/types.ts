@@ -391,3 +391,18 @@ export interface GoalCheckIn {
     createdAt: string;
     updatedAt: string;
 }
+
+/** One task-blind check-in per Work window. */
+export interface EnergyEntry {
+    work_window_id: string;
+    energy: number | null;
+    clarity: number | null;
+    caffeine: boolean;
+    energy_carried: boolean;
+    clarity_carried: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Present fields are explicitly set; null explicitly clears a rating. */
+export type EnergyRatingPatch = { energy?: number | null; clarity?: number | null; caffeine?: boolean };

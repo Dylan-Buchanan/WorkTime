@@ -1,3 +1,4 @@
+import type { EnergyEntry, EnergyRatingPatch } from "../../state/types";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../state/types";
 import type { EngineResult } from "../engine";
 import type { DeferredFinalizeOutcome } from "../engine/pendingFinalize";
@@ -155,6 +156,9 @@ export interface DataAccess {
     loadPetNapRecords(): Promise<PetNapRecord[]>;
     savePetWeightEntries(entries: PetWeightEntry[]): Promise<void>;
     loadPetWeightEntries(): Promise<PetWeightEntry[]>;
+    loadEnergyEntries(): Promise<EnergyEntry[]>;
+    createEnergyEntry(entry: EnergyEntry): Promise<boolean>;
+    setEnergyRating(workWindowId: string, patch: EnergyRatingPatch, updatedAt: string): Promise<boolean>;
     savePetTrainingSkills(skills: PetTrainingSkill[]): Promise<void>;
     loadPetTrainingSkills(): Promise<PetTrainingSkill[]>;
     savePetFixations(fixations: PetFixation[]): Promise<void>;
