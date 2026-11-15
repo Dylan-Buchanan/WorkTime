@@ -40,6 +40,7 @@ import { useOptionalEnergy } from "../state/EnergyContext";
 import type { EnergyRatingPatch } from "../state/types";
 import { getResumeNote } from "../lib/resume";
 import { ResumeCard } from "./ResumeCard";
+import { AgingTodosBanner } from "./AgingTodosBanner";
 import { EnergyStartRow } from "./energy/EnergyStartRow";
 import { LogEnergyChip } from "./energy/LogEnergyChip";
 
@@ -683,6 +684,11 @@ export const TimerPanel: React.FC = () => {
         <div className="w-full min-h-full flex">
             <div className="min-w-0 flex-1 flex flex-col items-center p-4 sm:p-6 text-center select-none relative">
                 <div className="my-auto min-w-0 flex flex-col items-center gap-6 max-w-md w-full">
+                    <AgingTodosBanner
+                        todos={todoContext?.state.todos}
+                        completions={todoContext?.state.completions}
+                        enabled={Boolean(todoContext?.hydrated)}
+                    />
                     <div className="flex w-full items-center justify-between gap-3">
                         <div className="inline-flex items-center gap-0.5 rounded-lg bg-neutral-900/80 p-0.5 ring-1 ring-inset ring-neutral-500/10" aria-label="Timer page mode">
                             {([

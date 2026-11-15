@@ -16,6 +16,8 @@ import { normalizeProjectSchedule } from "../lib/projectSchedule";
 import { toLocalDateKey } from "../lib/timer";
 import { makeActiveTimer, makeAppState } from "../test/mockTauri";
 import type { AppStateData, PMTask, Project, Task } from "../state/types";
+import type { Todo } from "../lib/todos";
+import { getAgingTodoDismissals } from "../lib/todos/agingTodoDismissals";
 import { ResumeMemoProvider } from "../state/ResumeMemoContext";
 import { EnergyProvider } from "../state/EnergyContext";
 import { composeEnergyEntry } from "../lib/energy";
@@ -109,6 +111,11 @@ const TodoLinkProbe = () => {
     const todos = useOptionalTodos();
     return <span hidden data-testid="todo-link">{Object.values(todos?.state.todos ?? {})
         .map((todo) => todo.currentTaskId ?? "").join(",")}</span>;
+};
+
+const TodoHydrationProbe = () => {
+    const todos = useOptionalTodos();
+    return <span hidden data-testid="todo-hydrated">{todos?.hydrated ? "yes" : "no"}</span>;
 };
 
 function wrap(data: InMemoryDataAccess, switchTaskId?: string, children?: React.ReactNode, memoEnabled = false, todoEnabled = false, energyEnabled = false) {
@@ -1814,5 +1821,103 @@ describe("TimerPanel energy capture", () => {
         expect(data.store.state.timer).not.toBeNull();
         expect(data.store.state.timer?.paused).toBe(false);
         expect(screen.getByRole("button", { name: "Energy 2 of 5" })).toHaveAttribute("aria-pressed", "true");
+    });
+});
+
+function makeAgingTodo(id: string, overrides: Partial<Todo> = {}): Todo {
+    const createdAt = "2026-09-13T09:00:00.000Z";
+    return {
+        id,
+        title: `To-do ${id}`,
+        rule: null,
+        dueDate: null,
+        estimate: 1,
+        currentTaskId: null,
+        position: 0,
+        isArchived: false,
+        createdAt,
+        updatedAt: createdAt,
+        ...overrides,
+    };
+}
+
+async function renderAgingTodos(todos: Todo[]) {
+    const data = new InMemoryDataAccess(makeAppState({}));
+    await data.saveTodos(todos, []);
+    const view = render(wrap(data, undefined, <TodoHydrationProbe />, false, true));
+    await waitFor(() => expect(screen.getByTestId("todo-hydrated")).toHaveTextContent("yes"));
+    return { data, ...view };
+}
+
+describe("TimerPanel aging undated to-do banner", () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 8, 20, 10, 0, 0));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    it("renders above the mode toggle in both page modes", async () => {
+        await renderAgingTodos([makeAgingTodo("todo-1", { title: "Stale item" })]);
+
+        const banner = screen.getByTestId("aging-todos-banner");
+        expect(banner).toBeVisible();
+        expect(screen.getByText('Still open: "Stale item"')).toBeVisible();
+
+        // Top of the centered column, directly above the Timer | Quick add row.
+        expect(banner.parentElement).toHaveClass("max-w-md", "my-auto");
+        expect(banner.parentElement?.firstElementChild).toBe(banner);
+        const header = banner.nextElementSibling as HTMLElement;
+        expect(within(header).getByRole("button", { name: "Quick add" })).toBeVisible();
+        expect(within(header).getByRole("button", { name: "Timer" })).toBeVisible();
+
+        fireEvent.click(screen.getByRole("button", { name: "Quick add" }));
+        expect(screen.getByTestId("aging-todos-banner")).toBeVisible();
+        fireEvent.click(screen.getByRole("button", { name: "Timer" }));
+        expect(screen.getByTestId("aging-todos-banner")).toBeVisible();
+    });
+
+    it("does not render for undated to-dos younger than seven days", async () => {
+        await renderAgingTodos([makeAgingTodo("todo-1", { createdAt: new Date(2026, 8, 14, 9, 0, 0).toISOString() })]);
+        expect(screen.queryByTestId("aging-todos-banner")).toBeNull();
+    });
+
+    it("does not render for a dated or archived to-do", async () => {
+        await renderAgingTodos([
+            makeAgingTodo("dated", { dueDate: "2026-09-20" }),
+            makeAgingTodo("archived", { isArchived: true }),
+        ]);
+        expect(screen.queryByTestId("aging-todos-banner")).toBeNull();
+    });
+
+    it("combines several qualifying to-dos and dismisses them for the rest of the day", async () => {
+        const first = await renderAgingTodos([
+            makeAgingTodo("todo-1", { title: "First stale", createdAt: new Date(2026, 8, 13, 9, 0, 0).toISOString() }),
+            makeAgingTodo("todo-2", { title: "Second stale", createdAt: new Date(2026, 8, 12, 9, 0, 0).toISOString() }),
+        ]);
+
+        expect(screen.getAllByRole("region", { name: "Aging to-dos" })).toHaveLength(1);
+        expect(screen.getByText("2 to-dos have no due date and are getting stale")).toBeVisible();
+        expect(screen.getByText('Still open: "Second stale", "First stale"')).toBeVisible();
+
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss aging to-dos banner" }));
+        expect(screen.queryByTestId("aging-todos-banner")).toBeNull();
+        expect(Object.keys(getAgingTodoDismissals().dismissals).sort()).toEqual(["todo-1", "todo-2"]);
+
+        first.unmount();
+        render(wrap(first.data, undefined, <TodoHydrationProbe />, false, true));
+        await waitFor(() => expect(screen.getByTestId("todo-hydrated")).toHaveTextContent("yes"));
+        expect(screen.queryByTestId("aging-todos-banner")).toBeNull();
+    });
+
+    it("renders nothing when no to-do provider is mounted", async () => {
+        const data = new InMemoryDataAccess(makeAppState({}));
+        await data.saveTodos([makeAgingTodo("todo-1")], []);
+
+        render(wrap(data));
+        await screen.findByRole("button", { name: "Quick add" });
+        expect(screen.queryByTestId("aging-todos-banner")).toBeNull();
     });
 });
