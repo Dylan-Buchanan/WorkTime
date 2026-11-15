@@ -129,6 +129,80 @@ beforeEach(() => {
 });
 
 describe("HabitConnectWizard", () => {
+    it.each([
+        { archived: true, target: 14 },
+        { archived: true, target: 15 },
+        { archived: false, target: 14 },
+        { archived: false, target: 15 },
+    ])("explains only the linked habit’s archived and stale states ($archived, $target)", async ({ archived, target }) => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const linked = habit("habit-read", { name: "Read", isArchived: archived });
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ target }) });
+        await saveData(data, tracker, goal, [linked, habit("habit-old", { name: "Old", isArchived: true })]);
+        const { user } = await mountWizard(data, tracker, goal, linked.id, vi.fn());
+        await screen.findByRole("radiogroup", { name: "Habits" });
+        const archivedNote = document.querySelector('[data-goals-slot="connect-archived"]');
+        const staleNote = document.querySelector('[data-goals-slot="connect-stale"]');
+        if (archived) expect(archivedNote).toHaveTextContent("“Read” is archived. It still counts toward this goal; choose another habit to switch.");
+        else expect(archivedNote).toBeNull();
+        if (target > 14) expect(staleNote).toHaveTextContent("This tracker’s periods changed. Save again to recalculate the target.");
+        else expect(staleNote).toBeNull();
+        expect(screen.queryByRole("radio", { name: "Old (archived)" })).not.toBeInTheDocument();
+        await waitForNextEnabled();
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await screen.findByRole("heading", { name: "Set the target" });
+        expect(document.querySelector('[data-goals-slot="connect-archived"]')).toBeNull();
+        expect(document.querySelector('[data-goals-slot="connect-stale"]')).toBeNull();
+    });
+
+    it.each(["habit-read", "habit-gone"])("shows neither repair explanation before hydration for %s", async linkedId => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: linkedId, target: 20 }) });
+        await saveData(data, tracker, goal, [habit("habit-read", { name: "Read", isArchived: true })]);
+        vi.spyOn(data, "loadHabits").mockReturnValue(new Promise<never>(() => {}));
+        await mountWizard(data, tracker, goal, linkedId, vi.fn());
+        expect(screen.getByRole("status")).toHaveTextContent("Loading habits…");
+        expect(document.querySelector('[data-goals-slot="connect-archived"]')).toBeNull();
+        expect(document.querySelector('[data-goals-slot="connect-stale"]')).toBeNull();
+        expect(document.querySelector('[data-goals-slot="connect-missing"]')).toBeNull();
+    });
+
+    it.each(["achieved", "dropped"] as const)("omits archived and stale explanations on a %s goal", async lifecycle => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, lifecycle, metric: habitMetric({ target: 20 }) });
+        await saveData(data, tracker, goal, [habit("habit-read", { name: "Read", isArchived: true })]);
+        await mountWizard(data, tracker, goal, "habit-read", vi.fn());
+        await screen.findByText("Reactivate this goal to connect a different habit.");
+        expect(document.querySelector('[data-goals-slot="connect-archived"]')).toBeNull();
+        expect(document.querySelector('[data-goals-slot="connect-stale"]')).toBeNull();
+    });
+
+    it("does not classify a dangling link as archived or stale", async () => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: habitMetric({ habitId: "habit-gone", target: 400 }) });
+        await saveData(data, tracker, goal, [habit("habit-old", { isArchived: true })]);
+        await mountWizard(data, tracker, goal, "habit-gone", vi.fn());
+        await screen.findByRole("radiogroup", { name: "Habits" });
+        expect(document.querySelector('[data-goals-slot="connect-missing"]')).toBeInTheDocument();
+        expect(document.querySelector('[data-goals-slot="connect-archived"]')).toBeNull();
+        expect(document.querySelector('[data-goals-slot="connect-stale"]')).toBeNull();
+    });
+
+    it.each(["manual", "liftingtracker"] as const)("does not classify a large %s target as stale", async source => {
+        const data = new InMemoryDataAccess(makeAppState());
+        const tracker = buildGoalTrackerFixture();
+        const goal = buildGoalFixture({ trackerId: tracker.id, metric: { label: "Pages", current: 0, target: 400, unit: "pages", source, overridePinned: false } });
+        await saveData(data, tracker, goal, [habit("habit-read"), habit("habit-old", { isArchived: true })]);
+        await mountWizard(data, tracker, goal, null, vi.fn());
+        await screen.findByRole("radiogroup", { name: "Habits" });
+        expect(document.querySelector('[data-goals-slot="connect-archived"]')).toBeNull();
+        expect(document.querySelector('[data-goals-slot="connect-stale"]')).toBeNull();
+    });
+
     it("opens directly on the inline create form when there are no habits and no link", async () => {
         const data = new InMemoryDataAccess(makeAppState());
         const tracker = buildGoalTrackerFixture();

@@ -666,7 +666,7 @@ function HabitMetricLine({ metric, period, today, cadence, onConnectHabit }: {
     const habits = useHabits();
     const habit = metric.habitId ? habits.state.habits[metric.habitId] : undefined;
     const max = habit ? maxHabitMetricBuckets(cadence, habit.frequency) : null;
-    const hint = habit && max !== null && Number.isFinite(metric.target) && metric.target > max
+    const hint = habits.hydrated && habit && max !== null && Number.isFinite(metric.target) && metric.target > max
         ? cadenceHoldMessage(max, habit.frequency)
         : null;
     let body: React.ReactNode;
@@ -687,8 +687,11 @@ function HabitMetricLine({ metric, period, today, cadence, onConnectHabit }: {
     return <>
         <p className="mt-2" data-goals-slot="goal-metric">
             <button type="button" className="text-left hover:underline" aria-haspopup="dialog" onClick={onConnectHabit}>{body}</button> <MetricBadge metric={metric} />
+            {habits.hydrated && !habit && <> <button type="button" aria-haspopup="dialog" data-goals-slot="goal-metric-repair" onClick={onConnectHabit}>Repair link</button></>}
         </p>
-        {hint && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">{hint}</p>}
+        {hint && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">
+            <span>{hint}</span>{" "}<button type="button" aria-haspopup="dialog" onClick={onConnectHabit}>Recalculate target</button>
+        </p>}
     </>;
 }
 
@@ -755,6 +758,7 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
     const missingProject = link.mode === "project" && !projects.some(project => project.id === link.projectId);
     const canChooseProject = projects.length > 0 || link.mode === "project";
     const storedMetric = goal.metric;
+    const storedMetricValue = JSON.stringify(storedMetric);
     const storedHabitMetric = storedMetric?.source === "habit" ? storedMetric : null;
     const [metricChoice, setMetricChoice] = useState<MetricChoice>(storedMetric?.source === "manual" ? "manual" : "keep");
     const [label, setLabel] = useState(storedMetric?.source === "manual" ? storedMetric.label : "");
@@ -762,11 +766,8 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
     const [target, setTarget] = useState(storedMetric?.source === "manual" ? String(storedMetric.target) : "");
     const [unit, setUnit] = useState(storedMetric?.source === "manual" ? storedMetric.unit : "");
     const [error, setError] = useState<string | null>(null);
-    // A save attempt escalates the live cadence hint instead of stacking a second message.
-    const [attemptedUnreachable, setAttemptedUnreachable] = useState(false);
-
     // The wizard owns every habit write. Re-derive the local choice from the live
-    // metric so a link saved or disconnected mid-edit discards stale local state.
+    // metric value so equal objects from a refresh preserve unsaved manual edits.
     useEffect(() => {
         if (storedMetric?.source === "manual") {
             setMetricChoice("manual");
@@ -777,12 +778,11 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
         } else {
             setMetricChoice("keep");
         }
-        setAttemptedUnreachable(false);
-    }, [storedMetric]);
+    }, [storedMetricValue]);
 
     const linkedHabit = storedHabitMetric?.habitId ? habits.state.habits[storedHabitMetric.habitId] : undefined;
     const habitMax = linkedHabit ? maxHabitMetricBuckets(cadence, linkedHabit.frequency) : null;
-    const unreachable = linkedHabit && habitMax !== null && storedHabitMetric !== null
+    const unreachable = habits.hydrated && linkedHabit && habitMax !== null && storedHabitMetric !== null
         && Number.isFinite(storedHabitMetric.target) && storedHabitMetric.target > habitMax
         ? cadenceHoldMessage(habitMax, linkedHabit.frequency)
         : null;
@@ -805,22 +805,14 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
         setCurrent("0");
         setTarget("");
         setUnit("");
-        setAttemptedUnreachable(false);
     };
     const stopTracking = () => {
         setMetricChoice("none");
-        setAttemptedUnreachable(false);
     };
     return <form aria-label="Edit goal" className="space-y-3 rounded border border-neutral-800 p-4" onSubmit={event => {
         event.preventDefault();
         try {
             if (!title.trim()) throw new RangeError("Give this goal a name.");
-            // The row's stale-target hint doubles as the editor error state.
-            if (metricChoice === "keep" && unreachable) {
-                setError(null);
-                setAttemptedUnreachable(true);
-                return;
-            }
             let nextMetric: GoalMetric | null | undefined;
             if (metricChoice === "none") {
                 nextMetric = null;
@@ -894,9 +886,9 @@ function GoalEditor({ goal, tracker, cadence, period, today, onSave, onCancel, o
                 {metricChoice === "none" && storedMetric !== null && <p>Tracking stops when you save.</p>}
             </> : storedHabitMetric ? <>
                 <p data-goals-slot="goal-metric-summary">Tracked by habit: {habitSummary}</p>
-                {unreachable && <p role={attemptedUnreachable ? "alert" : undefined}
-                    className={`w-full text-xs ${attemptedUnreachable ? "font-semibold text-red-300" : "text-amber-300"}`}
-                    data-goals-slot="goal-metric-hint">{unreachable}</p>}
+                {unreachable && <p className="text-xs text-amber-300" data-goals-slot="goal-metric-hint">
+                    <span>{unreachable}</span>{" "}<button type="button" aria-haspopup="dialog" onClick={onConnectHabit}>Recalculate target</button>
+                </p>}
                 <div className="flex flex-wrap gap-2">
                     <button type="button" className={button} onClick={onConnectHabit}>Change habit</button>
                     <button type="button" className={button} onClick={stopTracking}>Stop tracking</button>

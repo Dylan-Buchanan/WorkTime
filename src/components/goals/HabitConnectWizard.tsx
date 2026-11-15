@@ -237,6 +237,13 @@ export const HabitConnectWizard: React.FC<HabitConnectWizardProps> = ({ goal, ca
             {dangling && <p data-goals-slot="connect-missing" className="mt-2 text-xs text-amber-300">
                 The habit this goal tracked (“{storedHabitMetric?.label ?? ""}”) no longer exists. Choose a habit to repair the link.
             </p>}
+            {linkedHabit?.isArchived && <p data-goals-slot="connect-archived" className="mt-2 text-xs text-amber-300">
+                “{linkedHabit.name}” is archived. It still counts toward this goal; choose another habit to switch.
+            </p>}
+            {linkedHabit && storedHabitMetric && storedHabitMetric.target > maxHabitMetricBuckets(cadence, linkedHabit.frequency)
+                && <p data-goals-slot="connect-stale" className="mt-2 text-xs text-amber-300">
+                    This tracker’s periods changed. Save again to recalculate the target.
+                </p>}
             {storedHabitMetric && <button type="button" className={`${button} mt-3`} onClick={disconnect}>Disconnect habit</button>}
             <div className="mt-4 flex gap-2">
                 <button
