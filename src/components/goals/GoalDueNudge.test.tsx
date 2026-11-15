@@ -26,7 +26,7 @@ function tree(data: InMemoryDataAccess, today: LocalDateKey) {
 }
 async function mount(data: InMemoryDataAccess, today: LocalDateKey) {
     const view = render(tree(data, today));
-    await screen.findByRole("region", { name: "Goal-set export and import" });
+    await screen.findByRole("region", { name: "Tracker export and import" });
     return view;
 }
 const seeded = async (trackers: ReturnType<typeof buildGoalTrackerFixture>[]) => {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { Info } from "lucide-react";
 import { useGoals, type NewGoalTrackerInput } from "../state/GoalContext";
 import { useHabits } from "../state/HabitContext";
 import { usePM } from "../state/ProjectManagerContext";
@@ -44,6 +45,8 @@ const primaryLarge = "rounded bg-indigo-600 px-5 py-2.5 text-sm font-medium text
 const achieveButton = "rounded border border-emerald-700 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50";
 const dropButton = "rounded border border-rose-800 bg-rose-950/30 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-900/40";
 const ordered = <T extends { sortOrder: number; id: string },>(rows: T[]) => rows.sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+const GOALS_INTRO_ID = "goals-page-intro";
+const GOALS_INTRO = "Goal trackers group the goals you are working toward. A tracker can hold one or more goals and lets you know when it’s time to check in on them.";
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unable to save. Please try again.";
 const habitsLoadingMessage = "Habits are still loading. Try again when they finish.";
 const cadenceHoldMessage = (max: number, frequency: HabitFrequency) => `This cadence can hold at most ${max} ${habitUnitWord(max, frequency)}.`;
@@ -73,6 +76,7 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     const [deckPreview, setDeckPreview] = useState<{ trackerId: string; plan: DeckPlan } | null>(null);
     const [trackerActionsOpen, setTrackerActionsOpen] = useState<string | null>(null);
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const [introOpen, setIntroOpen] = useState(false);
     const isLg = useMediaQuery("(min-width: 1024px)");
     const mainRef = useRef<HTMLElement>(null);
     const drawerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -277,10 +281,20 @@ export const GoalsPage: React.FC<{ today?: LocalDateKey }> = ({ today: todayProp
     <div inert={drawerVisible} className={`grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] ${showRail ? "grid-cols-[16rem_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]"}`}>
         {showRail && <aside className="row-span-2 flex min-h-0 w-64 flex-col border-r border-neutral-800 bg-neutral-900/30">{rail}</aside>}
         <header className="border-b border-neutral-800 px-4 py-4 sm:px-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-1">
-                    <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">Goals</h1>
-                    <p className="max-w-prose text-sm leading-relaxed text-neutral-400">Trackers group the goals you are working toward. Check in each period to record progress and plan what comes next.</p>
+            <div className="flex flex-col items-center gap-2">
+                <div className="flex items-center justify-center gap-2">
+                    <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">Goal Trackers</h1>
+                    <span className="relative inline-flex" onMouseEnter={() => setIntroOpen(true)} onMouseLeave={() => setIntroOpen(false)}>
+                        <button type="button" aria-label="About goal trackers" aria-describedby={GOALS_INTRO_ID}
+                            className="grid h-6 w-6 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-500/10 hover:text-neutral-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
+                            onFocus={() => setIntroOpen(true)} onBlur={() => setIntroOpen(false)}>
+                            <Info size={15} aria-hidden />
+                        </button>
+                        <span id={GOALS_INTRO_ID} role="tooltip" hidden={!introOpen}
+                            className="absolute left-1/2 top-full z-20 mt-2 w-72 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 p-3 text-left text-xs font-normal leading-relaxed text-neutral-300 shadow-xl">
+                            {GOALS_INTRO}
+                        </span>
+                    </span>
                 </div>
                 {hasTrackers && !isLg && <button ref={drawerTriggerRef} type="button" className={button} aria-haspopup="dialog" aria-expanded={drawerVisible}
                     aria-controls={drawerVisible ? "goal-trackers-drawer" : undefined} onClick={() => setDrawerOpen(true)}>Trackers</button>}

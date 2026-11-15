@@ -14,7 +14,7 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Task panel & sidebar** — `src/components/TaskPanel.tsx`, `src/components/ProjectManager/ProjectsSidebar.tsx` (quick add tasks, select active task)
 -   **Project Manager** — `src/components/ProjectManager/*` (includes `ProjectManagerPage.tsx`, `TasksBoardView.tsx`, `TasksListView.tsx`, `TaskInspector.tsx`)
 -   **Analytics** — `src/components/AnalyticsPage.tsx` (charts and metrics powered by `recharts`)
--   **Goals** — `src/components/GoalsPage.tsx`, `src/components/goals/*` (trackers, period check-ins, deck preview, PowerPoint and goal-set exports)
+-   **Goals** — `src/components/GoalsPage.tsx`, `src/components/goals/*` (trackers, period check-ins, deck preview, PowerPoint and tracker exports)
 -   **Settings** — `src/components/SettingsPanel.tsx` (reset, preferences, agent BYOK key)
 -   **Hooks & assets** — `src/hooks/useSounds.ts`, `src/assets/audio/`
 
@@ -64,7 +64,7 @@ Summary: This repository implements a cross-platform Pomodoro-style time tracker
 -   **Project evidence** — Link a goal to a project to review completed-task suggestions with accept/reject checkboxes and a period hours rollup. Accepted evidence task IDs are saved with the check-in. Evidence is best effort: only tasks finalized through the timer are visible. In Progress task titles can prefill an empty Current field for the open period; manual edits freeze the prefill until an explicit Refresh suggestions action.
 -   **Review decks** — Build a deck for the most recent completed period and preview it in the app. Reorder goal recaps, hide slides, edit text and speaker notes, or promote recaps to the appendix; thin-content warnings help identify gaps. Preview edits stay in memory for that deck build.
 -   **PowerPoint export** — Download a `.pptx` with editable text, chart images, and speaker notes including suggested speaking seconds. The tracker is marked built only after download initiation succeeds. Export generation loads on demand in the browser/webview. Installed WebView2 download and editable text in PowerPoint were human-verified on 2026-11-01.
--   **Portable goal sets** — Export tracker and goal definitions to a dated `goals-<tracker>-<YYYY-MM-DD>.json` download, then review an import before creating a new tracker and goals with fresh IDs. Version 2 matches project names locally, ignoring case and preserving whitespace. Archived projects count toward a match. The review flags names with zero or multiple local matches. An unresolved tracker project is cleared, and an unresolved goal override falls back to the tracker. Version 1 files must be re-exported with the current app. Check-in history, evidence selections, build markers, and current metric progress are not transferred.
+-   **Portable trackers** — Export tracker and goal definitions to a dated `goals-<tracker>-<YYYY-MM-DD>.json` download, then review an import before creating a new tracker and goals with fresh IDs. Version 2 matches project names locally, ignoring case and preserving whitespace. Archived projects count toward a match. The review flags names with zero or multiple local matches. An unresolved tracker project is cleared, and an unresolved goal override falls back to the tracker. Version 1 files must be re-exported with the current app. Check-in history, evidence selections, build markers, and current metric progress are not transferred.
 
 ---
 

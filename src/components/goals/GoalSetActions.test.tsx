@@ -127,12 +127,13 @@ async function seedProjects(data: InMemoryDataAccess, projects: readonly Project
 
 async function mount(data: InMemoryDataAccess, trackerId: string, onImported = vi.fn()) {
     const view = render(tree(data, trackerId, onImported));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Export goals" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Export tracker" })).toBeEnabled());
+    expect(screen.getByRole("region", { name: "Tracker export and import" })).toBeInTheDocument();
     return { user: userEvent.setup(), onImported, ...view };
 }
 
 async function uploadJson(user: UserEvent, text: string, name = "goals-work-2026-11-02.json") {
-    const input = screen.getByLabelText("Import goals");
+    const input = screen.getByLabelText("Import tracker");
     await user.upload(input, new File([text], name, { type: "application/json" }));
 }
 
@@ -174,7 +175,7 @@ describe("GoalSetActions", () => {
         ]);
         const { user } = await mount(data, tracker.id);
 
-        await user.click(screen.getByRole("button", { name: "Export goals" }));
+        await user.click(screen.getByRole("button", { name: "Export tracker" }));
 
         await waitFor(() => expect(calls.deliver).toHaveBeenCalledTimes(1));
         const [blob, fileName] = calls.deliver.mock.calls[0] as [Blob, string];
@@ -199,10 +200,10 @@ describe("GoalSetActions", () => {
         render(tree(data, tracker.id, vi.fn()));
 
         const hint = await screen.findByText("Add a goal before exporting this tracker.");
-        const exportButton = screen.getByRole("button", { name: "Export goals" });
+        const exportButton = screen.getByRole("button", { name: "Export tracker" });
         expect(exportButton).toBeDisabled();
         expect(exportButton).toHaveAttribute("aria-describedby", hint.id);
-        expect(screen.getByLabelText("Import goals")).toBeEnabled();
+        expect(screen.getByLabelText("Import tracker")).toBeEnabled();
 
         await userEvent.setup().click(exportButton);
 
@@ -307,7 +308,7 @@ describe("GoalSetActions", () => {
         await user.click(within(review).getByRole("button", { name: "Create tracker" }));
 
         const alert = await screen.findByRole("alert");
-        expect(alert).toHaveTextContent("Could not save the imported goal set");
+        expect(alert).toHaveTextContent("Could not save the imported tracker");
         expect(alert).toHaveTextContent("storage is unavailable");
         expect(within(screen.getByRole("region", { name: "Import review" })).getByText(
             "1 goal will inherit the tracker’s project because its override has no unique local match.",
@@ -401,26 +402,30 @@ describe("GoalSetActions", () => {
     });
 
     it.each([
-        ["invalid JSON", () => "{ not json", "not valid JSON"],
-        ["an unsupported version", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.version = 1; }), "version this app does not support"],
-        ["a foreign format", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.format = "other.tool"; }), "not a WorkTime goal-set file"],
+        ["invalid JSON", () => "{ not json", "not valid JSON. Choose a tracker file"],
+        ["an unsupported version", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.version = 1; }), "tracker file uses a version this app does not support"],
+        ["a foreign format", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.format = "other.tool"; }), "not a WorkTime tracker file"],
         ["an invalid field", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => {
             (file.tracker as Record<string, unknown>).name = " ";
-        }), "has an invalid field"],
-        ["an empty goal list", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.goals = []; }), "has no goals"],
-    ])("reports %s and creates nothing", async (_label, buildText, copy) => {
+        }), "tracker file has an invalid field"],
+        ["an invalid root field", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => {
+            file.extra = true;
+        }), 'has an invalid field: the tracker file has an unknown field "extra"'],
+        ["an empty goal list", (tracker: GoalTracker, goals: Goal[]) => mutateFile(tracker, goals, file => { file.goals = []; }), "tracker file has no goals"],
+    ])("reports %s with tracker wording and creates nothing", async (_label, buildText, copy) => {
         const tracker = buildEveryNWeeksTrackerFixture();
         const goals = [buildGoalFixture({ id: "goal-a", trackerId: tracker.id, sortOrder: 0 })];
         const data = await seeded(tracker, goals);
         const { user, onImported } = await mount(data, tracker.id);
 
         await user.upload(
-            screen.getByLabelText("Import goals"),
+            screen.getByLabelText("Import tracker"),
             new File([buildText(tracker, goals)], "broken.json", { type: "application/json" }),
         );
 
         const alert = await screen.findByRole("alert");
         expect(alert).toHaveTextContent(new RegExp(copy));
+        expect(alert).not.toHaveTextContent(/goal[- ]set/i);
         expect(screen.queryByRole("region", { name: "Import review" })).not.toBeInTheDocument();
         expect(calls.createTracker).toHaveLength(0);
         expect(calls.createGoal).toHaveLength(0);
@@ -435,7 +440,7 @@ describe("GoalSetActions", () => {
         const file = new File([""], "unreadable.json", { type: "application/json" });
         file.text = () => Promise.reject(new Error("unreadable"));
 
-        await user.upload(screen.getByLabelText("Import goals"), file);
+        await user.upload(screen.getByLabelText("Import tracker"), file);
 
         expect(await screen.findByRole("alert")).toHaveTextContent("Could not read that file");
         expect(calls.createTracker).toHaveLength(0);
@@ -449,7 +454,7 @@ describe("GoalSetActions", () => {
         const { user } = await mount(data, tracker.id);
 
         await uploadJson(user, "{}");
-        expect(await screen.findByRole("alert")).toHaveTextContent("not a WorkTime goal-set file");
+        expect(await screen.findByRole("alert")).toHaveTextContent("not a WorkTime tracker file");
 
         await uploadJson(user, fileJson(tracker, goals));
         const review = await screen.findByRole("region", { name: "Import review" });

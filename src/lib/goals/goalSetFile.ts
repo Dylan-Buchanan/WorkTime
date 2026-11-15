@@ -140,8 +140,8 @@ function readMetric(value: unknown, what: string): GoalSetMetricDefinition | nul
 }
 
 function readTracker(value: unknown): GoalSetTrackerDefinition {
-    if (!isPlainObject(value)) invalid("goal-set tracker must be an object");
-    requireKeys(value, TRACKER_KEYS, "goal-set tracker");
+    if (!isPlainObject(value)) invalid("the tracker must be an object");
+    requireKeys(value, TRACKER_KEYS, "the tracker");
     const purpose = requireString(value.purpose, "tracker purpose");
     if (/[\r\n]/.test(purpose)) invalid("tracker purpose must be a single line");
     return {
@@ -182,20 +182,20 @@ function readGoal(value: unknown, index: number): GoalSetGoalDefinition {
     };
 }
 
-/** Shared validator: canonicalizes any parsed or in-memory goal-set value. */
+/** Shared validator: canonicalizes any parsed or in-memory tracker-file value. */
 function readGoalSet(value: unknown): GoalSetFile {
-    if (!isPlainObject(value)) invalid("the goal-set file must be a JSON object");
+    if (!isPlainObject(value)) invalid("the tracker file must be a JSON object");
     if (value.format !== GOAL_SET_FORMAT) {
         throw new GoalSetError("invalid-format", `the file is not a "${GOAL_SET_FORMAT}" document`);
     }
     if (value.version !== GOAL_SET_VERSION) {
-        throw new GoalSetError("unsupported-version", `unsupported goal-set version: ${String(value.version)}`);
+        throw new GoalSetError("unsupported-version", `unsupported tracker file version: ${String(value.version)}`);
     }
-    requireKeys(value, ROOT_KEYS, "goal-set file");
+    requireKeys(value, ROOT_KEYS, "the tracker file");
     const tracker = readTracker(value.tracker);
-    if (!Array.isArray(value.goals)) invalid("goal-set goals must be an array");
+    if (!Array.isArray(value.goals)) invalid("the tracker file goals must be an array");
     if (value.goals.length === 0) {
-        throw new GoalSetError("empty-goals", "the goal set has no goals");
+        throw new GoalSetError("empty-goals", "the tracker has no goals");
     }
     return {
         format: GOAL_SET_FORMAT,

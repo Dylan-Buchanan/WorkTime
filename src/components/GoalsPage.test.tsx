@@ -81,11 +81,11 @@ async function mount(data = new InMemoryDataAccess(makeAppState()), today?: Loca
     return { data, user: userEvent.setup(), ...view };
 }
 function trackerRow(name: string) {
-    return within(screen.getByRole("navigation", { name: "Goal trackers" })).getByRole("button", { name });
+    return within(screen.getByRole("navigation", { name: "Trackers" })).getByRole("button", { name });
 }
 /** Rail row labels in rendered order, including the archived group. */
 function railOrder() {
-    return within(screen.getByRole("navigation", { name: "Goal trackers" }))
+    return within(screen.getByRole("navigation", { name: "Trackers" }))
         .getAllByRole("listitem")
         .map(row => row.querySelector("[id^='tracker-rail-name-']")?.textContent ?? "");
 }
@@ -155,10 +155,25 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("GoalsPage", () => {
-    it("shows a clear page heading and description", async () => {
-        await mount();
-        expect(screen.getByRole("heading", { level: 1, name: "Goals" })).toBeInTheDocument();
-        expect(screen.getByText(/Check in each period to record progress/)).toBeInTheDocument();
+    it("centers the page heading and hides the description behind an info icon", async () => {
+        const { user } = await mount();
+        expect(screen.getByRole("heading", { level: 1, name: "Goal Trackers" })).toBeInTheDocument();
+        const info = screen.getByRole("button", { name: "About goal trackers" });
+        expect(info).toHaveAccessibleDescription(
+            "Goal trackers group the goals you are working toward. A tracker can hold one or more goals and lets you know when it’s time to check in on them.",
+        );
+        const tooltip = screen.getByText(/A tracker can hold one or more goals/);
+        expect(tooltip).not.toBeVisible();
+
+        await user.hover(info);
+        expect(tooltip).toBeVisible();
+        await user.unhover(info);
+        expect(tooltip).not.toBeVisible();
+
+        act(() => info.focus());
+        expect(tooltip).toBeVisible();
+        act(() => info.blur());
+        expect(tooltip).not.toBeVisible();
     });
 
     it("has a clean empty state and creates multiple trackers using both validated cadence variants", async () => {
@@ -167,7 +182,7 @@ describe("GoalsPage", () => {
         expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
         expect(screen.getByText(/A tracker holds the goals you are working toward/)).toBeInTheDocument();
         expect(screen.getAllByRole("button", { name: "Add tracker" })).toHaveLength(1);
-        expect(screen.queryByRole("navigation", { name: "Goal trackers" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("navigation", { name: "Trackers" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Trackers" })).not.toBeInTheDocument();
         await user.click(screen.getByRole("button", { name: "Add tracker" }));
         await user.type(screen.getByLabelText("Tracker name"), "Work");
@@ -246,7 +261,7 @@ describe("GoalsPage", () => {
         expect(screen.getByRole("heading", { name: "No active trackers" })).toBeInTheDocument();
         expect(screen.getByText(/Every tracker you have is archived/)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Add tracker" })).not.toBeInTheDocument();
-        expect(screen.getByRole("navigation", { name: "Goal trackers" })).toBeInTheDocument();
+        expect(screen.getByRole("navigation", { name: "Trackers" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "New tracker" })).toBeEnabled();
         expect(screen.queryByRole("heading", { name: "Start your first tracker" })).not.toBeInTheDocument();
     });
@@ -263,7 +278,7 @@ describe("GoalsPage", () => {
         ], []);
         localStorage.setItem(GOAL_UI_STORAGE_KEY, JSON.stringify({ selectedTrackerId: archived.id, expandedGoalIds: {} }));
         const { user } = await mount(data, "2026-10-20");
-        const navigation = screen.getByRole("navigation", { name: "Goal trackers" });
+        const navigation = screen.getByRole("navigation", { name: "Trackers" });
         expect(within(navigation).getAllByRole("listitem")).toHaveLength(2);
         expect(trackerRow(work.name)).toHaveAttribute("aria-current", "true");
         expect(trackerRow(work.name)).toHaveAccessibleDescription("1 active · 1 achieved Deck due · October 2026");
@@ -341,12 +356,12 @@ describe("GoalsPage", () => {
             const dialog = screen.getByRole("dialog", { name: "Trackers" });
             expect(dialog).toHaveAttribute("aria-modal", "true");
             expect(within(dialog).getByRole("button", { name: "Close" })).toHaveFocus();
-            expect(within(dialog).getByRole("navigation", { name: "Goal trackers" })).toBeInTheDocument();
+            expect(within(dialog).getByRole("navigation", { name: "Trackers" })).toBeInTheDocument();
             return dialog;
         };
         const expectClosed = () => {
             expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-            expect(screen.queryByRole("navigation", { name: "Goal trackers" })).not.toBeInTheDocument();
+            expect(screen.queryByRole("navigation", { name: "Trackers" })).not.toBeInTheDocument();
             expect(trigger).toHaveAttribute("aria-expanded", "false");
             expect(trigger).toHaveFocus();
         };
@@ -1298,7 +1313,7 @@ describe("GoalsPage", () => {
         expect(railOrder()).toEqual(["Work", "Life"]);
         // jsdom has no layout, so give each row a vertical rect; the keyboard
         // coordinate getter then has a row below the picked-up row to find.
-        for (const [index, row] of within(screen.getByRole("navigation", { name: "Goal trackers" })).getAllByRole("listitem").entries()) {
+        for (const [index, row] of within(screen.getByRole("navigation", { name: "Trackers" })).getAllByRole("listitem").entries()) {
             const top = index * 60;
             Object.defineProperty(row, "getBoundingClientRect", {
                 configurable: true,
@@ -1330,7 +1345,7 @@ describe("GoalsPage", () => {
         await data.saveGoals([work, life, archived], [], []);
         const { user } = await mount(data);
         expect(railOrder()).toEqual(["Work", "Life"]);
-        const nav = screen.getByRole("navigation", { name: "Goal trackers" });
+        const nav = screen.getByRole("navigation", { name: "Trackers" });
         await user.click(within(nav).getByRole("checkbox", { name: "Show archived (1)" }));
         expect(railOrder()).toEqual(["Work", "Life", "Old work"]);
         expect(within(nav).getAllByRole("button", { name: /^Reorder / }).map(button => button.getAttribute("aria-label")))
@@ -1858,9 +1873,9 @@ describe("GoalsPage", () => {
         const { container } = await mount(data);
         const slot = container.querySelector('[data-goals-slot="goal-set-actions"]') as HTMLElement;
         expect(slot).toHaveAttribute("data-tracker-id", tracker.id);
-        expect(within(slot).getByRole("button", { name: "Export goals" })).toBeDisabled();
+        expect(within(slot).getByRole("button", { name: "Export tracker" })).toBeDisabled();
         expect(within(slot).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
-        expect(within(slot).getByLabelText("Import goals")).toHaveAttribute("type", "file");
+        expect(within(slot).getByLabelText("Import tracker")).toHaveAttribute("type", "file");
         expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
     });
 
@@ -1874,9 +1889,9 @@ describe("GoalsPage", () => {
         expect(slot()).toHaveAttribute("data-tracker-id", first.id);
         await user.click(trackerRow(second.name));
         expect(slot()).toHaveAttribute("data-tracker-id", second.id);
-        expect(within(slot()).getByRole("button", { name: "Export goals" })).toBeDisabled();
+        expect(within(slot()).getByRole("button", { name: "Export tracker" })).toBeDisabled();
         expect(within(slot()).getByText("Add a goal before exporting this tracker.")).toBeInTheDocument();
-        expect(within(slot()).getByLabelText("Import goals")).toBeInTheDocument();
+        expect(within(slot()).getByLabelText("Import tracker")).toBeInTheDocument();
         expect(container.querySelectorAll('[data-goals-slot="goal-set-actions"]')).toHaveLength(1);
     });
 
@@ -1902,7 +1917,7 @@ describe("GoalsPage", () => {
 
         // Drive the real Lane B component through a validated file and confirm.
         await user.upload(
-            within(slot()).getByLabelText("Import goals"),
+            within(slot()).getByLabelText("Import tracker"),
             new File([serializeGoalSet(tracker, [goal], {})], "goals-work-2026-10-20.json", { type: "application/json" }),
         );
         const review = await within(slot()).findByRole("region", { name: "Import review" });
@@ -1916,7 +1931,7 @@ describe("GoalsPage", () => {
         expect(screen.getByText(/First period started on/)).toHaveTextContent("2026-10-25");
         expect(slot()).toHaveAttribute("data-tracker-id", created.id);
         expect(JSON.parse(localStorage.getItem(GOAL_UI_STORAGE_KEY)!).selectedTrackerId).toBe(created.id);
-        expect(screen.getByRole("navigation", { name: "Goal trackers" }).querySelector("[aria-current=true]")).toHaveTextContent(created.name);
+        expect(screen.getByRole("navigation", { name: "Trackers" }).querySelector("[aria-current=true]")).toHaveTextContent(created.name);
         expect(wizard()).toBeEmptyDOMElement();
         expect(preview()).toBeEmptyDOMElement();
         expect(screen.queryByRole("form", { name: "Edit goal" })).not.toBeInTheDocument();
@@ -1937,6 +1952,6 @@ describe("GoalsPage", () => {
         const { container } = await mount();
         expect(screen.getByRole("heading", { name: "Start your first tracker" })).toBeInTheDocument();
         expect(container.querySelector('[data-goals-slot="goal-set-actions"]')).toBeNull();
-        expect(screen.queryByRole("button", { name: "Export goals" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Export tracker" })).not.toBeInTheDocument();
     });
 });

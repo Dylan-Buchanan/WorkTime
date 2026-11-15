@@ -110,7 +110,7 @@ export function TrackerRail({
         rowRef: tracker.id === selectedId ? node => { selectedRow.current = node; } : undefined,
     });
 
-    return <nav aria-label="Goal trackers" className="flex min-h-0 flex-1 flex-col">
+    return <nav aria-label="Trackers" className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-neutral-800 px-3 py-2">
             <span className="text-xs font-medium text-neutral-300">Trackers</span>
             <button type="button" disabled={!hydrated} onClick={onNew}
@@ -120,12 +120,12 @@ export function TrackerRail({
         <div className="app-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">
             {activeTrackers.length > 0 && <DndContext id="tracker-rail" sensors={sensors} onDragEnd={reorder}>
                 <SortableContext items={activeTrackers.map(row => row.id)} strategy={verticalListSortingStrategy}>
-                    <ul aria-label="Active goal trackers" className="space-y-1">
+                    <ul aria-label="Active trackers" className="space-y-1">
                         {activeTrackers.map(tracker => <SortableRailRow key={tracker.id} {...rowProps(tracker)} sortable={sortable} />)}
                     </ul>
                 </SortableContext>
             </DndContext>}
-            {archivedTrackers.length > 0 && <ul aria-label="Archived goal trackers" className="space-y-1">
+            {archivedTrackers.length > 0 && <ul aria-label="Archived trackers" className="space-y-1">
                 {archivedTrackers.map(tracker => <RailRow key={tracker.id} {...rowProps(tracker)} />)}
             </ul>}
         </div>

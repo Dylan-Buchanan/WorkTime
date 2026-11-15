@@ -62,7 +62,7 @@ describe("App resume memo lifecycle", () => {
             fireEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
             expect(screen.queryByRole("region", { name: "Resume Route task" })).toBeNull();
             fireEvent.click(screen.getByRole("link", { name: "Goals" }));
-            await screen.findByRole("heading", { name: "Goals" });
+            await screen.findByRole("heading", { name: "Goal Trackers" });
             fireEvent.click(screen.getByRole("link", { name: "Timer" }));
             await screen.findByRole("button", { name: "Pause" });
             expect(screen.queryByRole("region", { name: "Resume Route task" })).toBeNull();
@@ -126,7 +126,7 @@ describe("App resume memo lifecycle", () => {
         const dialog = await screen.findByRole("dialog", { name: "What were you doing in Route task?" });
         fireEvent.change(screen.getByLabelText("Where I am"), { target: { value: "Survive navigation" } });
         fireEvent.click(screen.getByRole("link", { name: "Goals" }));
-        await screen.findByRole("heading", { name: "Goals" });
+        await screen.findByRole("heading", { name: "Goal Trackers" });
         expect(screen.getByRole("dialog")).toBe(dialog);
         expect(screen.getByLabelText("Where I am")).toHaveValue("Survive navigation");
         expect(memoLifecycle.mount).toHaveBeenCalledOnce();
@@ -193,7 +193,7 @@ describe("App /goals routing", () => {
         const load = vi.spyOn(InMemoryDataAccess.prototype, "loadGoals");
         window.history.pushState({}, "", "/goals");
         render(<App />);
-        expect(await screen.findByRole("heading", { name: "Goals" })).toBeInTheDocument();
+        expect(await screen.findByRole("heading", { name: "Goal Trackers" })).toBeInTheDocument();
         expect(screen.getByRole("link", { name: "Goals" })).toHaveAttribute("href", "/goals");
         await waitFor(() => expect(screen.getByRole("button", { name: "Add tracker" })).toBeEnabled());
         expect(load).toHaveBeenCalled();

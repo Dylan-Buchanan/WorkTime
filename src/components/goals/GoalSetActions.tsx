@@ -43,15 +43,15 @@ const projectLinkLabel = (count: number): string => count === 1
 function errorCopy(error: GoalSetError): string {
     switch (error.code) {
         case "invalid-json":
-            return "That file is not valid JSON. Choose a goal-set file exported from WorkTime.";
+            return "That file is not valid JSON. Choose a tracker file exported from WorkTime.";
         case "invalid-format":
-            return "That file is not a WorkTime goal-set file.";
+            return "That file is not a WorkTime tracker file.";
         case "unsupported-version":
-            return "That goal-set file uses a version this app does not support. Export it again from this version of WorkTime.";
+            return "That tracker file uses a version this app does not support. Export it again from this version of WorkTime.";
         case "invalid-field":
-            return `That goal-set file has an invalid field: ${error.message}.`;
+            return `That tracker file has an invalid field: ${error.message}.`;
         case "empty-goals":
-            return "That goal-set file has no goals, so there is nothing to import.";
+            return "That tracker file has no goals, so there is nothing to import.";
     }
 }
 
@@ -118,7 +118,7 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
             const blob = new Blob([serializeGoalSet(tracker, goals, projects)], { type: "application/json" });
             await initiateBlobDownload(blob, goalSetFileName(tracker.name, todayKey()));
         } catch (caught) {
-            setError(caught instanceof GoalSetError ? errorCopy(caught) : "Could not export the goal set. Try again.");
+            setError(caught instanceof GoalSetError ? errorCopy(caught) : "Could not export the tracker. Try again.");
         } finally {
             setBusy(null);
         }
@@ -131,13 +131,13 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
         try {
             text = await file.text();
         } catch {
-            setError("Could not read that file. Choose the goal-set file again.");
+            setError("Could not read that file. Choose the tracker file again.");
             return;
         }
         try {
             setReview(parseGoalSet(text));
         } catch (caught) {
-            setError(caught instanceof GoalSetError ? errorCopy(caught) : "Could not read that goal-set file.");
+            setError(caught instanceof GoalSetError ? errorCopy(caught) : "Could not read that tracker file.");
         }
     }
 
@@ -172,23 +172,23 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
                 await persist();
             } catch (caught) {
                 setError(caught instanceof Error && caught.message
-                    ? `Could not save the imported goal set: ${caught.message}. The review stays open; retry once saving works.`
-                    : "Could not save the imported goal set. The review stays open; retry once saving works.");
+                    ? `Could not save the imported tracker: ${caught.message}. The review stays open; retry once saving works.`
+                    : "Could not save the imported tracker. The review stays open; retry once saving works.");
                 return;
             }
             setReview(null);
             onImported(created.id);
         } catch (caught) {
             setError(caught instanceof Error && caught.message
-                ? `Could not import the goal set: ${caught.message}`
-                : "Could not import the goal set. Try again.");
+                ? `Could not import the tracker: ${caught.message}`
+                : "Could not import the tracker. Try again.");
         } finally {
             setBusy(null);
         }
     }
 
     return <section
-        aria-label="Goal-set export and import"
+        aria-label="Tracker export and import"
         className="flex flex-col gap-2"
     >
         <div className="flex flex-wrap items-center gap-2">
@@ -199,14 +199,14 @@ export const GoalSetActions: React.FC<GoalSetActionsProps> = ({ trackerId, onImp
                 aria-describedby={hasGoals ? undefined : EXPORT_HINT_ID}
                 onClick={() => { void runExport(); }}
             >
-                {busy === "export" ? "Exporting…" : "Export goals"}
+                {busy === "export" ? "Exporting…" : "Export tracker"}
             </button>
             <label className={`${action} cursor-pointer`}>
-                Import goals
+                Import tracker
                 <input
                     type="file"
                     accept=".json,application/json"
-                    aria-label="Import goals"
+                    aria-label="Import tracker"
                     className="sr-only"
                     disabled={busy !== null}
                     onChange={event => {

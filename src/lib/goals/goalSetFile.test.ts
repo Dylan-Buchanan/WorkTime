@@ -70,6 +70,16 @@ function thrownCode(json: string): string {
     throw new Error("Expected parseGoalSet to throw");
 }
 
+function thrownMessage(json: string): string {
+    try {
+        parseGoalSet(json);
+    } catch (caught) {
+        if (caught instanceof GoalSetError) return caught.message;
+        throw caught;
+    }
+    throw new Error("Expected parseGoalSet to throw");
+}
+
 function validFile(): GoalSetFile {
     const tracker = buildEveryNWeeksTrackerFixture();
     return parseGoalSet(serializeGoalSet(tracker, [buildGoalFixture({ sortOrder: 0 })], {}));
@@ -363,6 +373,29 @@ describe("goalSetFile parseGoalSet", () => {
             expect(error.message.length).toBeGreaterThan(0);
             expect(error.name).toBe("GoalSetError");
         }
+    });
+
+    it("words container problems as tracker copy rather than a goal set", () => {
+        const messages = [
+            thrownMessage("null"),
+            thrownMessage("[]"),
+            thrownMessage(withChange(file => { file.extra = true; })),
+            thrownMessage(withChange(file => { delete file.tracker; })),
+            thrownMessage(withChange(file => { file.tracker = "Work"; })),
+            thrownMessage(withChange(file => { delete (file.tracker as Record<string, unknown>).color; })),
+            thrownMessage(withChange(file => { file.goals = {}; })),
+            thrownMessage(withChange(file => { file.goals = []; })),
+            thrownMessage(withChange(file => { file.version = 1; })),
+        ];
+        for (const message of messages) expect(message).not.toMatch(/goal[- ]set/i);
+        expect(messages[0]).toBe("the tracker file must be a JSON object");
+        expect(messages[2]).toBe('the tracker file has an unknown field "extra"');
+        expect(messages[3]).toBe('the tracker file is missing the field "tracker"');
+        expect(messages[4]).toBe("the tracker must be an object");
+        expect(messages[5]).toBe('the tracker is missing the field "color"');
+        expect(messages[6]).toBe("the tracker file goals must be an array");
+        expect(messages[7]).toBe("the tracker has no goals");
+        expect(messages[8]).toBe("unsupported tracker file version: 1");
     });
 });
 
