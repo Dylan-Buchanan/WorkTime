@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { ExternalIssueAttach } from "./ExternalIssueAttach";
+import { shortcutStoryCandidate, type ExternalIssueCandidate } from "../lib/engine/externalIssueAttach";
 import { Milestone, X } from "lucide-react";
 import type { PMTask, Project } from "../state/types";
 import {
@@ -18,6 +20,8 @@ export interface ShortcutIntegrationCardProps {
     currentTasks: readonly PMTask[];
     projects: readonly Project[];
     createTask: (title: string, options: Partial<PMTask>) => Promise<PMTask>;
+    updateTask: (id: string, patch: Partial<PMTask>) => void;
+    onSyncedStoriesChange?: (stories: readonly ExternalIssueCandidate[]) => void;
 }
 
 interface SyncSummary {
@@ -54,7 +58,7 @@ function formatLastSynced(value: string | null): string {
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, createTask }: ShortcutIntegrationCardProps) {
+export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, createTask, updateTask, onSyncedStoriesChange }: ShortcutIntegrationCardProps) {
     const [settings, setSettings] = useState<ShortcutSettings | null>(null);
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState<"connect" | "save" | "disconnect" | "sync" | "create" | null>(null);
@@ -66,6 +70,7 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
     const [error, setError] = useState<string | null>(null);
     const [errorCode, setErrorCode] = useState<ShortcutIntegrationError["code"] | null>(null);
     const [preview, setPreview] = useState<ShortcutClassificationResult | null>(null);
+    const [attachCandidates, setAttachCandidates] = useState<ExternalIssueCandidate[]>([]);
     const [summary, setSummary] = useState<SyncSummary | null>(null);
 
     const includedStatuses = useMemo(() => statusesFromInput(includedInput), [includedInput]);
@@ -108,12 +113,17 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
         setErrorCode(null);
     };
 
+    useEffect(() => {
+        onSyncedStoriesChange?.(attachCandidates);
+    }, [attachCandidates, onSyncedStoriesChange]);
+
     async function connect() {
         if (busy) return;
         clearError();
         setBusy("connect");
         try {
             await dataAccess.connect({ token, teamName, includedStatuses, defaultProjectId: defaultProjectId || null });
+            setAttachCandidates([]);
             const now = new Date().toISOString();
             setSettings({
                 teamName: teamName.trim(),
@@ -137,6 +147,7 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
         setBusy("save");
         try {
             await dataAccess.updatePreferences({ teamName, includedStatuses, defaultProjectId: defaultProjectId || null });
+            if (teamName.trim() !== settings.teamName) setAttachCandidates([]);
             setSettings({
                 ...settings,
                 teamName: teamName.trim(),
@@ -165,6 +176,7 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
             setReconnecting(false);
             setSummary(null);
             setPreview(null);
+            setAttachCandidates([]);
         } catch (caught) {
             recordError(caught);
         } finally {
@@ -179,6 +191,7 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
         setBusy("sync");
         try {
             const synced = await dataAccess.sync();
+            setAttachCandidates(synced.stories.map(shortcutStoryCandidate));
             setSettings({ ...settings, lastSyncedAt: synced.syncedAt });
             setPreview(classifyShortcutStories({
                 stories: synced.stories,
@@ -325,6 +338,16 @@ export function ShortcutIntegrationCard({ dataAccess, currentTasks, projects, cr
                                 <button type="button" title={settingsDirty ? "Save settings before syncing" : undefined} onClick={() => void syncNow()} disabled={busy !== null || settingsDirty} className="rounded bg-neutral-100 px-3 py-1.5 text-[10px] font-medium text-neutral-950 disabled:cursor-not-allowed disabled:opacity-40">
                                     {busy === "sync" ? "Syncing…" : "Sync now"}
                                 </button>
+                                <ExternalIssueAttach
+                                    provider="shortcut"
+                                    candidates={attachCandidates}
+                                    tasks={currentTasks}
+                                    projects={projects}
+                                    knownShortcutStories={attachCandidates}
+                                    disabled={busy !== null || preview !== null}
+                                    updateTask={updateTask}
+                                    onError={(message) => { clearError(); setError(message); }}
+                                />
                                 <button type="button" onClick={() => void savePreferences()} disabled={busy !== null || !teamName.trim()} className="rounded border border-neutral-700 px-3 py-1.5 text-[10px] text-neutral-200 disabled:opacity-40">
                                     {busy === "save" ? "Saving…" : "Save settings"}
                                 </button>

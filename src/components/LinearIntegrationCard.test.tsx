@@ -62,9 +62,93 @@ function createdTask(title = "Created"): PMTask {
 }
 
 describe("LinearIntegrationCard", () => {
+    it("shows a card error when attachment is opened before the first sync", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
+
+        await user.click(await screen.findByRole("button", { name: "Attach existing issue" }));
+        expect(screen.getByRole("alert")).toHaveTextContent("Nothing to attach yet");
+        expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(access.sync).not.toHaveBeenCalled();
+    });
+
+    it("attaches a status-excluded issue from the retained sync and skips it on the next sync", async () => {
+        const user = userEvent.setup();
+        const alreadyLinked = {
+            ...newIssue, id: "issue-2", identifier: "ENG-456", title: "Already linked",
+            url: "https://linear.app/acme/issue/ENG-456/payload-slug",
+        };
+        const access = fakeAccess(connected, [{ ...newIssue, state: { name: "Backlog" } }, alreadyLinked]);
+        const target = { ...createdTask("Prepare release"), projectId: "project-1" };
+        const tasks = [
+            target,
+            { ...createdTask("Prepare archived"), id: "archived", isArchived: true },
+            { ...createdTask("Prepare linked"), id: "linked", links: ["https://linear.app/acme/issue/ENG-456/other-slug/"] },
+            { ...createdTask("Something else"), id: "else" },
+        ];
+        const createTask = vi.fn();
+        const updateTask = vi.fn();
+        const props = { dataAccess: access, projects, createTask, updateTask };
+        const view = render(<LinearIntegrationCard {...props} currentTasks={tasks} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync now" }));
+        const preview = await screen.findByRole("dialog", { name: "Linear sync preview" });
+        expect(within(preview).queryByText(newIssue.title)).not.toBeInTheDocument();
+        await user.click(within(preview).getByRole("button", { name: "Cancel" }));
+
+        await user.click(screen.getByRole("button", { name: "Attach existing issue" }));
+        const picker = within(screen.getByRole("dialog", { name: "Attach existing issue" }));
+        expect(picker.queryByRole("button", { name: /Already linked/ })).not.toBeInTheDocument();
+        await user.click(picker.getByRole("button", { name: /ENG-123.*New issue/ }));
+        await user.type(picker.getByRole("searchbox", { name: "Search WorkTime tasks" }), "prepare");
+        expect(within(picker.getByRole("list", { name: "WorkTime tasks" })).getAllByRole("button")).toHaveLength(1);
+        await user.click(picker.getByRole("button", { name: "Prepare release Alpha" }));
+        await user.click(picker.getByRole("button", { name: "Attach issue" }));
+
+        expect(updateTask).toHaveBeenCalledExactlyOnceWith(target.id, { links: [newIssue.url], tags: ["linear:ENG-123"] });
+        expect(createTask).not.toHaveBeenCalled();
+        expect(access.sync).toHaveBeenCalledOnce();
+        view.rerender(<LinearIntegrationCard {...props} currentTasks={[{ ...target, ...updateTask.mock.calls[0][1] }, ...tasks.slice(1)]} />);
+        await user.click(screen.getByRole("button", { name: "Sync now" }));
+        expect(await screen.findByText("Every assigned issue was already imported.")).toBeInTheDocument();
+    });
+
+    const manualTask = createdTask("Manual task");
+    it.each([
+        { scenario: "archived", changedTasks: [{ ...manualTask, isArchived: true }], error: "task is no longer available" },
+        { scenario: "deleted", changedTasks: [], error: "task is no longer available" },
+        {
+            scenario: "linked elsewhere",
+            changedTasks: [manualTask, {
+                ...createdTask("Other task"), id: "other", links: ["https://linear.app/acme/issue/ENG-123/changed-slug"],
+            }],
+            error: "issue is already attached to another WorkTime task",
+        },
+    ])("rejects a submission when it becomes $scenario after selection", async ({ changedTasks, error }) => {
+        const user = userEvent.setup();
+        const props = { dataAccess: fakeAccess(), projects, createTask: vi.fn(), updateTask: vi.fn() };
+        const view = render(<LinearIntegrationCard {...props} currentTasks={[manualTask]} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync now" }));
+        const preview = await screen.findByRole("dialog", { name: "Linear sync preview" });
+        await user.click(within(preview).getByRole("button", { name: "Cancel" }));
+        await user.click(screen.getByRole("button", { name: "Attach existing issue" }));
+        const picker = within(screen.getByRole("dialog", { name: "Attach existing issue" }));
+        await user.click(picker.getByRole("button", { name: /ENG-123/ }));
+        await user.click(picker.getByRole("button", { name: /Manual task/ }));
+        view.rerender(<LinearIntegrationCard {...props} currentTasks={changedTasks} />);
+        await user.click(picker.getByRole("button", { name: "Attach issue" }));
+
+        expect(props.updateTask).not.toHaveBeenCalled();
+        expect(screen.getByRole("alert")).toHaveTextContent(error);
+        expect(screen.getByRole("button", { name: "Attach existing issue" })).toBeEnabled();
+    });
+
     it("loads the saved connection into the form", async () => {
         const access = fakeAccess();
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         expect(await screen.findByLabelText("Team key")).toHaveValue("ENG");
         expect(screen.getByLabelText("Included statuses")).toHaveValue("In Progress");
@@ -76,8 +160,10 @@ describe("LinearIntegrationCard", () => {
     it("connects with a token while leaving the team key blank for all teams", async () => {
         const user = userEvent.setup();
         const access = fakeAccess(null);
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
+        expect(await screen.findByLabelText("Linear API token")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Attach existing issue" })).not.toBeInTheDocument();
         await user.type(await screen.findByLabelText("Linear API token"), "secret-token");
         expect(screen.getByLabelText("Team key")).toHaveValue("");
         expect(screen.getByLabelText("Included statuses")).toHaveValue("");
@@ -90,13 +176,14 @@ describe("LinearIntegrationCard", () => {
             defaultProjectId: null,
         }));
         expect(await screen.findByText("Connected")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Attach existing issue" })).toBeEnabled();
         expect(screen.queryByLabelText("Linear API token")).not.toBeInTheDocument();
     });
 
     it("saves preferences and disconnects without requiring a team key", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         const teamKey = await screen.findByLabelText("Team key");
         await user.clear(teamKey);
@@ -120,7 +207,7 @@ describe("LinearIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess();
         const createTask = vi.fn().mockResolvedValue(createdTask("New issue"));
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Linear sync preview" });
@@ -155,7 +242,7 @@ describe("LinearIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess(connected, [{ ...newIssue, estimate: 3 }]);
         const createTask = vi.fn().mockResolvedValue(createdTask("New issue"));
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Linear sync preview" });
@@ -171,7 +258,7 @@ describe("LinearIntegrationCard", () => {
     it("shows discovered state names as toggleable hints", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         expect(screen.queryByLabelText("Discovered Linear states")).not.toBeInTheDocument();
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
@@ -198,7 +285,7 @@ describe("LinearIntegrationCard", () => {
             truncated: true,
             syncedAt: "2026-10-26T12:00:00.000Z",
         });
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Linear sync preview" });
@@ -216,7 +303,7 @@ describe("LinearIntegrationCard", () => {
             truncated: false,
             syncedAt: "2026-10-26T12:00:00.000Z",
         });
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Linear sync preview" });
@@ -230,7 +317,7 @@ describe("LinearIntegrationCard", () => {
         const currentTasks: PMTask[] = [{
             ...createdTask("Existing"), tags: ["linear:ENG-123"], links: [],
         }];
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={currentTasks} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={currentTasks} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Linear sync preview" });
@@ -241,7 +328,7 @@ describe("LinearIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess();
         access.sync.mockRejectedValueOnce(new LinearIntegrationError("LINEAR_TOKEN_INVALID", "invalid"));
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const invalidAlert = await screen.findByRole("alert");
@@ -268,7 +355,7 @@ describe("LinearIntegrationCard", () => {
             syncedAt: "2026-10-26T12:00:00.000Z",
         });
         const createTask = vi.fn().mockResolvedValueOnce(createdTask()).mockRejectedValueOnce(new Error("write failed"));
-        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<LinearIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         await user.click(await screen.findByRole("button", { name: "Create 2 tasks" }));

@@ -61,10 +61,32 @@ function createdTask(title = "Created"): PMTask {
 }
 
 describe("ShortcutIntegrationCard", () => {
+    it("attaches a retained story using its app URL and story type", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        const task = createdTask("Manual task");
+        const createTask = vi.fn();
+        const updateTask = vi.fn();
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[task]} projects={projects} createTask={createTask} updateTask={updateTask} />);
+
+        await user.click(await screen.findByRole("button", { name: "Sync now" }));
+        const preview = await screen.findByRole("dialog", { name: "Shortcut sync preview" });
+        await user.click(within(preview).getByRole("button", { name: "Cancel" }));
+        await user.click(screen.getByRole("button", { name: "Attach existing issue" }));
+        const picker = within(screen.getByRole("dialog", { name: "Attach existing issue" }));
+        await user.click(picker.getByRole("button", { name: /#1.*New story/ }));
+        await user.click(picker.getByRole("button", { name: /Manual task/ }));
+        await user.click(picker.getByRole("button", { name: "Attach issue" }));
+
+        expect(updateTask).toHaveBeenCalledExactlyOnceWith(task.id, { links: [newStory.app_url], tags: [newStory.story_type] });
+        expect(createTask).not.toHaveBeenCalled();
+        expect(access.sync).toHaveBeenCalledOnce();
+    });
+
     it("connects with a token and default included statuses", async () => {
         const user = userEvent.setup();
         const access = fakeAccess(null);
-        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.type(await screen.findByLabelText("Shortcut API token"), "secret-token");
         await user.type(screen.getByLabelText("Team"), "Data Thinkers");
@@ -83,7 +105,7 @@ describe("ShortcutIntegrationCard", () => {
     it("saves public preferences and disconnects", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         const team = await screen.findByLabelText("Team");
         await user.clear(team);
@@ -107,7 +129,7 @@ describe("ShortcutIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess();
         const createTask = vi.fn().mockResolvedValue(createdTask("New story"));
-        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Shortcut sync preview" });
@@ -145,7 +167,7 @@ describe("ShortcutIntegrationCard", () => {
             syncedAt: "2026-08-12T12:00:00.000Z",
         });
         const createTask = vi.fn().mockResolvedValue(createdTask());
-        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const dialog = await screen.findByRole("dialog", { name: "Shortcut sync preview" });
@@ -168,7 +190,7 @@ describe("ShortcutIntegrationCard", () => {
             syncedAt: "2026-08-12T12:00:00.000Z",
         });
         const createTask = vi.fn().mockResolvedValueOnce(createdTask()).mockRejectedValueOnce(new Error("write failed"));
-        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         await user.click(await screen.findByRole("button", { name: "Create 2 tasks" }));
@@ -181,7 +203,7 @@ describe("ShortcutIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess();
         access.sync.mockRejectedValueOnce(new ShortcutIntegrationError("SHORTCUT_TOKEN_INVALID", "invalid"));
-        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<ShortcutIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync now" }));
         const invalidAlert = await screen.findByRole("alert");

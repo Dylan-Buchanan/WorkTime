@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { ExternalIssueAttach } from "./ExternalIssueAttach";
+import { githubIssueCandidate, type ExternalIssueCandidate } from "../lib/engine/externalIssueAttach";
 import { isTauri } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight, GitPullRequest, X } from "lucide-react";
 import type { PMTask, Project } from "../state/types";
@@ -22,6 +24,8 @@ export interface GithubIntegrationCardProps {
     currentTasks: readonly PMTask[];
     projects: readonly Project[];
     createTask: (title: string, options: Partial<PMTask>) => Promise<PMTask>;
+    updateTask: (id: string, patch: Partial<PMTask>) => void;
+    knownShortcutStories?: readonly ExternalIssueCandidate[];
     navigateTo?: (url: string) => void;
 }
 
@@ -91,6 +95,8 @@ export function GithubIntegrationCard({
     currentTasks,
     projects,
     createTask,
+    updateTask,
+    knownShortcutStories,
     navigateTo = (url) => window.location.assign(url),
 }: GithubIntegrationCardProps) {
     const [settings, setSettings] = useState<GitHubSettings | null>(null);
@@ -103,6 +109,7 @@ export function GithubIntegrationCard({
     const [error, setError] = useState<string | null>(null);
     const [errorCode, setErrorCode] = useState<GitHubIntegrationError["code"] | null>(null);
     const [preview, setPreview] = useState<RepoPreview | null>(null);
+    const [attachCandidates, setAttachCandidates] = useState(new Map<string, ExternalIssueCandidate[]>());
     const [summaries, setSummaries] = useState<Record<string, RepoSyncSummary>>({});
     const [filter, setFilter] = useState("");
     const [expandedRepos, setExpandedRepos] = useState<Record<string, boolean>>({});
@@ -122,6 +129,10 @@ export function GithubIntegrationCard({
         () => repos.filter((repo) => repo.selected && !repo.isStale),
         [repos],
     );
+    const attachRepositories = useMemo(() => new Map(repos.flatMap((repo) => {
+        const candidates = attachCandidates.get(repo.fullName);
+        return !repo.isStale && candidates ? [[repo.fullName, candidates] as const] : [];
+    })), [attachCandidates, repos]);
 
     const selectedCount = repos.filter((repo) => repo.selected).length;
     const allVisibleSelected = visibleRepos.length > 0 && visibleRepos.every((repo) => repo.selected);
@@ -190,6 +201,7 @@ export function GithubIntegrationCard({
             setLabels({});
             setSummaries({});
             setPreview(null);
+            setAttachCandidates(new Map());
             setFilter("");
             setExpandedRepos({});
         } catch (caught) {
@@ -271,6 +283,11 @@ export function GithubIntegrationCard({
         try {
             await dataAccess.removeRepo(repo.fullName);
             setRepos((current) => current.filter((row) => row.fullName !== repo.fullName));
+            setAttachCandidates((current) => {
+                const next = new Map(current);
+                next.delete(repo.fullName);
+                return next;
+            });
             setSummaries((current) => {
                 const next = { ...current };
                 delete next[repo.fullName];
@@ -291,6 +308,10 @@ export function GithubIntegrationCard({
 
     async function syncOne(repo: GitHubRepoRow): Promise<RepoPreviewEntry> {
         const synced = await dataAccess.sync(repo.fullName, { isStale: repo.isStale });
+        setAttachCandidates((current) => new Map(current).set(
+            repo.fullName,
+            synced.issues.map((issue) => githubIssueCandidate(issue, repo.fullName)),
+        ));
         setSettings((current) => current ? { ...current, lastSyncedAt: synced.syncedAt } : current);
         return {
             fullName: repo.fullName,
@@ -517,6 +538,16 @@ export function GithubIntegrationCard({
                     )}
 
                     <div className="flex flex-wrap items-center gap-2">
+                        <ExternalIssueAttach
+                            provider="github"
+                            repositories={attachRepositories}
+                            tasks={currentTasks}
+                            projects={projects}
+                            knownShortcutStories={knownShortcutStories}
+                            disabled={anyBusy || preview !== null}
+                            updateTask={updateTask}
+                            onError={(message) => { clearError(); setError(message); }}
+                        />
                         <button
                             type="button"
                             onClick={() => void disconnect()}

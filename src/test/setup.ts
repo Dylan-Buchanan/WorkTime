@@ -6,6 +6,12 @@ afterEach(() => {
     cleanup();
 });
 
+// jsdom exposes HTMLDialogElement without the modal methods.
+if (!HTMLDialogElement.prototype.showModal) {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    HTMLDialogElement.prototype.close = function () { this.open = false; };
+}
+
 // jsdom does not implement matchMedia; recharts/others touch it during render.
 if (typeof window !== "undefined" && !window.matchMedia) {
     (window as any).matchMedia = (query: string) => ({

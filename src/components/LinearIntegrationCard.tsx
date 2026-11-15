@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { ExternalIssueAttach } from "./ExternalIssueAttach";
+import { linearIssueCandidate, type ExternalIssueCandidate } from "../lib/engine/externalIssueAttach";
 import { Workflow, X } from "lucide-react";
 import type { PMTask, Project } from "../state/types";
 import {
@@ -18,6 +20,8 @@ export interface LinearIntegrationCardProps {
     currentTasks: readonly PMTask[];
     projects: readonly Project[];
     createTask: (title: string, options: Partial<PMTask>) => Promise<PMTask>;
+    updateTask: (id: string, patch: Partial<PMTask>) => void;
+    knownShortcutStories?: readonly ExternalIssueCandidate[];
 }
 
 interface SyncSummary {
@@ -55,7 +59,7 @@ function formatLastSynced(value: string | null): string {
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export function LinearIntegrationCard({ dataAccess, currentTasks, projects, createTask }: LinearIntegrationCardProps) {
+export function LinearIntegrationCard({ dataAccess, currentTasks, projects, createTask, updateTask, knownShortcutStories }: LinearIntegrationCardProps) {
     const [settings, setSettings] = useState<LinearSettings | null>(null);
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState<"connect" | "save" | "disconnect" | "sync" | "create" | null>(null);
@@ -67,6 +71,7 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
     const [error, setError] = useState<string | null>(null);
     const [errorCode, setErrorCode] = useState<LinearIntegrationError["code"] | null>(null);
     const [preview, setPreview] = useState<LinearClassificationResult | null>(null);
+    const [attachCandidates, setAttachCandidates] = useState<ExternalIssueCandidate[]>([]);
     const [summary, setSummary] = useState<SyncSummary | null>(null);
     const [discoveredStates, setDiscoveredStates] = useState<string[]>([]);
     const [truncated, setTruncated] = useState(false);
@@ -135,6 +140,7 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
         setBusy("connect");
         try {
             await dataAccess.connect({ token, teamKey, includedStatuses, defaultProjectId: defaultProjectId || null });
+            setAttachCandidates([]);
             const now = new Date().toISOString();
             applySettings({
                 teamKey: teamKey.trim() || null,
@@ -158,6 +164,7 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
         setBusy("save");
         try {
             await dataAccess.updatePreferences({ teamKey, includedStatuses, defaultProjectId: defaultProjectId || null });
+            if ((teamKey.trim() || null) !== settings.teamKey) setAttachCandidates([]);
             setSettings({
                 ...settings,
                 teamKey: teamKey.trim() || null,
@@ -186,6 +193,7 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
             setReconnecting(false);
             setSummary(null);
             setPreview(null);
+            setAttachCandidates([]);
             setDiscoveredStates([]);
             setTruncated(false);
         } catch (caught) {
@@ -202,6 +210,7 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
         setBusy("sync");
         try {
             const synced = await dataAccess.sync();
+            setAttachCandidates(synced.issues.map(linearIssueCandidate));
             setSettings({ ...settings, lastSyncedAt: synced.syncedAt });
             setDiscoveredStates(synced.states);
             setTruncated(synced.truncated);
@@ -355,6 +364,16 @@ export function LinearIntegrationCard({ dataAccess, currentTasks, projects, crea
                                 <button type="button" title={settingsDirty ? "Save settings before syncing" : undefined} onClick={() => void syncNow()} disabled={busy !== null || settingsDirty} className="rounded bg-neutral-100 px-3 py-1.5 text-[10px] font-medium text-neutral-950 disabled:cursor-not-allowed disabled:opacity-40">
                                     {busy === "sync" ? "Syncing…" : "Sync now"}
                                 </button>
+                                <ExternalIssueAttach
+                                    provider="linear"
+                                    candidates={attachCandidates}
+                                    tasks={currentTasks}
+                                    projects={projects}
+                                    knownShortcutStories={knownShortcutStories}
+                                    disabled={busy !== null || preview !== null}
+                                    updateTask={updateTask}
+                                    onError={(message) => { clearError(); setError(message); }}
+                                />
                                 <button type="button" onClick={() => void savePreferences()} disabled={busy !== null} className="rounded border border-neutral-700 px-3 py-1.5 text-[10px] text-neutral-200 disabled:opacity-40">
                                     {busy === "save" ? "Saving…" : "Save settings"}
                                 </button>

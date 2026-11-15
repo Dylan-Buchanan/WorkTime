@@ -124,7 +124,7 @@ const ProjectManagerRoute: React.FC = () => {
 
 const AuthenticatedIntegrationsRoute: React.FC = () => {
     const { session } = useAuth();
-    const { state, createTask } = usePM();
+    const { state, createTask, updateTask } = usePM();
     const dataAccess = useMemo(
         () => new SupabaseShortcutDataAccess(supabase, session!.user.id),
         [session?.user.id],
@@ -144,10 +144,10 @@ const AuthenticatedIntegrationsRoute: React.FC = () => {
     const currentTasks = useMemo(() => Object.values(state.tasks), [state.tasks]);
     const projects = useMemo(() => Object.values(state.projects), [state.projects]);
     return <IntegrationsPage
-        shortcut={{ dataAccess, currentTasks, projects, createTask }}
-        linear={{ dataAccess: linearDataAccess, currentTasks, projects, createTask }}
+        shortcut={{ dataAccess, currentTasks, projects, createTask, updateTask }}
+        linear={{ dataAccess: linearDataAccess, currentTasks, projects, createTask, updateTask }}
         googleCalendar={{ dataAccess: googleCalendarDataAccess }}
-        github={{ dataAccess: githubDataAccess, currentTasks, projects, createTask }}
+        github={{ dataAccess: githubDataAccess, currentTasks, projects, createTask, updateTask }}
     />;
 };
 

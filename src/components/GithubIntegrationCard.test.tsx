@@ -82,11 +82,54 @@ function createdTask(title = "Created"): PMTask {
 }
 
 describe("GithubIntegrationCard", () => {
+    it("offers only synced repositories and scopes the issue list to the chosen one", async () => {
+        const user = userEvent.setup();
+        const access = fakeAccess();
+        const secondRepo = "octocat/second";
+        const secondIssue = { ...syncResult.issues[0], title: "Fix the second repo", html_url: `https://github.com/${secondRepo}/issues/7` };
+        access.listRepos.mockResolvedValue({
+            ...repoList,
+            repos: [
+                ...repoList.repos,
+                { ...repoList.repos[0], fullName: secondRepo },
+                { ...repoList.repos[0], fullName: "octocat/unsynced" },
+            ],
+        });
+        access.sync.mockResolvedValueOnce(syncResult).mockResolvedValueOnce({
+            ...syncResult, repo: { ...syncResult.repo, fullName: secondRepo }, issues: [secondIssue],
+        });
+        const task = createdTask("Manual task");
+        const createTask = vi.fn();
+        const updateTask = vi.fn();
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[task]} projects={projects} createTask={createTask} updateTask={updateTask} />);
+
+        for (const repo of [syncResult.repo.fullName, secondRepo]) {
+            await user.click(await screen.findByRole("button", { name: `Sync ${repo}` }));
+            const preview = await screen.findByRole("dialog", { name: "GitHub sync preview" });
+            await user.click(within(preview).getByRole("button", { name: "Cancel" }));
+        }
+        await user.click(screen.getByRole("button", { name: "Attach existing issue" }));
+        const picker = within(screen.getByRole("dialog", { name: "Attach existing issue" }));
+        expect(picker.queryByRole("list", { name: "Available issues" })).not.toBeInTheDocument();
+        expect(picker.getAllByRole("option").map((option) => option.textContent)).toEqual([
+            "Choose a synced repository", syncResult.repo.fullName, secondRepo,
+        ]);
+        await user.selectOptions(picker.getByLabelText("Repository"), secondRepo);
+        expect(picker.queryByRole("button", { name: /Fix sync/ })).not.toBeInTheDocument();
+        await user.click(picker.getByRole("button", { name: /#7.*Fix the second repo/ }));
+        await user.click(picker.getByRole("button", { name: /Manual task/ }));
+        await user.click(picker.getByRole("button", { name: "Attach issue" }));
+
+        expect(updateTask).toHaveBeenCalledExactlyOnceWith(task.id, { links: [secondIssue.html_url], tags: [secondRepo] });
+        expect(createTask).not.toHaveBeenCalled();
+        expect(access.sync).toHaveBeenCalledTimes(2);
+    });
+
     it("starts the OAuth authorize redirect from the connect button", async () => {
         const user = userEvent.setup();
         const access = fakeAccess(null);
         const navigateTo = vi.fn();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} navigateTo={navigateTo} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} navigateTo={navigateTo} />);
 
         await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
 
@@ -100,7 +143,7 @@ describe("GithubIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess(null);
         access.beginAuthorization.mockRejectedValue(new GitHubIntegrationError("GITHUB_NOT_CONFIGURED", "Not configured"));
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} navigateTo={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} navigateTo={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
 
@@ -111,7 +154,7 @@ describe("GithubIntegrationCard", () => {
     it("loads the connected username and repo rows with collapsed per-repo controls", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         expect(await screen.findByText("Connected")).toBeInTheDocument();
         expect(screen.getByText(/Signed in as/)).toHaveTextContent("octocat");
@@ -133,7 +176,7 @@ describe("GithubIntegrationCard", () => {
     it("saves per-repo option and selection edits", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Toggle options for octocat/hello-world" }));
         await user.selectOptions(screen.getByLabelText("Project for octocat/hello-world"), "project-2");
@@ -165,7 +208,7 @@ describe("GithubIntegrationCard", () => {
         const user = userEvent.setup();
         const access = fakeAccess();
         const createTask = vi.fn().mockResolvedValue(createdTask("Fix sync"));
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync octocat/hello-world" }));
         const dialog = await screen.findByRole("dialog", { name: "GitHub sync preview" });
@@ -203,7 +246,7 @@ describe("GithubIntegrationCard", () => {
             ],
         });
         const createTask = vi.fn().mockResolvedValue(createdTask());
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync octocat/hello-world" }));
         const dialog = await screen.findByRole("dialog", { name: "GitHub sync preview" });
@@ -223,7 +266,7 @@ describe("GithubIntegrationCard", () => {
         const access = fakeAccess();
         access.sync.mockResolvedValue({ ...syncResult, issues: [] });
         const createTask = vi.fn();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync octocat/hello-world" }));
         const dialog = await screen.findByRole("dialog", { name: "GitHub sync preview" });
@@ -235,7 +278,7 @@ describe("GithubIntegrationCard", () => {
     it("shows the zero-repository empty state", async () => {
         const access = fakeAccess();
         access.listRepos.mockResolvedValue({ repos: [], labels: {} });
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         expect(await screen.findByText(/No repositories are tracked yet/)).toBeInTheDocument();
         expect(screen.queryByLabelText("Project for octocat/hello-world")).not.toBeInTheDocument();
@@ -252,7 +295,7 @@ describe("GithubIntegrationCard", () => {
             ],
         });
         const createTask = vi.fn().mockResolvedValueOnce(createdTask()).mockRejectedValueOnce(new Error("write failed"));
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync octocat/hello-world" }));
         await user.click(await screen.findByRole("button", { name: "Create 2 tasks" }));
@@ -266,7 +309,7 @@ describe("GithubIntegrationCard", () => {
         const access = fakeAccess();
         const navigateTo = vi.fn();
         access.sync.mockRejectedValueOnce(new GitHubIntegrationError("GITHUB_TOKEN_INVALID", "invalid"));
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} navigateTo={navigateTo} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} navigateTo={navigateTo} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync octocat/hello-world" }));
         const invalidAlert = await screen.findByRole("alert");
@@ -282,7 +325,7 @@ describe("GithubIntegrationCard", () => {
     it("keeps stale repos editable but not syncable, and removable", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         expect(await screen.findByText("No longer accessible")).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Sync octocat/gone" })).not.toBeInTheDocument();
@@ -307,7 +350,7 @@ describe("GithubIntegrationCard", () => {
     it("selects and deselects all repositories at once", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await screen.findByText("Connected");
         expect(screen.getByLabelText("Select all repositories")).toBeChecked();
@@ -351,7 +394,7 @@ describe("GithubIntegrationCard", () => {
                 repo: { fullName: "octocat/second", projectId: null, labelFilter: null, includeClosed: false },
             });
         const createTask = vi.fn().mockResolvedValue(createdTask());
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={createTask} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync selected (2)" }));
 
@@ -386,7 +429,7 @@ describe("GithubIntegrationCard", () => {
             if (fullName === "octocat/second") throw new GitHubIntegrationError("GITHUB_REPO_NOT_FOUND", "gone");
             return syncResult;
         });
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Sync selected (2)" }));
 
@@ -398,7 +441,7 @@ describe("GithubIntegrationCard", () => {
     it("filters the repository list by search", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await screen.findByText("Connected");
         await user.type(screen.getByLabelText("Search repositories"), "hello");
@@ -414,7 +457,7 @@ describe("GithubIntegrationCard", () => {
     it("disconnects the GitHub connection", async () => {
         const user = userEvent.setup();
         const access = fakeAccess();
-        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} />);
+        render(<GithubIntegrationCard dataAccess={access} currentTasks={[]} projects={projects} createTask={vi.fn()} updateTask={vi.fn()} />);
 
         await user.click(await screen.findByRole("button", { name: "Disconnect" }));
         await waitFor(() => expect(access.disconnect).toHaveBeenCalledOnce());

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CalendarDays, GitPullRequest, Milestone, Workflow, type LucideIcon } from "lucide-react";
 import {
     integrationRegistry,
@@ -10,6 +10,7 @@ import { ShortcutIntegrationCard, type ShortcutIntegrationCardProps } from "./Sh
 import { LinearIntegrationCard, type LinearIntegrationCardProps } from "./LinearIntegrationCard";
 import { GoogleCalendarIntegrationCard, type GoogleCalendarIntegrationCardProps } from "./GoogleCalendarIntegrationCard";
 import { GithubIntegrationCard, type GithubIntegrationCardProps } from "./GithubIntegrationCard";
+import type { ExternalIssueCandidate } from "../lib/engine/externalIssueAttach";
 
 const ICONS: Record<IntegrationIcon, LucideIcon> = {
     calendar: CalendarDays,
@@ -26,10 +27,10 @@ const AUTH_FLOW_LABELS: Record<IntegrationAuthFlow, string> = {
 export interface IntegrationsPageProps {
     integrations?: readonly IntegrationDefinition[];
     renderActions?: (integration: IntegrationDefinition) => ReactNode;
-    shortcut?: ShortcutIntegrationCardProps;
-    linear?: LinearIntegrationCardProps;
+    shortcut?: Omit<ShortcutIntegrationCardProps, "onSyncedStoriesChange">;
+    linear?: Omit<LinearIntegrationCardProps, "knownShortcutStories">;
     googleCalendar?: GoogleCalendarIntegrationCardProps;
-    github?: GithubIntegrationCardProps;
+    github?: Omit<GithubIntegrationCardProps, "knownShortcutStories">;
 }
 
 export const IntegrationsPage = ({
@@ -39,32 +40,36 @@ export const IntegrationsPage = ({
     linear,
     googleCalendar,
     github,
-}: IntegrationsPageProps) => (
-    <div className="flex h-full min-h-0 flex-col">
-        <header className="border-b border-neutral-800 bg-neutral-950/80 px-4 py-3 backdrop-blur">
-            <h1 className="text-base font-semibold">Integrations</h1>
-            <p className="text-[10px] text-neutral-500">Connect WorkTime with the tools that support your day.</p>
-        </header>
+}: IntegrationsPageProps) => {
+    const [knownShortcutStories, setKnownShortcutStories] = useState<readonly ExternalIssueCandidate[]>([]);
 
-        <main className="app-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="mx-auto max-w-6xl">
-                <section className="grid gap-3 sm:grid-cols-2" aria-label="Available integrations">
-                    {integrations.map((integration) => integration.id === "shortcut" && shortcut ? (
-                        <ShortcutIntegrationCard key={integration.id} {...shortcut} />
-                    ) : integration.id === "linear" && linear ? (
-                        <LinearIntegrationCard key={integration.id} {...linear} />
-                    ) : integration.id === "google-calendar" && googleCalendar ? (
-                        <GoogleCalendarIntegrationCard key={integration.id} {...googleCalendar} />
-                    ) : integration.id === "github" && github ? (
-                        <GithubIntegrationCard key={integration.id} {...github} />
-                    ) : (
-                        <IntegrationCard key={integration.id} integration={integration} actions={renderActions?.(integration)} />
-                    ))}
-                </section>
-            </div>
-        </main>
-    </div>
-);
+    return (
+        <div className="flex h-full min-h-0 flex-col">
+            <header className="border-b border-neutral-800 bg-neutral-950/80 px-4 py-3 backdrop-blur">
+                <h1 className="text-base font-semibold">Integrations</h1>
+                <p className="text-[10px] text-neutral-500">Connect WorkTime with the tools that support your day.</p>
+            </header>
+
+            <main className="app-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
+                <div className="mx-auto max-w-6xl">
+                    <section className="grid gap-3 sm:grid-cols-2" aria-label="Available integrations">
+                        {integrations.map((integration) => integration.id === "shortcut" && shortcut ? (
+                            <ShortcutIntegrationCard key={integration.id} {...shortcut} onSyncedStoriesChange={setKnownShortcutStories} />
+                        ) : integration.id === "linear" && linear ? (
+                            <LinearIntegrationCard key={integration.id} {...linear} knownShortcutStories={knownShortcutStories} />
+                        ) : integration.id === "google-calendar" && googleCalendar ? (
+                            <GoogleCalendarIntegrationCard key={integration.id} {...googleCalendar} />
+                        ) : integration.id === "github" && github ? (
+                            <GithubIntegrationCard key={integration.id} {...github} knownShortcutStories={knownShortcutStories} />
+                        ) : (
+                            <IntegrationCard key={integration.id} integration={integration} actions={renderActions?.(integration)} />
+                        ))}
+                    </section>
+                </div>
+            </main>
+        </div>
+    );
+};
 
 const IntegrationCard = ({
     integration,
