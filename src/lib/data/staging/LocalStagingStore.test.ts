@@ -1,3 +1,4 @@
+import { composeEnergyEntry } from "../../energy";
 import { describe, expect, it, vi } from "vitest";
 import { makeAppState, makeActiveTimer } from "../../../test/mockTauri";
 import type { Habit, HabitCompletion } from "../../../state/types";
@@ -78,7 +79,7 @@ function makeBaseline(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         pmState: { value: null, updatedAt: null },
         petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
         goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
-        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
+        petNapRecords: {}, energyEntries: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -157,7 +158,7 @@ describe("LocalStagingStore", () => {
         }));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.goalTrackers).toEqual({ [tracker.id]: tracker });
         expect(migrated.goals).toEqual({ linked, unlinked });
         expect(migrated.goalCheckIns).toEqual({ [checkIn.id]: checkIn });
@@ -322,7 +323,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.petActivityRecords).toEqual({});
         expect(migrated.petActivityUpdatedAt).toEqual({});
         expect(migrated.petActivityTombstones).toEqual({});
@@ -364,7 +365,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petProfileTombstone).toBeNull();
@@ -432,7 +433,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.petProfile).toBeNull();
         expect(migrated.petProfileUpdatedAt).toBeNull();
         expect(migrated.petScheduleItems).toEqual({});
@@ -505,7 +506,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.petTrainingSkills).toEqual({});
         expect(migrated.petFixations).toEqual({});
 
@@ -561,7 +562,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.petNotableEvents).toEqual({});
         expect(migrated.petNotableEventUpdatedAt).toEqual({});
         expect(migrated.petNotableEventTombstones).toEqual({});
@@ -737,8 +738,8 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, "{not json");
         expect(() => store.read(OWNER_A)).toThrow(/not valid JSON/);
 
-        // Only numeric literal versions 1 through 11 are accepted.
-        for (const version of [0, 12, 999]) {
+        // Only numeric literal versions 1 through 12 are accepted.
+        for (const version of [0, 13, 999]) {
             window.localStorage.setItem(key, JSON.stringify({ schemaVersion: version, ownerId: OWNER_A }));
             expect(() => store.read(OWNER_A)).toThrow(/Unsupported staging schema version/);
         }
@@ -970,7 +971,7 @@ describe("LocalStagingStore", () => {
         }));
 
         const record = store.read(OWNER_A);
-        expect(record.schemaVersion).toBe(11);
+        expect(record.schemaVersion).toBe(12);
         expect(record.habits.h1.name).toBe("Saved");
         expect(record.habitUpdatedAt.h1).toBe("2026-01-02T00:00:00.000Z");
         expect(record.habitCompletions.c1.bucket).toBe("2026-01-02");
@@ -1026,7 +1027,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.state.tasks.t1).toEqual(BASE_TASK);
         expect(stagingKey(OWNER_A)).toBe(key);
     });
@@ -1046,7 +1047,7 @@ describe("LocalStagingStore", () => {
         const migrated = parseStagedOwnerRecord(JSON.stringify(legacy), OWNER_A);
         const expected = { ...legacy };
         delete (expected as Record<string, unknown>)["inProgress" + "Pomodoros"];
-        expect(migrated).toEqual({ ...expected, schemaVersion: 11, state: { ...legacy.state,
+        expect(migrated).toEqual({ ...expected, schemaVersion: 12, state: { ...legacy.state,
             timer: kind === "Work" ? { ...oldTimer, window_started_at: "2026-01-01T00:00:00.000Z" } : oldTimer } });
         expect(migrated.pendingCompletions).toEqual(legacy.pendingCompletions);
         expect(migrated.lastSynced).toEqual(legacy.lastSynced);
@@ -1064,7 +1065,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.state.settings.end_of_day).toBe("22:00");
         expect(migrated.lastSynced?.settings.value?.end_of_day).toBe("22:00");
         expect(store.pendingCount(OWNER_A)).toBe(0);
@@ -1081,7 +1082,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(legacy));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.state.settings.start_of_day).toBe("00:00");
         expect(migrated.lastSynced?.settings.value?.start_of_day).toBe("00:00");
         expect(store.pendingCount(OWNER_A)).toBe(0);
@@ -1106,7 +1107,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(v2));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         expect(migrated.todos).toEqual({});
         expect(migrated.todoUpdatedAt).toEqual({});
         expect(migrated.todoTombstones).toEqual({});
@@ -1152,7 +1153,7 @@ describe("LocalStagingStore", () => {
         window.localStorage.setItem(key, JSON.stringify(degraded));
 
         const migrated = store.read(OWNER_A);
-        expect(migrated.schemaVersion).toBe(11);
+        expect(migrated.schemaVersion).toBe(12);
         // Every legacy value survives the in-memory migration.
         expect(migrated.state.tasks.t1.name).toBe("Legacy task");
         expect(migrated.state.logs).toEqual([{ ...BASE_LOG }]);
@@ -1179,7 +1180,7 @@ describe("LocalStagingStore", () => {
         // One safe staged update stays on schema 8 at the same v1-prefixed key and
         // never creates a worktime:staging:v2:* key.
         await store.update(OWNER_A, (r) => ({ ...r, state: { ...r.state, active_task: "t1" } }));
-        expect(store.read(OWNER_A).schemaVersion).toBe(11);
+        expect(store.read(OWNER_A).schemaVersion).toBe(12);
         const keys: string[] = [];
         for (let i = 0; i < window.localStorage.length; i += 1) keys.push(window.localStorage.key(i) as string);
         expect(keys.filter((candidate) => candidate.startsWith("worktime:staging:"))).toEqual([key]);
@@ -1294,7 +1295,7 @@ describe("log work-window staging compatibility", () => {
             lastSynced: makeBaseline({ logs: Object.fromEntries(logs.map((log) => [log.id, log])) }),
         }));
         const loaded = new LocalStagingStore(storage).read(OWNER_A);
-        expect(loaded.schemaVersion).toBe(11);
+        expect(loaded.schemaVersion).toBe(12);
         expect(loaded.state.logs).toEqual(logs);
         expect(loaded.lastSynced?.logs).toEqual(Object.fromEntries(logs.map((log) => [log.id, log])));
         expect(loaded.state.logs[2]).not.toHaveProperty("work_window_id");
@@ -1307,5 +1308,56 @@ describe("log work-window staging compatibility", () => {
             ? { ...record, state: { ...record.state, logs: [malformed] } }
             : { ...record, lastSynced: makeBaseline({ logs: { [BASE_LOG.id]: malformed } as unknown as SyncSnapshot["logs"] }) };
         expect(() => parseStagedOwnerRecord(JSON.stringify(raw), OWNER_A)).toThrow(StagingStorageError);
+    });
+});
+
+describe("energy staging format", () => {
+    const owner = "energy-validation";
+    const fresh = () => new LocalStagingStore(corruptStorage({})).read(owner);
+    const row = () => composeEnergyEntry({ workWindowId: "window", prefill: { energy: 4, clarity: 3 }, explicit: {}, now: "now" });
+    it.each([undefined, null])("normalizes absent/null ratings and absent carried flags (%s)", rating => {
+        const value = { ...row(), energy: rating, clarity: rating, energy_carried: undefined, clarity_carried: undefined };
+        const loaded = parseStagedOwnerRecord(JSON.stringify({ ...fresh(), energyEntries: { window: value } }), owner);
+        expect(loaded.energyEntries.window).toEqual({ ...row(), energy: null, clarity: null, energy_carried: false, clarity_carried: false });
+    });
+    it.each([
+        { energy: "3" }, { energy: 0 }, { energy: 6 }, { energy: 2.5 },
+        { clarity: "3" }, { clarity: 0 }, { clarity: 6 }, { clarity: 2.5 },
+        { caffeine: undefined }, { caffeine: 1 }, { energy_carried: "true" }, { clarity_carried: null },
+        { work_window_id: "wrong-key" }, { work_window_id: "" },
+    ])("drops malformed siblings %j in local rows and baseline", patch => {
+        const good = row();
+        const bad = { ...good, work_window_id: "bad", ...patch };
+        const baseline = { ...makeBaseline(), energyEntries: { window: { value: good, updatedAt: "now" }, bad: { value: bad, updatedAt: "now" } } };
+        const loaded = parseStagedOwnerRecord(JSON.stringify({ ...fresh(), energyEntries: { window: good, bad }, lastSynced: baseline }), owner);
+        expect(loaded.energyEntries).toEqual({ window: good });
+        expect(loaded.lastSynced?.energyEntries).toEqual({ window: { value: good, updatedAt: "now" } });
+    });
+    it("migrates v11 and v1 through v12 and rejects v13/unknown", () => {
+        for (const version of [11, 1]) {
+            const legacy = { ...fresh(), schemaVersion: version, lastSynced: makeBaseline() } as Record<string, unknown>;
+            delete legacy.energyEntries; delete legacy.energyUpdatedAt;
+            delete (legacy.lastSynced as Record<string, unknown>).energyEntries;
+            const loaded = parseStagedOwnerRecord(JSON.stringify(legacy), owner);
+            expect(loaded.schemaVersion).toBe(12);
+            expect(loaded.energyEntries).toEqual({});
+            expect(loaded.energyUpdatedAt).toEqual({});
+            expect(loaded.lastSynced?.energyEntries).toEqual({});
+        }
+        for (const version of [13, "unknown"]) expect(() =>
+            parseStagedOwnerRecord(JSON.stringify({ ...fresh(), schemaVersion: version }), owner)).toThrow(StagingStorageError);
+    });
+    it("rejects a non-current update and counts an energy row as pending", async () => {
+        const store = new LocalStagingStore(corruptStorage({}));
+        await expect(store.update(owner, current => ({ ...current, schemaVersion: 11 } as unknown as StagedOwnerRecord))).rejects.toThrow(StagingStorageError);
+        const baseline = makeBaseline();
+        await store.update(owner, current => ({ ...current, initialized: true, lastSynced: baseline,
+            state: makeAppState({ tasks: { t1: { ...BASE_TASK } }, logs: [{ ...BASE_LOG }] }),
+            settingsUpdatedAt: baseline.settings.updatedAt, timerUpdatedAt: baseline.timerState.updatedAt }));
+        expect(store.pendingCount(owner)).toBe(0);
+        await store.update(owner, current => ({ ...current, energyEntries: { window: row() }, energyUpdatedAt: { window: "now" } }));
+        expect(store.pendingCount(owner)).toBe(1);
+        await store.discardPendingChanges(owner);
+        expect(store.read(owner).energyEntries).toEqual({});
     });
 });

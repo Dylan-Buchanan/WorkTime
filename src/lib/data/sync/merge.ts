@@ -51,6 +51,7 @@ const EMPTY_SNAPSHOT: SyncSnapshot = {
     petProfile: { value: null, updatedAt: null },
     petScheduleItems: {},
     petNapRecords: {},
+    energyEntries: {},
     petWeightEntries: {},
     petTrainingSkills: {},
     petFixations: {},
@@ -839,6 +840,7 @@ function countPetDeltas(record: StagedOwnerRecord, base: SyncSnapshot): number {
     let count = countVersionedDeltas(record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
     count += countVersionedDeltas(record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
     count += countVersionedDeltas(record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords);
+    count += countVersionedDeltas(record.energyEntries, record.energyUpdatedAt, {}, base.energyEntries);
     count += countVersionedDeltas(record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries);
     count += countVersionedDeltas(record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills);
     count += countVersionedDeltas(record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations);
@@ -888,6 +890,7 @@ function mergePetPatch(record: StagedOwnerRecord, base: SyncSnapshot, remote: Sy
     const activity = mergeVersionedCollection("pet activity", record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords, remote.petActivityRecords);
     const schedule = mergeVersionedCollection("pet schedule item", record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems, remote.petScheduleItems);
     const naps = mergeVersionedCollection("pet nap", record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords, remote.petNapRecords);
+    const energy = mergeVersionedCollection("energy", record.energyEntries, record.energyUpdatedAt, {}, base.energyEntries, remote.energyEntries);
     const weights = mergeVersionedCollection("pet weight entry", record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries, remote.petWeightEntries);
     const skills = mergeVersionedCollection("pet training skill", record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills, remote.petTrainingSkills);
     const fixations = mergeVersionedCollection("pet fixation", record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations, remote.petFixations);
@@ -898,6 +901,7 @@ function mergePetPatch(record: StagedOwnerRecord, base: SyncSnapshot, remote: Sy
         petProfile: profile.value, petProfileUpdatedAt: profile.stamp, petProfileTombstone: profile.tombstone,
         petScheduleItems: schedule.values as Record<string, PetScheduleItem>, petScheduleUpdatedAt: schedule.stamps, petScheduleTombstones: schedule.tombstones,
         petNapRecords: naps.values as Record<string, PetNapRecord>, petNapUpdatedAt: naps.stamps, petNapTombstones: naps.tombstones,
+        energyEntries: energy.values, energyUpdatedAt: energy.stamps,
         petWeightEntries: weights.values as Record<string, PetWeightEntry>, petWeightUpdatedAt: weights.stamps, petWeightTombstones: weights.tombstones,
         petTrainingSkills: skills.values as Record<string, PetTrainingSkill>, petTrainingSkillUpdatedAt: skills.stamps, petTrainingSkillTombstones: skills.tombstones,
         petFixations: fixations.values as Record<string, PetFixation>, petFixationUpdatedAt: fixations.stamps, petFixationTombstones: fixations.tombstones,
@@ -1377,6 +1381,7 @@ function petDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
     const activity = versionedCollectionDeltas("Pet activity", record.petActivityRecords, record.petActivityUpdatedAt, record.petActivityTombstones, base.petActivityRecords);
     const schedule = versionedCollectionDeltas("Pet schedule item", record.petScheduleItems, record.petScheduleUpdatedAt, record.petScheduleTombstones, base.petScheduleItems);
     const naps = versionedCollectionDeltas("Pet nap", record.petNapRecords, record.petNapUpdatedAt, record.petNapTombstones, base.petNapRecords);
+    const energy = versionedCollectionDeltas("Energy", record.energyEntries, record.energyUpdatedAt, {}, base.energyEntries);
     const weights = versionedCollectionDeltas("Pet weight entry", record.petWeightEntries, record.petWeightUpdatedAt, record.petWeightTombstones, base.petWeightEntries);
     const skills = versionedCollectionDeltas("Pet training skill", record.petTrainingSkills, record.petTrainingSkillUpdatedAt, record.petTrainingSkillTombstones, base.petTrainingSkills);
     const fixations = versionedCollectionDeltas("Pet fixation", record.petFixations, record.petFixationUpdatedAt, record.petFixationTombstones, base.petFixations);
@@ -1392,7 +1397,7 @@ function petDeltasOf(record: StagedOwnerRecord, base: SyncSnapshot) {
         ? { ...record.petProfileTombstone }
         : null;
     const profileTombstoneAck = profileTombstone ? { deletedAt: profileTombstone.deletedAt } : null;
-    return { activity, schedule, naps, weights, skills, fixations, events, profile, profileAck, profileTombstone, profileTombstoneAck };
+    return { activity, schedule, naps, energy, weights, skills, fixations, events, profile, profileAck, profileTombstone, profileTombstoneAck };
 }
 
 function petPlanFields(pets: ReturnType<typeof petDeltasOf>) {
@@ -1401,6 +1406,7 @@ function petPlanFields(pets: ReturnType<typeof petDeltasOf>) {
         petProfile: pets.profile, petProfileTombstone: pets.profileTombstone,
         petScheduleUpserts: pets.schedule.upserts, petScheduleTombstones: pets.schedule.tombstones,
         petNapUpserts: pets.naps.upserts, petNapTombstones: pets.naps.tombstones,
+        energyUpserts: pets.energy.upserts,
         petWeightUpserts: pets.weights.upserts, petWeightTombstones: pets.weights.tombstones,
         petTrainingSkillUpserts: pets.skills.upserts, petTrainingSkillTombstones: pets.skills.tombstones,
         petFixationUpserts: pets.fixations.upserts, petFixationTombstones: pets.fixations.tombstones,
@@ -1414,6 +1420,7 @@ function petAckFields(pets: ReturnType<typeof petDeltasOf>) {
         petProfile: pets.profileAck, petProfileTombstone: pets.profileTombstoneAck,
         petScheduleUpserts: pets.schedule.upsertAcks, petScheduleTombstones: pets.schedule.tombstoneAcks,
         petNapUpserts: pets.naps.upsertAcks, petNapTombstones: pets.naps.tombstoneAcks,
+        energyUpserts: pets.energy.upsertAcks,
         petWeightUpserts: pets.weights.upsertAcks, petWeightTombstones: pets.weights.tombstoneAcks,
         petTrainingSkillUpserts: pets.skills.upsertAcks, petTrainingSkillTombstones: pets.skills.tombstoneAcks,
         petFixationUpserts: pets.fixations.upsertAcks, petFixationTombstones: pets.fixations.tombstoneAcks,
@@ -1791,6 +1798,7 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
     const petActivity = clearAcknowledgedCollection(next.petActivityRecords, next.petActivityUpdatedAt, next.petActivityTombstones, ack.petActivityUpserts, ack.petActivityTombstones);
     const petSchedule = clearAcknowledgedCollection(next.petScheduleItems, next.petScheduleUpdatedAt, next.petScheduleTombstones, ack.petScheduleUpserts, ack.petScheduleTombstones);
     const petNaps = clearAcknowledgedCollection(next.petNapRecords, next.petNapUpdatedAt, next.petNapTombstones, ack.petNapUpserts, ack.petNapTombstones);
+    const energy = clearAcknowledgedCollection(next.energyEntries, next.energyUpdatedAt, {}, ack.energyUpserts, {});
     const petWeights = clearAcknowledgedCollection(next.petWeightEntries, next.petWeightUpdatedAt, next.petWeightTombstones, ack.petWeightUpserts, ack.petWeightTombstones);
     const petSkills = clearAcknowledgedCollection(next.petTrainingSkills, next.petTrainingSkillUpdatedAt, next.petTrainingSkillTombstones, ack.petTrainingSkillUpserts, ack.petTrainingSkillTombstones);
     const petFixations = clearAcknowledgedCollection(next.petFixations, next.petFixationUpdatedAt, next.petFixationTombstones, ack.petFixationUpserts, ack.petFixationTombstones);
@@ -1803,6 +1811,7 @@ export function commitAcknowledgedPush(record: StagedOwnerRecord, plan: PushPlan
         petActivityUpdatedAt: petActivity.stamps, petActivityTombstones: petActivity.tombstones,
         petScheduleUpdatedAt: petSchedule.stamps, petScheduleTombstones: petSchedule.tombstones,
         petNapUpdatedAt: petNaps.stamps, petNapTombstones: petNaps.tombstones,
+        energyUpdatedAt: energy.stamps,
         petWeightUpdatedAt: petWeights.stamps, petWeightTombstones: petWeights.tombstones,
         petTrainingSkillUpdatedAt: petSkills.stamps, petTrainingSkillTombstones: petSkills.tombstones,
         petFixationUpdatedAt: petFixations.stamps, petFixationTombstones: petFixations.tombstones,

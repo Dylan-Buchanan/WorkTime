@@ -18,7 +18,11 @@ import {
     Legend,
 } from "recharts";
 import { AnalyticsFilters, filterLogs, computeDeepWorkSessions, computeMetrics } from "../lib/analytics";
+import { filterEnergyEntries, type EnergyAnalyticsFilters } from "../lib/energy/analytics";
+import { useOptionalEnergy } from "../state/EnergyContext";
 import { MultiSelect } from "./MultiSelect";
+import { Heatmap } from "./analytics/Heatmap";
+import { WellbeingSection } from "./analytics/WellbeingSection";
 
 export { MultiSelect } from "./MultiSelect";
 import { useTodos } from "../state/TodoContext";
@@ -28,6 +32,7 @@ export const AnalyticsPage: React.FC = () => {
     const { state: app } = useAppState();
     const { state: pm } = usePM();
     const { state: todoState } = useTodos();
+    const energy = useOptionalEnergy();
     const [range, setRange] = useState<{ from: Date; to: Date }>(() => ({
         from: subWeeks(new Date(), 8),
         to: new Date(),
@@ -147,6 +152,33 @@ export const AnalyticsPage: React.FC = () => {
             Object.values(matrix).reduce((a, b) => Math.max(a, b), 0) || 1;
         return { matrix, max };
     }, [filtered]);
+
+    // Wellbeing: energy entries are session-scoped, so only the date range and
+    // the work-hours filter apply. Never joined against pomodoro logs.
+    const energyEntries = useMemo(
+        () => Object.values(energy?.entries ?? {}),
+        [energy?.entries]
+    );
+    const wellbeingFilters: EnergyAnalyticsFilters = useMemo(
+        () => ({ from: range.from, to: range.to, workHoursOnly }),
+        [range.from, range.to, workHoursOnly]
+    );
+    const wellbeingEntries = useMemo(
+        () => filterEnergyEntries(energyEntries, wellbeingFilters),
+        [energyEntries, wellbeingFilters]
+    );
+    const averageEnergy = useMemo(() => {
+        const values = wellbeingEntries
+            .map((e) => e.energy)
+            .filter((v): v is number => v !== null);
+        if (values.length === 0) return null;
+        return values.reduce((a, b) => a + b, 0) / values.length;
+    }, [wellbeingEntries]);
+    const identityFiltersActive =
+        selectedProjects.length > 0 ||
+        tagFilter.length > 0 ||
+        statusFilter.length > 0 ||
+        deepOnly;
 
     // Project Pareto
     const pareto = useMemo(() => {
@@ -396,6 +428,16 @@ export const AnalyticsPage: React.FC = () => {
                             primary={`${todoMetrics.streak}`}
                             secondary="days"
                         />
+                        <MetricCard
+                            title="Wellbeing"
+                            onNavigate={() => scrollTo("wellbeing")}
+                            primary={
+                                averageEnergy === null
+                                    ? "—"
+                                    : averageEnergy.toFixed(1)
+                            }
+                            secondary={`${wellbeingEntries.length} check-ins`}
+                        />
                     </div>
                 </section>
                 <section id="weekly-trend" className="space-y-2">
@@ -454,8 +496,22 @@ export const AnalyticsPage: React.FC = () => {
                             Schedule Focus Block
                         </button>
                     </div>
-                    <Heatmap hours={heatmap} />
+                    <Heatmap
+                        matrix={heatmap.matrix}
+                        max={heatmap.max}
+                        cellTitle={(d, h, v) =>
+                            `${d} ${h}:00 - ${Math.round(v ?? 0)} mins`
+                        }
+                        cellLabel={(d, h, v) =>
+                            `${d} hour ${h} ${Math.round(v ?? 0)} minutes`
+                        }
+                    />
                 </section>
+                <WellbeingSection
+                    entries={energyEntries}
+                    filters={wellbeingFilters}
+                    identityFiltersActive={identityFiltersActive}
+                />
                 <section id="project-pareto" className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                         <h2 className="text-sm font-semibold">
@@ -576,58 +632,6 @@ const MetricCard: React.FC<{
         )}
     </button>
 );
-
-// Heatmap component
-const Heatmap: React.FC<{
-    hours: { matrix: Record<string, number>; max: number };
-}> = ({ hours }) => {
-    const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    return (
-        <div className="overflow-auto">
-            <div
-                className="grid"
-                style={{ gridTemplateColumns: `48px repeat(24, 1fr)` }}
-            >
-                <div />
-                {Array.from({ length: 24 }).map((_, h) => (
-                    <div key={h} className="text-center text-[9px] opacity-60">
-                        {h}
-                    </div>
-                ))}
-                {weekdays.map((d, dayIdx) => (
-                    <React.Fragment key={d}>
-                        <div className="text-[10px] pr-1 flex items-center justify-end opacity-60">
-                            {d}
-                        </div>
-                        {Array.from({ length: 24 }).map((_, h) => {
-                            const val = hours.matrix[`${dayIdx}-${h}`] || 0;
-                            const pct = val / hours.max;
-                            const bg =
-                                pct === 0
-                                    ? "transparent"
-                                    : `hsl(${Math.round(180 - pct * 120)},70%,${
-                                          30 + pct * 30
-                                      }%)`;
-                            return (
-                                <div
-                                    key={h}
-                                    title={`${d} ${h}:00 - ${Math.round(
-                                        val
-                                    )} mins`}
-                                    className="h-5 m-[1px] rounded"
-                                    style={{ background: bg }}
-                                    aria-label={`${d} hour ${h} ${Math.round(
-                                        val
-                                    )} minutes`}
-                                />
-                            );
-                        })}
-                    </React.Fragment>
-                ))}
-            </div>
-        </div>
-    );
-};
 
 // Capacity Forecast: historical weekday average across the selected projects' workable days.
 const CapacityForecast: React.FC<{ filtered: any[]; workableDays: Set<number> }> = ({ filtered, workableDays }) => {

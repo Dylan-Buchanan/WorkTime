@@ -1,3 +1,5 @@
+import { isEnergyRating } from "../../energy";
+import type { EnergyEntry } from "../../../state/types";
 import { isGoalTracker, isGoal, isGoalCheckIn } from "../../goals/factories";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../../state/types";
 import type {
@@ -52,6 +54,7 @@ export interface VersionedValue<T> {
  * default application values.
  */
 export interface SyncSnapshot {
+    energyEntries: Record<string, { value: EnergyEntry; updatedAt: string }>;
     goalTrackers: Record<string, { value: GoalTracker; updatedAt: string }>;
     goalTrackerUpdatedAt: Record<string, string>;
     goalTrackerTombstones: Record<string, { id: string; deletedAt: string }>;
@@ -120,6 +123,8 @@ export interface TodoCompletionTombstone {
 
 /** The per-owner localStorage record for the staging store. */
 export interface StagedOwnerRecord {
+    energyEntries: Record<string, EnergyEntry>;
+    energyUpdatedAt: Record<string, string>;
     goalTrackers: Record<string, GoalTracker>;
     goalTrackerUpdatedAt: Record<string, string>;
     goalTrackerTombstones: Record<string, { id: string; deletedAt: string }>;
@@ -209,7 +214,7 @@ export interface StagedOwnerRecord {
     petNotableEventTombstones: Record<string, { id: string; deletedAt: string }>;
 }
 
-export const STAGING_SCHEMA_VERSION = 11 as const;
+export const STAGING_SCHEMA_VERSION = 12 as const;
 /** Maximum journal size before persistence fails closed instead of exhausting localStorage. */
 export const MAX_PENDING_COMPLETIONS = 1000;
 
@@ -576,6 +581,7 @@ export function isSyncSnapshot(value: unknown): value is SyncSnapshot {
         isPetProfileSnapshot(value.petProfile) &&
         isVersionedEntityMap(value.petScheduleItems, isPetScheduleItem) &&
         isVersionedEntityMap(value.petNapRecords, isPetNapRecord) &&
+        isVersionedEntityMap(value.energyEntries, isEnergyEntry) &&
         isVersionedEntityMap(value.petWeightEntries, isPetWeightEntry) &&
         isVersionedEntityMap(value.petTrainingSkills, isPetTrainingSkill) &&
         isVersionedEntityMap(value.petFixations, isPetFixation) &&
@@ -597,6 +603,27 @@ function isPendingCompletion(value: unknown): boolean {
         typeof value.localOnlyGeneration === "boolean" &&
         typeof value.completedAt === "string"
     );
+}
+
+function isEnergyEntry(value: unknown): value is EnergyEntry {
+    return isObject(value) && typeof value.work_window_id === "string" && value.work_window_id.length > 0 &&
+        isEnergyRating(value.energy) && isEnergyRating(value.clarity) && typeof value.caffeine === "boolean" &&
+        typeof value.energy_carried === "boolean" && typeof value.clarity_carried === "boolean" &&
+        typeof value.created_at === "string" && typeof value.updated_at === "string";
+}
+
+function normalizeEnergyMap(rows: unknown, versioned: boolean): unknown {
+    if (!isObject(rows)) return rows;
+    return Object.fromEntries(Object.entries(rows).flatMap(([key, raw]) => {
+        const row = versioned && isObject(raw) ? raw.value : raw;
+        if (!isObject(row)) return [];
+        const value = { ...row, energy: row.energy ?? null, clarity: row.clarity ?? null,
+            energy_carried: row.energy_carried === undefined ? false : row.energy_carried,
+            clarity_carried: row.clarity_carried === undefined ? false : row.clarity_carried };
+        if (!isEnergyEntry(value) || value.work_window_id !== key ||
+            (versioned && (!isObject(raw) || typeof raw.updatedAt !== "string"))) return [];
+        return [[key, versioned ? { ...raw as object, value } : value]];
+    }));
 }
 
 const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) => boolean]> = [
@@ -650,6 +677,8 @@ const REQUIRED_FIELD_CHECKS: ReadonlyArray<readonly [string, (value: unknown) =>
     ["petNapRecords", (v): boolean => isObject(v) && Object.values(v).every(isPetNapRecord)],
     ["petNapUpdatedAt", isStringMap],
     ["petNapTombstones", isTombstoneMap],
+    ["energyEntries", (v): boolean => isObject(v) && Object.values(v).every(isEnergyEntry)],
+    ["energyUpdatedAt", isStringMap],
     ["petWeightEntries", (v): boolean => isObject(v) && Object.values(v).every(isPetWeightEntry)],
     ["petWeightUpdatedAt", isStringMap],
     ["petWeightTombstones", isTombstoneMap],
@@ -685,7 +714,7 @@ function upgradeVersionedGoalRows(rows: unknown, upgrade: (row: unknown) => unkn
 
 /**
  * Validate and parse a stored record. Only numeric literal schema versions `1`
- * through `11` are accepted; records at the unchanged v1 key migrate in memory
+ * through `12` are accepted; records at the unchanged v1 key migrate in memory
  * by adding the five habit/completion fields and injecting empty snapshot maps
  * before any v2 validation runs. Unknown/newer `schemaVersion` values and
  * records whose embedded `ownerId` differs from the storage key are rejected so
@@ -719,6 +748,7 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
         parsed.schemaVersion !== 8 &&
         parsed.schemaVersion !== 9 &&
         parsed.schemaVersion !== 10 &&
+        parsed.schemaVersion !== 11 &&
         parsed.schemaVersion !== STAGING_SCHEMA_VERSION
     ) {
         throw new StagingStorageError(
@@ -902,6 +932,15 @@ export function parseStagedOwnerRecord(raw: string, ownerId: string): StagedOwne
             } : baseline,
         };
     }
+    if (record.schemaVersion === 11) {
+        record = { ...record, schemaVersion: 12, energyEntries: {}, energyUpdatedAt: {},
+            lastSynced: isObject(record.lastSynced) ? { ...record.lastSynced, energyEntries: {} } : record.lastSynced };
+    }
+    // Energy is row tolerant: discard malformed siblings, preserving the record.
+    record.energyEntries = normalizeEnergyMap(record.energyEntries, false);
+    if (isObject(record.lastSynced)) record.lastSynced = {
+        ...record.lastSynced, energyEntries: normalizeEnergyMap(record.lastSynced.energyEntries, true),
+    };
     if (record.ownerId !== ownerId) {
         throw new StagingStorageError(
             `Staging record owner mismatch: stored "${String(record.ownerId)}" for key owner "${ownerId}"`,

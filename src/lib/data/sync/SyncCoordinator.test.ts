@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { composeEnergyEntry } from "../../energy";
+import { StagedDataAccess } from "../StagedDataAccess";
 import type { ActiveTimer, Habit, HabitCompletion, PomodoroLogEntry, Task } from "../../../state/types";
 import { defaultAppState } from "../../engine";
 import { LocalStagingStore, stagingKey, type StorageLike } from "../staging/LocalStagingStore";
@@ -103,7 +105,7 @@ function snapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
         pmState: { value: null, updatedAt: null },
         petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
         goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
-        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
+        petNapRecords: {}, energyEntries: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -124,6 +126,12 @@ function makeStorage(): StorageLike {
 /** Applies a plan's acknowledged values to the fake server snapshot. */
 function applyPlanToServer(server: SyncSnapshot, plan: PushPlan): void {
     const ack = plan.acknowledged;
+    for (const [id, row] of Object.entries(ack.energyUpserts ?? {})) {
+        const previous = server.energyEntries[id];
+        if (!previous || timestampMs(row.updatedAt) > timestampMs(previous.updatedAt)) {
+            server.energyEntries[id] = clone(row);
+        }
+    }
     for (const [id, value] of Object.entries(ack.taskUpserts)) {
         server.tasks[id] = { value: clone(value.value), updatedAt: value.updatedAt };
     }
@@ -232,6 +240,36 @@ function makeRemote(initialServer: SyncSnapshot) {
     };
     return { remote, server };
 }
+
+describe("energy coordinator sync", () => {
+    it("pushes staged energy, acknowledges its stamp and pulls it on another device", async () => {
+        const initial = snapshot();
+        const { remote, server } = makeRemote(initial);
+        const store = new LocalStagingStore(makeStorage());
+        const coordinator = new SyncCoordinator(OWNER, store, remote, { now: () => NOW });
+        const data = new StagedDataAccess(OWNER, store, coordinator);
+        await data.sync({ reason: "manual" });
+        const row = composeEnergyEntry({ workWindowId: T1, prefill: { energy: 4, clarity: 3 }, explicit: {}, now: T1 });
+        expect(await data.createEnergyEntry(row)).toBe(true);
+        expect(data.pendingCount()).toBe(1);
+        await data.sync({ reason: "manual" });
+        expect(remote.push).toHaveBeenCalledTimes(1);
+        expect(remote.push.mock.calls[0][1].energyUpserts).toEqual([{ value: row, updatedAt: T1 }]);
+        expect(data.pendingCount()).toBe(0);
+        expect(store.read(OWNER).energyUpdatedAt).toEqual({});
+        expect(store.read(OWNER).lastSynced!.energyEntries).toEqual({ [T1]: { value: row, updatedAt: T1 } });
+        expect({ ...server, energyEntries: {} }).toEqual(initial);
+        const secondStore = new LocalStagingStore(makeStorage());
+        const second = new StagedDataAccess(OWNER, secondStore, new SyncCoordinator(OWNER, secondStore, remote, { now: () => NOW }));
+        await second.sync({ reason: "manual" });
+        expect(await second.loadEnergyEntries()).toEqual([row]);
+        expect(second.pendingCount()).toBe(0);
+        expect(await second.setEnergyRating(T1, { clarity: 5 }, T2)).toBe(true);
+        await secondStore.discardPendingChanges(OWNER);
+        expect(await second.loadEnergyEntries()).toEqual([row]);
+        expect(secondStore.read(OWNER).energyUpdatedAt).toEqual({});
+    });
+});
 
 function completionEntry(overrides: Partial<PendingTimerCompletion> = {}): PendingTimerCompletion {
     const timer = TIMER();

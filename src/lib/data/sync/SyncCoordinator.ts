@@ -33,6 +33,7 @@ export function isPlanNonEmpty(plan: PushPlan): boolean {
         plan.petProfile != null || plan.petProfileTombstone != null ||
         (plan.petScheduleUpserts?.length ?? 0) > 0 || (plan.petScheduleTombstones?.length ?? 0) > 0 ||
         (plan.petNapUpserts?.length ?? 0) > 0 || (plan.petNapTombstones?.length ?? 0) > 0 ||
+        (plan.energyUpserts?.length ?? 0) > 0 ||
         (plan.petWeightUpserts?.length ?? 0) > 0 || (plan.petWeightTombstones?.length ?? 0) > 0 ||
         (plan.petTrainingSkillUpserts?.length ?? 0) > 0 || (plan.petTrainingSkillTombstones?.length ?? 0) > 0 ||
         (plan.petFixationUpserts?.length ?? 0) > 0 || (plan.petFixationTombstones?.length ?? 0) > 0 ||
@@ -80,6 +81,7 @@ export function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan
         petProfile: { ...base.petProfile },
         petScheduleItems: { ...base.petScheduleItems },
         petNapRecords: { ...base.petNapRecords },
+        energyEntries: { ...base.energyEntries },
         petWeightEntries: { ...base.petWeightEntries },
         petTrainingSkills: { ...base.petTrainingSkills },
         petFixations: { ...base.petFixations },
@@ -134,6 +136,7 @@ export function pushedSnapshotFromPlan(record: StagedOwnerRecord, plan: PushPlan
     applyPetCollection(pushed.petActivityRecords, ack.petActivityUpserts, ack.petActivityTombstones);
     applyPetCollection(pushed.petScheduleItems, ack.petScheduleUpserts, ack.petScheduleTombstones);
     applyPetCollection(pushed.petNapRecords, ack.petNapUpserts, ack.petNapTombstones);
+    applyPetCollection(pushed.energyEntries, ack.energyUpserts);
     applyPetCollection(pushed.petWeightEntries, ack.petWeightUpserts, ack.petWeightTombstones);
     applyPetCollection(pushed.petTrainingSkills, ack.petTrainingSkillUpserts, ack.petTrainingSkillTombstones);
     applyPetCollection(pushed.petFixations, ack.petFixationUpserts, ack.petFixationTombstones);

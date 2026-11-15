@@ -1,3 +1,4 @@
+import type { EnergyEntry } from "../../../state/types";
 import type { GoalTracker, Goal, GoalCheckIn } from "../../../state/types";
 import type {
     ActiveTimer, Habit, HabitCompletion, PetActivityRecord, PetFixation, PetNapRecord,
@@ -70,6 +71,7 @@ export interface AcknowledgedChanges {
     petScheduleTombstones?: Record<string, { deletedAt: string }>;
     petNapUpserts?: Record<string, { value: PetNapRecord; updatedAt: string }>;
     petNapTombstones?: Record<string, { deletedAt: string }>;
+    energyUpserts?: Record<string, { value: EnergyEntry; updatedAt: string }>;
     petWeightUpserts?: Record<string, { value: PetWeightEntry; updatedAt: string }>;
     petWeightTombstones?: Record<string, { deletedAt: string }>;
     petTrainingSkillUpserts?: Record<string, { value: PetTrainingSkill; updatedAt: string }>;
@@ -118,6 +120,7 @@ export interface PushPlan {
     petScheduleTombstones?: Array<{ id: string; deletedAt: string }>;
     petNapUpserts?: Array<{ value: PetNapRecord; updatedAt: string }>;
     petNapTombstones?: Array<{ id: string; deletedAt: string }>;
+    energyUpserts?: Array<{ value: EnergyEntry; updatedAt: string }>;
     petWeightUpserts?: Array<{ value: PetWeightEntry; updatedAt: string }>;
     petWeightTombstones?: Array<{ id: string; deletedAt: string }>;
     petTrainingSkillUpserts?: Array<{ value: PetTrainingSkill; updatedAt: string }>;

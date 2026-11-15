@@ -1,3 +1,4 @@
+import { composeEnergyEntry } from "../energy";
 import { describe, expect, it, vi } from "vitest";
 import { LocalStagingStore, type StorageLike } from "./staging/LocalStagingStore";
 import { StagingStorageError } from "./staging/types";
@@ -212,7 +213,7 @@ function makeBaseline(timer: ActiveTimer | null, overrides: Partial<SyncSnapshot
         pmState: { value: null, updatedAt: null },
         petActivityRecords: {}, petProfile: { value: null, updatedAt: null }, petScheduleItems: {},
         goalTrackers: {}, goalTrackerUpdatedAt: {}, goalTrackerTombstones: {}, goals: {}, goalUpdatedAt: {}, goalTombstones: {}, goalCheckIns: {}, goalCheckInUpdatedAt: {}, goalCheckInTombstones: {},
-        petNapRecords: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
+        petNapRecords: {}, energyEntries: {}, petWeightEntries: {}, petTrainingSkills: {}, petFixations: {}, petNotableEvents: {},
         ...overrides,
     };
 }
@@ -1359,4 +1360,81 @@ it.each(["switch", "finalize"])("journals an engine-internal expired %s so a sta
     expect(repaired.state.logs).toHaveLength(1);
     expect(repaired.state.tasks.t1.completed_pomodoros).toBe(1);
     expect(repaired.state.current_cycle_pomodoros).toBe(1);
+});
+
+describe("energy data access", () => {
+    it.each(["duplicate create", "missing rating", "empty patch"])(
+        "skips updates, persistence, revisions, and notifications for %s", async operation => {
+            const storage: StorageLike = {
+                getItem: key => window.localStorage.getItem(key),
+                setItem: vi.fn((key, value) => window.localStorage.setItem(key, value)),
+                removeItem: key => window.localStorage.removeItem(key),
+            };
+            const owner = `energy-no-op-${operation}`;
+            const store = new LocalStagingStore(storage);
+            const data = new StagedDataAccess(owner, store, { sync: vi.fn() });
+            const row = composeEnergyEntry({ workWindowId: "2026-11-15T10:00:00.000Z",
+                prefill: { energy: 4, clarity: 3 }, explicit: {}, now: "2026-11-15T10:00:00.000Z" });
+            await data.createEnergyEntry(row);
+            const before = store.read(owner);
+            const update = vi.spyOn(store, "update");
+            vi.mocked(storage.setItem).mockClear();
+            const listener = vi.fn();
+            const unsubscribe = data.subscribe(listener);
+
+            const result = operation === "duplicate create"
+                ? data.createEnergyEntry({ ...row, energy: 1 })
+                : data.setEnergyRating(operation === "missing rating" ? "missing" : row.work_window_id,
+                    operation === "empty patch" ? {} : { energy: 2 }, "2026-11-15T11:00:00.000Z");
+
+            await expect(result).resolves.toBe(false);
+            expect(update).not.toHaveBeenCalled();
+            expect(storage.setItem).not.toHaveBeenCalled();
+            expect(listener).not.toHaveBeenCalled();
+            expect(store.read(owner).revision).toBe(before.revision);
+            expect(store.read(owner)).toEqual(before);
+            unsubscribe();
+        });
+    it("resolves false for duplicate energy creation even when storage writes would fail", async () => {
+        const storage: StorageLike = {
+            getItem: key => window.localStorage.getItem(key),
+            setItem: vi.fn((key, value) => window.localStorage.setItem(key, value)),
+            removeItem: key => window.localStorage.removeItem(key),
+        };
+        const store = new LocalStagingStore(storage);
+        const data = new StagedDataAccess("energy-no-op-write-failure", store, { sync: vi.fn() });
+        const row = composeEnergyEntry({ workWindowId: "2026-11-15T10:00:00.000Z",
+            prefill: { energy: 4, clarity: 3 }, explicit: {}, now: "2026-11-15T10:00:00.000Z" });
+        await data.createEnergyEntry(row);
+        vi.mocked(storage.setItem).mockImplementation(() => { throw new Error("QuotaExceededError"); });
+        vi.mocked(storage.setItem).mockClear();
+
+        await expect(data.createEnergyEntry({ ...row, energy: 1 })).resolves.toBe(false);
+        expect(storage.setItem).not.toHaveBeenCalled();
+        expect(await data.loadEnergyEntries()).toEqual([row]);
+    });
+    it("inserts once, patches existing fields only, and preserves energy on reset", async () => {
+        const store = new LocalStagingStore(window.localStorage);
+        const data = new StagedDataAccess("energy-data-owner", store, { sync: vi.fn() });
+        const row = composeEnergyEntry({ workWindowId: "2026-11-15T10:00:00.000Z",
+            prefill: { energy: 4, clarity: 3 }, explicit: {}, now: "2026-11-15T10:00:00.000Z" });
+        expect(await data.setEnergyRating("missing", { energy: 2 }, "later")).toBe(false);
+        expect(await data.loadEnergyEntries()).toEqual([]);
+        expect(await data.createEnergyEntry(row)).toBe(true);
+        expect(await data.createEnergyEntry({ ...row, energy: 1 })).toBe(false);
+        expect(await data.loadEnergyEntries()).toEqual([row]);
+        const pending = data.pendingCount();
+        expect(await data.setEnergyRating(row.work_window_id, {}, "ignored")).toBe(false);
+        expect(data.pendingCount()).toBe(pending);
+        expect(await data.loadEnergyEntries()).toEqual([row]);
+        expect(await data.setEnergyRating(row.work_window_id, { clarity: 5 }, "2026-11-15T11:00:00.000Z")).toBe(true);
+        expect(await data.loadEnergyEntries()).toEqual([{ ...row, clarity: 5, clarity_carried: false, updated_at: "2026-11-15T11:00:00.000Z" }]);
+        expect(await data.setEnergyRating(row.work_window_id, { energy: null, caffeine: true }, "2026-11-15T12:00:00.000Z")).toBe(true);
+        const final = [{ ...row, energy: null, energy_carried: false, clarity: 5, clarity_carried: false,
+            caffeine: true, updated_at: "2026-11-15T12:00:00.000Z" }];
+        expect(await data.loadEnergyEntries()).toEqual(final);
+        await data.resetAppState();
+        expect(await data.loadEnergyEntries()).toEqual(final);
+        expect(store.read("energy-data-owner").energyUpdatedAt[row.work_window_id]).toBe("2026-11-15T12:00:00.000Z");
+    });
 });
