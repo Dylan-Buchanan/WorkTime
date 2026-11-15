@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useAppState } from "../state/AppStateContext";
 import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
@@ -8,6 +8,7 @@ import { useOptionalTodos } from "../state/TodoContext";
 import { waitingOf } from "../lib/pm/waiting";
 import { useTaskCompletion } from "../state/TaskCompletionContext";
 import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
+import { getTimerPageMode, subscribeToQuickAddSession } from "../lib/pm/quickAddSession";
 import { WaitingDot } from "./WaitingIndicator";
 
 export const TASK_SORT_LS_KEY = "task_panel_sort_v1";
@@ -43,6 +44,7 @@ export const TaskPanel: React.FC = () => {
     const [targetInput, setTargetInput] = useState("4");
     const [sortOption, setSortOption] = useState<TaskSortOption>(loadSavedTaskSort);
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+    const timerPageMode = useSyncExternalStore(subscribeToQuickAddSession, getTimerPageMode, getTimerPageMode);
     const tasks = Object.values(state?.tasks || {}).filter((t) => !t.archived);
     const todoTaskIds = useMemo(() => new Set(Object.values(todoContext?.state.todos ?? {})
         .map((todo) => todo.currentTaskId).filter((id): id is string => Boolean(id))), [todoContext?.state.todos]);
@@ -255,7 +257,7 @@ export const TaskPanel: React.FC = () => {
                     <option value="estimateDesc">Estimate (desc)</option>
                 </select>
             </div>
-            <form
+            {timerPageMode === "timer" && <form
                 onSubmit={async (e) => {
                     e.preventDefault();
                     if (!name.trim()) return;
@@ -290,7 +292,7 @@ export const TaskPanel: React.FC = () => {
                 <button type="submit" onMouseEnter={() => play("hover")} className="px-3 py-1.5 sm:px-2 sm:py-1 text-[11px] rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white transition-colors">
                     Add
                 </button>
-            </form>
+            </form>}
             <div className="space-y-2">
                 {groupedTasks.map((group) => {
                     const collapsed = collapsedGroups[group.key] ?? false;

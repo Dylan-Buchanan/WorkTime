@@ -19,6 +19,7 @@ import type { AppStateData, PMTask, Project, Task } from "../state/types";
 import { ResumeMemoProvider } from "../state/ResumeMemoContext";
 import { TodoProvider, useOptionalTodos } from "../state/TodoContext";
 import * as resumeStore from "../lib/resume";
+import { resetQuickAddSession } from "../lib/pm/quickAddSession";
 import { afterEach } from "vitest";
 import { useResumeMemo } from "../state/ResumeMemoContext";
 import type { TimerEnterReason } from "../state/timerTransitions";
@@ -149,7 +150,10 @@ async function renderWithTasks(tasks: Record<string, PMTask>, projects: Record<s
     return data;
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+    localStorage.clear();
+    resetQuickAddSession();
+});
 
 async function setupMemoTimer(zeroElapsed = false) {
     const now = Date.now();
@@ -1385,6 +1389,17 @@ describe("TimerPanel resume card integration", () => {
         expect(within(card).getByText("x".repeat(140))).toBeVisible();
         expect(screen.getByTestId("pm-selected-task")).toHaveTextContent("pa");
     });
+
+    it("hides the card while Quick add is active and restores it on Timer", async () => {
+        resumeStore.saveResumeNote("a", CARD_MEMO);
+        const view = await setupResumeCard();
+        await view.enter();
+        expect(resumeCard()).toBeVisible();
+        fireEvent.click(screen.getByRole("button", { name: "Quick add" }));
+        expect(resumeCard()).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Timer" }));
+        expect(resumeCard()).toBeVisible();
+    });
 });
 
 
@@ -1400,4 +1415,274 @@ it.each(["Switch", "Waiting"] as const)("routes %s through the completion contro
         fireEvent.click(screen.getByRole("button", { name: label }));
         expect(openSwitchSheet).toHaveBeenCalledExactlyOnceWith(label === "Switch" ? "switch" : "waiting");
     } finally { hook.mockRestore(); }
+});
+
+const QUICK_ADD_META = "2026-01-01T00:00:00.000Z";
+
+async function renderTimerPage(options: {
+    appState?: Partial<AppStateData>;
+    tasks?: Record<string, PMTask>;
+    projects?: Record<string, Project>;
+} = {}) {
+    const data = new InMemoryDataAccess(makeAppState(options.appState));
+    await data.savePMState({
+        projects: options.projects ?? {},
+        tasks: options.tasks ?? {},
+        meta: { initializedAt: QUICK_ADD_META },
+    });
+    let current!: HandoffControls;
+    const view = render(wrap(data, undefined, <HandoffProbe onChange={(value) => { current = value; }} />));
+    await waitFor(() => expect(current?.app.state).not.toBeNull());
+    await waitFor(() => expect(current.pm.state.meta.initializedAt).toBe(QUICK_ADD_META));
+    return { ...view, data, get current() { return current; } };
+}
+
+const switchToQuickAdd = () => fireEvent.click(screen.getByRole("button", { name: "Quick add" }));
+
+function quickAddPMTasks(view: Awaited<ReturnType<typeof renderTimerPage>>): PMTask[] {
+    return Object.values(view.current.pm.state.tasks);
+}
+
+describe("TimerPanel Quick add", () => {
+    it("switches to a form-only tab and hides the Timer surfaces", async () => {
+        await renderTimerPage();
+        expect(screen.getByText("READY")).toBeInTheDocument();
+
+        switchToQuickAdd();
+
+        expect(screen.queryByText("READY")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Start Focus" })).toBeNull();
+        expect(screen.queryByRole("region", { name: "Today" })).toBeNull();
+        expect(document.querySelector('[aria-label="Projection range"]')).toBeNull();
+        expect(screen.getByLabelText("Title")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
+        // No timer: the header row has no countdown.
+        expect(screen.queryByLabelText("Time remaining")).toBeNull();
+    });
+
+    it("shows the live countdown only on Quick add while a timer exists", async () => {
+        const timer = makeActiveTimer({ task_id: "a" });
+        await renderTimerPage({ appState: {
+            tasks: { a: makeAppTask("a", "Task A") },
+            active_task: "a",
+            timer,
+        } });
+
+        expect(screen.queryByLabelText("Time remaining")).toBeNull();
+        switchToQuickAdd();
+        expect(screen.getByLabelText("Time remaining")).toHaveTextContent(/^\d{2}:\d{2}$/);
+        expect(screen.queryByRole("region", { name: "Today" })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Timer" }));
+        expect(screen.queryByLabelText("Time remaining")).toBeNull();
+    });
+
+    it("saves with the chosen project, estimate, and notes, then clears fields and keeps the tab", async () => {
+        const view = await renderTimerPage({ projects: { p1: makeProject("p1") } });
+        switchToQuickAdd();
+
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "  Write report  " } });
+        fireEvent.change(screen.getByLabelText("Project"), { target: { value: "p1" } });
+        fireEvent.change(screen.getByLabelText("Estimate"), { target: { value: "3" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add notes" }));
+        fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "Include charts" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+        const note = await screen.findByRole("status");
+        expect(note).toHaveTextContent('Added "Write report" to p1');
+
+        const appTasks = Object.values(view.current.app.state!.tasks);
+        expect(appTasks).toHaveLength(1);
+        expect(appTasks[0].target_pomodoros).toBe(3);
+        const pmTask = quickAddPMTasks(view).find((task) => task.appTaskId === appTasks[0].id)!;
+        expect(pmTask).toMatchObject({
+            title: "Write report",
+            projectId: "p1",
+            status: "Backlog",
+            estimatePomos: 3,
+            description: "Include charts",
+            appTaskId: appTasks[0].id,
+        });
+
+        expect(screen.getByLabelText("Title")).toHaveValue("");
+        expect(screen.getByLabelText("Title")).toHaveFocus();
+        expect(screen.getByLabelText("Estimate")).toHaveValue(1);
+        expect(screen.queryByLabelText("Notes")).toBeNull();
+        expect(screen.getByRole("button", { name: "Quick add" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("passes an explicit null project for No Project without auto-creating General", async () => {
+        const view = await renderTimerPage({ projects: { p1: makeProject("p1") } });
+        switchToQuickAdd();
+
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Unassigned task" } });
+        expect(screen.getByLabelText("Project")).toHaveValue("");
+        fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+        expect(await screen.findByRole("status")).toHaveTextContent('Added "Unassigned task" to No Project');
+        const pmTask = quickAddPMTasks(view).find((task) => task.title === "Unassigned task")!;
+        expect(pmTask.projectId).toBeNull();
+        expect(Object.keys(view.current.pm.state.projects)).toEqual(["p1"]);
+    });
+
+    it("degrades to a single No Project option and still saves with zero projects", async () => {
+        const view = await renderTimerPage({ projects: { p1: makeProject("p1") } });
+        await act(async () => { view.current.pm.deleteProject("p1"); });
+        await waitFor(() => expect(Object.keys(view.current.pm.state.projects)).toHaveLength(0));
+        switchToQuickAdd();
+
+        const select = screen.getByLabelText("Project");
+        expect(within(select).getAllByRole("option").map((option) => option.textContent)).toEqual(["No Project"]);
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Standalone" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+        expect(await screen.findByRole("status")).toHaveTextContent('Added "Standalone" to No Project');
+        expect(Object.values(view.current.pm.state.projects)).toHaveLength(0);
+        expect(quickAddPMTasks(view).find((task) => task.title === "Standalone")?.projectId).toBeNull();
+    });
+
+    it("starts the created task on the timer and returns to the Timer tab", async () => {
+        const view = await renderTimerPage();
+        switchToQuickAdd();
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Focus me" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+        await screen.findByRole("status");
+        const appTaskId = quickAddPMTasks(view).find((task) => task.title === "Focus me")!.appTaskId!;
+        const started = vi.spyOn(view.data, "startWorkTimer");
+        const activated = vi.spyOn(view.data, "setActiveTask");
+
+        fireEvent.click(screen.getByRole("button", { name: "Start timer" }));
+
+        await waitFor(() => expect(activated).toHaveBeenCalledWith(appTaskId));
+        await waitFor(() => expect(started).toHaveBeenCalledOnce());
+        await waitFor(() => expect(view.current.app.state?.timer?.task_id).toBe(appTaskId));
+        expect(screen.getByRole("button", { name: "Timer" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.queryByLabelText("Title")).toBeNull();
+        expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("joins a live pomodoro window instead of starting a second timer", async () => {
+        const view = await renderTimerPage({ appState: {
+            tasks: { a: makeAppTask("a", "Existing") },
+            active_task: "a",
+            timer: makeActiveTimer({ task_id: "a" }),
+        } });
+        const windowStart = view.current.app.state!.timer!.window_started_at ?? view.current.app.state!.timer!.started_at;
+        switchToQuickAdd();
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Joiner" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+        await screen.findByRole("status");
+        const appTaskId = quickAddPMTasks(view).find((task) => task.title === "Joiner")!.appTaskId!;
+
+        fireEvent.click(screen.getByRole("button", { name: "Start timer" }));
+
+        await waitFor(() => expect(view.current.app.state?.timer?.task_id).toBe(appTaskId));
+        expect(view.current.app.state?.timer?.window_started_at ?? windowStart).toBe(windowStart);
+        expect(screen.getByRole("button", { name: "Timer" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("disables Start timer during a break and re-enables it when the break ends", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+            const now = new Date("2026-11-09T14:00:00.000Z");
+            vi.setSystemTime(now);
+            const breakTimer = makeActiveTimer({
+                task_id: "a",
+                kind: "ShortBreak",
+                started_at: now.toISOString(),
+                window_started_at: now.toISOString(),
+                ends_at: new Date(now.getTime() + 60_000).toISOString(),
+            });
+            const view = await renderTimerPage({ appState: {
+                tasks: { a: makeAppTask("a", "Task A") },
+                active_task: "a",
+                timer: breakTimer,
+            } });
+            switchToQuickAdd();
+            fireEvent.change(screen.getByLabelText("Title"), { target: { value: "During break" } });
+            fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+            await screen.findByRole("status");
+
+            const startButton = screen.getByRole("button", { name: "Start timer" });
+            expect(startButton).toBeDisabled();
+            expect(startButton).toHaveAttribute("title", expect.stringContaining("A break is running."));
+
+            vi.setSystemTime(new Date(Date.parse(breakTimer.ends_at) + 1));
+            await act(async () => { await view.current.app.completeTimer(); });
+
+            await waitFor(() => expect(screen.getByRole("button", { name: "Start timer" })).toBeEnabled());
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each(["ctrlKey", "metaKey"] as const)("creates exactly one task for repeated %s+Enter while saving", async (modifier) => {
+        const view = await renderTimerPage();
+        const original = view.data.createTask.bind(view.data);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const create = vi.spyOn(view.data, "createTask").mockImplementation(async (name, target) => {
+            await gate;
+            return original(name, target);
+        });
+        switchToQuickAdd();
+        const title = screen.getByLabelText("Title");
+        fireEvent.change(title, { target: { value: "Single task" } });
+
+        fireEvent.keyDown(title, { key: "Enter", [modifier]: true });
+        fireEvent.keyDown(title, { key: "Enter", [modifier]: true });
+
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole("button", { name: "Adding…" })).toBeDisabled();
+        await act(async () => { release(); });
+        expect(await screen.findByRole("status")).toHaveTextContent('Added "Single task" to No Project');
+        expect(Object.values(view.current.app.state!.tasks)).toHaveLength(1);
+        expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves inputs, focuses the title, and reports a failed save", async () => {
+        const view = await renderTimerPage();
+        vi.spyOn(view.data, "createTask").mockRejectedValue(new Error("Save unavailable"));
+        switchToQuickAdd();
+        fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Keep this" } });
+        fireEvent.change(screen.getByLabelText("Estimate"), { target: { value: "2" } });
+        fireEvent.click(screen.getByRole("button", { name: "Add notes" }));
+        fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "Keep notes" } });
+
+        fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Could not add task.");
+        expect(screen.getByLabelText("Title")).toHaveValue("Keep this");
+        expect(screen.getByLabelText("Estimate")).toHaveValue(2);
+        expect(screen.getByLabelText("Notes")).toHaveValue("Keep notes");
+        expect(screen.getByLabelText("Title")).toHaveFocus();
+        expect(screen.getByRole("button", { name: "Quick add" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("toggles tabs with Alt+Q, prevents the default, and focuses the title", async () => {
+        await renderTimerPage();
+
+        expect(fireEvent.keyDown(window, { key: "q", code: "KeyQ", altKey: true })).toBe(false);
+
+        expect(screen.getByRole("button", { name: "Quick add" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByLabelText("Title")).toHaveFocus();
+
+        expect(fireEvent.keyDown(window, { key: "q", code: "KeyQ", altKey: true })).toBe(false);
+        expect(screen.getByRole("button", { name: "Timer" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByText("READY")).toBeInTheDocument();
+    });
+
+    it("closes the task-details drawer when switching to Quick add", async () => {
+        await renderTimerPage({ appState: {
+            tasks: { a: makeAppTask("a", "Task A") },
+            active_task: "a",
+            timer: makeActiveTimer({ task_id: "a" }),
+        }, tasks: { pa: makePMTask({ id: "pa", title: "Task A", appTaskId: "a", estimatePomos: 2 }) } });
+        fireEvent.click(await screen.findByRole("button", { name: "Task Details" }));
+        expect(screen.getByText("Task details")).toBeInTheDocument();
+
+        switchToQuickAdd();
+
+        expect(screen.queryByText("Task details")).toBeNull();
+        expect(document.getElementById("timer-task-details-panel")).toHaveAttribute("aria-hidden", "true");
+    });
 });

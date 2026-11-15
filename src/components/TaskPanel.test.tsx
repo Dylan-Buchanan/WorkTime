@@ -11,6 +11,7 @@ import { ProjectManagerProvider } from "../state/ProjectManagerContext";
 import { InMemoryDataAccess } from "../lib/data/InMemoryDataAccess";
 import { makeAppState } from "../test/mockTauri";
 import type { PMTask } from "../state/types";
+import { resetQuickAddSession, setTimerPageMode } from "../lib/pm/quickAddSession";
 
 vi.mock("../hooks/useSounds", () => ({
     useSounds: () => ({ play: () => {} }),
@@ -36,7 +37,10 @@ function sortSelect(): HTMLSelectElement {
     return screen.getByRole("combobox") as HTMLSelectElement;
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+    localStorage.clear();
+    resetQuickAddSession();
+});
 
 describe("TaskPanel waiting", () => {
     it.each(["agent", "person"] as const)("shows an accessible %s dot and a row tooltip line", async (type) => {
@@ -133,4 +137,21 @@ it.each([
         if (linked) { expect(completeTask).toHaveBeenCalledExactlyOnceWith("pa"); expect(completeAppTask).not.toHaveBeenCalled(); }
         else { expect(completeAppTask).toHaveBeenCalledExactlyOnceWith("a"); expect(completeTask).not.toHaveBeenCalled(); }
     } finally { hook.mockRestore(); }
+});
+
+describe("TaskPanel Quick add mode", () => {
+    it("hides the create form while Quick add is active and restores it on Timer", async () => {
+        setTimerPageMode("quick-add");
+        const data = new InMemoryDataAccess(makeAppState());
+        render(wrap(data, <TaskPanel />));
+        await screen.findByText("Tasks");
+
+        expect(screen.queryByPlaceholderText("Task name")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+
+        act(() => { setTimerPageMode("timer"); });
+
+        expect(screen.getByPlaceholderText("Task name")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+    });
 });

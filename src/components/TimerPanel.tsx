@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppState } from "../state/AppStateContext";
 import { useSounds } from "../hooks/useSounds";
 import { usePM } from "../state/ProjectManagerContext";
@@ -24,7 +24,16 @@ import { TodaySurface } from "./TodaySurface";
 import { WaitingBadge } from "./WaitingIndicator";
 import { waitingOf } from "../lib/pm/waiting";
 import { findPMTaskByAppTaskId } from "../lib/pm/workStart";
-import { isWorkWindowLive } from "../lib/engine";
+import {
+    DEFAULT_QUICK_ADD_DRAFT,
+    getQuickAddDraft,
+    getTimerPageMode,
+    setQuickAddDraft,
+    setTimerPageMode,
+    subscribeToQuickAddSession,
+    type QuickAddDraft,
+} from "../lib/pm/quickAddSession";
+import { isWorkWindowLive, workStartOccupation } from "../lib/engine";
 import { useTaskCompletion } from "../state/TaskCompletionContext";
 import { useOptionalResumeMemo } from "../state/ResumeMemoContext";
 import { getResumeNote } from "../lib/resume";
@@ -236,12 +245,20 @@ const ProjectionSwitcher: React.FC<{ projections: { daily: FinishProjection; wee
 
 export const TimerPanel: React.FC = () => {
     const app = useAppState();
-    const { state, startWork, skipBreak, remainingMs, error, pauseTimer, resumeTimer, isPaused, tick } = app;
+    const { state, startWork, startTaskWork, skipBreak, remainingMs, error, pauseTimer, resumeTimer, isPaused, tick } = app;
     const stopWork = app.stopWork; // preserve existing functionality
     const { play } = useSounds();
-    const { state: pmState, setSelectedTask, updateTask } = usePM();
+    const { state: pmState, createTask, setSelectedTask, updateTask } = usePM();
     const todoContext = useOptionalTodos();
     const pmSelectedId = pmState.ui.selectedTaskId;
+    const timerPageMode = useSyncExternalStore(subscribeToQuickAddSession, getTimerPageMode, getTimerPageMode);
+    const quickAddDraft = useSyncExternalStore(subscribeToQuickAddSession, getQuickAddDraft, getQuickAddDraft);
+    const quickAddTitleRef = useRef<HTMLInputElement>(null);
+    const quickAddSavingRef = useRef(false);
+    const [quickAddSaving, setQuickAddSaving] = useState(false);
+    const [quickAddStarting, setQuickAddStarting] = useState(false);
+    const [quickAddError, setQuickAddError] = useState(false);
+    const [quickAddNote, setQuickAddNote] = useState<{ title: string; projectName: string; appTaskId: string } | null>(null);
     const [detailsOpen, setDetailsOpen] = useState(false);
     const [todayDetailsTaskId, setTodayDetailsTaskId] = useState<string | null>(null);
     const todaySelectionStateRef = useRef<{ done: boolean; archived: boolean } | null>(null);
@@ -361,6 +378,82 @@ export const TimerPanel: React.FC = () => {
             openDetails();
         }
     }, [detailsOpen, closeDetails, openDetails]);
+
+    useEffect(() => {
+        // The post-save note is intentionally React state, not session state:
+        // it never stacks and any tab switch clears it.
+        setQuickAddNote(null);
+        if (timerPageMode === "quick-add") quickAddTitleRef.current?.focus();
+    }, [timerPageMode]);
+
+    useEffect(() => {
+        // Quick add hides the Timer body, so a lingering details drawer would
+        // be orphaned above the form.
+        if (timerPageMode === "quick-add" && detailsOpen) closeDetails();
+    }, [timerPageMode, detailsOpen, closeDetails]);
+
+    useEffect(() => {
+        const handleQuickAddShortcut = (event: KeyboardEvent) => {
+            if (!event.altKey || event.code !== "KeyQ") return;
+            event.preventDefault();
+            setTimerPageMode(getTimerPageMode() === "timer" ? "quick-add" : "timer");
+        };
+        window.addEventListener("keydown", handleQuickAddShortcut);
+        return () => window.removeEventListener("keydown", handleQuickAddShortcut);
+    }, []);
+
+    const updateQuickAddDraft = (patch: Partial<QuickAddDraft>) => {
+        setQuickAddDraft({ ...getQuickAddDraft(), ...patch });
+    };
+
+    const submitQuickAdd = async () => {
+        if (quickAddSavingRef.current) return;
+        const snapshot = getQuickAddDraft();
+        const title = snapshot.title.trim();
+        if (!title) return;
+        quickAddSavingRef.current = true;
+        setQuickAddSaving(true);
+        setQuickAddError(false);
+        try {
+            const parsedEstimate = Number(snapshot.estimate);
+            const estimatePomos = Number.isFinite(parsedEstimate) && parsedEstimate > 0
+                ? Math.max(1, Math.floor(parsedEstimate))
+                : 1;
+            const created = await createTask(title, {
+                projectId: snapshot.projectId,
+                estimatePomos,
+                description: snapshot.notes,
+            });
+            const project = snapshot.projectId ? pmState.projects[snapshot.projectId] : undefined;
+            setQuickAddNote({ title: created.title || title, projectName: project?.name ?? "No Project", appTaskId: created.appTaskId ?? "" });
+            setQuickAddDraft({ ...DEFAULT_QUICK_ADD_DRAFT });
+            quickAddTitleRef.current?.focus();
+            play("pressSide");
+        } catch {
+            setQuickAddError(true);
+            quickAddTitleRef.current?.focus();
+        } finally {
+            quickAddSavingRef.current = false;
+            setQuickAddSaving(false);
+        }
+    };
+
+    const quickAddBlocked = workStartOccupation(timer ?? null) === "blocked";
+    const canSubmitQuickAdd = quickAddDraft.title.trim().length > 0 && !quickAddSaving;
+
+    const startQuickAddTimer = async () => {
+        if (!quickAddNote?.appTaskId || quickAddBlocked) return;
+        setQuickAddStarting(true);
+        try {
+            await startTaskWork(quickAddNote.appTaskId);
+            play("startPomodoro");
+            setTimerPageMode("timer");
+        } catch {
+            // startTaskWork surfaces failures through AppState.error.
+        } finally {
+            setQuickAddStarting(false);
+        }
+    };
 
     useEffect(() => {
         if (!detailsOpen) return;
@@ -572,6 +665,38 @@ export const TimerPanel: React.FC = () => {
         <div className="w-full min-h-full flex">
             <div className="min-w-0 flex-1 flex flex-col items-center p-4 sm:p-6 text-center select-none relative">
                 <div className="my-auto min-w-0 flex flex-col items-center gap-6 max-w-md w-full">
+                    <div className="flex w-full items-center justify-between gap-3">
+                        <div className="inline-flex items-center gap-0.5 rounded-lg bg-neutral-900/80 p-0.5 ring-1 ring-inset ring-neutral-500/10" aria-label="Timer page mode">
+                            {([
+                                { mode: "timer" as const, label: "Timer" },
+                                { mode: "quick-add" as const, label: "Quick add" },
+                            ]).map((option) => {
+                                const selected = timerPageMode === option.mode;
+                                return (
+                                    <button
+                                        key={option.mode}
+                                        type="button"
+                                        className={`rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                                            selected
+                                                ? "bg-neutral-800 text-neutral-100 shadow-sm ring-1 ring-inset ring-neutral-500/15"
+                                                : "text-neutral-500 hover:text-neutral-300"
+                                        }`}
+                                        aria-pressed={selected}
+                                        onClick={() => setTimerPageMode(option.mode)}
+                                    >
+                                        {option.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {timerPageMode === "quick-add" && timer && (
+                            <span className="shrink-0 text-[11px] font-medium tabular-nums text-neutral-400" aria-label="Time remaining">
+                                {formatMs(ms)}
+                            </span>
+                        )}
+                    </div>
+                    {timerPageMode === "timer" ? (
+                    <>
                     <div className="flex flex-col items-center gap-3">
                         <div className="relative w-52 h-52 sm:w-64 sm:h-64 md:w-72 md:h-72">
                             {/* Progress ring */}
@@ -744,6 +869,109 @@ export const TimerPanel: React.FC = () => {
                     <TodaySurface onSelectTask={selectTaskFromToday} />
                     {/* Accessible linear progress */}
                     {/* Removed redundant bottom progress bar */}
+                    </>
+                    ) : (
+                        <div className="w-full select-text text-left">
+                            <form
+                                aria-label="Quick add task"
+                                className="flex flex-col gap-3 rounded-xl border border-neutral-700/70 bg-neutral-900/75 p-4 shadow-lg shadow-black/10"
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void submitQuickAdd();
+                                }}
+                                onKeyDown={(event) => {
+                                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                                        event.preventDefault();
+                                        void submitQuickAdd();
+                                    }
+                                }}
+                            >
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400">Title</span>
+                                    <input
+                                        ref={quickAddTitleRef}
+                                        value={quickAddDraft.title}
+                                        onChange={(event) => updateQuickAddDraft({ title: event.target.value })}
+                                        placeholder="What needs doing?"
+                                        className="rounded-md border border-neutral-700 bg-neutral-800/60 px-2.5 py-2 text-xs text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-emerald-400/60"
+                                    />
+                                </label>
+                                <div className="grid grid-cols-[minmax(0,1fr)_5.5rem] gap-2">
+                                    <label className="flex min-w-0 flex-col gap-1">
+                                        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400">Project</span>
+                                        <select
+                                            value={quickAddDraft.projectId ?? ""}
+                                            onChange={(event) => updateQuickAddDraft({ projectId: event.target.value || null })}
+                                            className="min-w-0 rounded-md border border-neutral-700 bg-neutral-800/60 px-2 py-2 text-[11px] text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-400/60"
+                                        >
+                                            <option value="">No Project</option>
+                                            {Object.values(pmState.projects)
+                                                .filter((project) => !project.isArchived)
+                                                .map((project) => (
+                                                    <option key={project.id} value={project.id}>{project.name}</option>
+                                                ))}
+                                        </select>
+                                    </label>
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400">Estimate</span>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={quickAddDraft.estimate}
+                                            onChange={(event) => updateQuickAddDraft({ estimate: event.target.value })}
+                                            className="rounded-md border border-neutral-700 bg-neutral-800/60 px-1 py-2 text-center text-[11px] text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-400/60"
+                                        />
+                                    </label>
+                                </div>
+                                <div className="flex flex-col items-start gap-2">
+                                    <button
+                                        type="button"
+                                        aria-expanded={quickAddDraft.notesOpen}
+                                        onClick={() => updateQuickAddDraft({ notesOpen: !quickAddDraft.notesOpen })}
+                                        className="rounded text-[10px] font-medium text-neutral-400 transition-colors hover:text-neutral-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60"
+                                    >
+                                        {quickAddDraft.notesOpen ? "Hide notes" : "Add notes"}
+                                    </button>
+                                    {quickAddDraft.notesOpen && (
+                                        <textarea
+                                            aria-label="Notes"
+                                            value={quickAddDraft.notes}
+                                            onChange={(event) => updateQuickAddDraft({ notes: event.target.value })}
+                                            rows={3}
+                                            placeholder="Notes…"
+                                            className="w-full resize-y rounded-md border border-neutral-700 bg-neutral-800/60 px-2.5 py-2 text-xs text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-emerald-400/60"
+                                        />
+                                    )}
+                                </div>
+                                {quickAddError && <p role="alert" className="text-[10px] font-medium text-red-400">Could not add task.</p>}
+                                <button
+                                    type="submit"
+                                    disabled={!canSubmitQuickAdd}
+                                    className="rounded-md border border-emerald-700 bg-emerald-950/40 px-3 py-2 text-[11px] font-medium text-emerald-200 transition-colors hover:bg-emerald-900/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {quickAddSaving ? "Adding…" : "Add task"}
+                                </button>
+                            </form>
+                            {quickAddNote && (
+                                <div role="status" className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-3">
+                                    <p className="min-w-0 flex-1 text-[11px] text-neutral-200">
+                                        Added "{quickAddNote.title}" to {quickAddNote.projectName}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={() => void startQuickAddTimer()}
+                                        disabled={quickAddBlocked || quickAddStarting || !quickAddNote.appTaskId}
+                                        title={quickAddBlocked
+                                            ? `A break is running. Finish or skip it before starting focus on “${quickAddNote.title}”.`
+                                            : undefined}
+                                        className="shrink-0 rounded border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Start timer
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
             {detailsOpen && (
