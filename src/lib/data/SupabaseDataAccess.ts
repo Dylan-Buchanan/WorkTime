@@ -369,7 +369,8 @@ export class SupabaseDataAccess implements SyncRemote {
         if (typeof row.started_at !== "string" || (row.ended_at !== null && typeof row.ended_at !== "string")) this.fail("pet_nap_records", new Error(`invalid row for ${row.id}`));
         return { id: row.id, start: row.started_at, end: row.ended_at, createdAt: row.created_at, updatedAt: row.updated_at };
     }
-    private validateEnergy(row: any): EnergyEntry {
+    private validateEnergy(row: any): EnergyEntry | null {
+        if (!isRecord(row)) return null;
         const value = { work_window_id: row.work_window_id, energy: row.energy ?? null, clarity: row.clarity ?? null,
             caffeine: row.caffeine,
             energy_carried: row.energy_carried === undefined ? false : row.energy_carried,
@@ -379,8 +380,10 @@ export class SupabaseDataAccess implements SyncRemote {
             !isEnergyRating(value.energy) || !isEnergyRating(value.clarity) ||
             typeof value.caffeine !== "boolean" || typeof value.energy_carried !== "boolean" ||
             typeof value.clarity_carried !== "boolean" || typeof value.created_at !== "string" ||
-            typeof value.updated_at !== "string") this.fail("energy_sessions", new Error("invalid energy row"));
-        return value;
+            typeof value.updated_at !== "string") return null;
+        return { work_window_id: value.work_window_id, energy: value.energy, clarity: value.clarity,
+            caffeine: value.caffeine, energy_carried: value.energy_carried, clarity_carried: value.clarity_carried,
+            created_at: value.created_at, updated_at: value.updated_at };
     }
 
     private validatePetWeight(row: any): PetWeightEntry {
@@ -522,6 +525,10 @@ export class SupabaseDataAccess implements SyncRemote {
         }
         const versionedMap = <T>(rows: any[], validate: (row: any) => T): Record<string, { value: T; updatedAt: string }> =>
             Object.fromEntries(rows.map((row) => [row.id, { value: validate(row), updatedAt: row.updated_at }]));
+        const energyEntries: SyncSnapshot["energyEntries"] = Object.fromEntries(energyRows.flatMap(row => {
+            const entry = this.validateEnergy(row);
+            return entry ? [[entry.work_window_id, { value: entry, updatedAt: entry.updated_at }]] : [];
+        }));
         const profileRow = petProfileRows[0];
 
         // Absent singleton rows stay `{ value: null, updatedAt: null }` so the
@@ -556,7 +563,7 @@ export class SupabaseDataAccess implements SyncRemote {
             petProfile: profileRow ? { value: this.validatePetProfile(profileRow), updatedAt: profileRow.updated_at } : { value: null, updatedAt: null },
             petScheduleItems: versionedMap(petScheduleRows, (row) => this.validatePetSchedule(row)),
             petNapRecords: versionedMap(petNapRows, (row) => this.validatePetNap(row)),
-            energyEntries: Object.fromEntries(energyRows.map(row => [row.work_window_id, { value: this.validateEnergy(row), updatedAt: row.updated_at }])),
+            energyEntries,
             petWeightEntries: versionedMap(petWeightRows, (row) => this.validatePetWeight(row)),
             petTrainingSkills: versionedMap(petTrainingRows, (row) => this.validatePetTrainingSkill(row)),
             petFixations: versionedMap(petFixationRows, (row) => this.validatePetFixation(row)),
