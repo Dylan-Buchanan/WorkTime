@@ -32,6 +32,9 @@ export function EnergyProvider({ children }: { children: ReactNode }): JSX.Eleme
     const report = useCallback((failure: unknown) => {
         if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure));
     }, []);
+    // A write that settles successfully retires the previous failure so the
+    // TimerPanel error line never keeps showing a stale energy error.
+    const clearFailure = useCallback(() => { if (mounted.current) setError(null); }, []);
     const reload = useCallback(async () => {
         const sequence = ++readSequence.current;
         const all = await data.loadEnergyEntries();
@@ -69,6 +72,8 @@ export function EnergyProvider({ children }: { children: ReactNode }): JSX.Eleme
                     await data.createEnergyEntry(composeEnergyEntry({
                         workWindowId: windowId, prefill, explicit, now: new Date().toISOString(),
                     }));
+                    // Inserted or duplicate no-op both count as a successful write.
+                    clearFailure();
                     await reload();
                 } catch (failure) { report(failure); }
             });
@@ -80,7 +85,7 @@ export function EnergyProvider({ children }: { children: ReactNode }): JSX.Eleme
             unsubscribeTimer();
             unsubscribeData();
         };
-    }, [app.subscribeTimerTransitions, data, reload, report, schedule]);
+    }, [app.subscribeTimerTransitions, clearFailure, data, reload, report, schedule]);
 
     const armStart = useCallback((explicit: EnergyRatingPatch) => {
         const token = { explicit: { ...explicit } };
@@ -93,6 +98,7 @@ export function EnergyProvider({ children }: { children: ReactNode }): JSX.Eleme
             queue.current.push(async () => {
                 try {
                     const written = await data.setEnergyRating(workWindowId, snapshot, new Date().toISOString());
+                    if (written) clearFailure();
                     await reload();
                     resolve(written);
                 } catch (failure) {
@@ -102,7 +108,7 @@ export function EnergyProvider({ children }: { children: ReactNode }): JSX.Eleme
             });
             schedule();
         });
-    }, [data, reload, report, schedule]);
+    }, [clearFailure, data, reload, report, schedule]);
     const prefillFor = useCallback((atIso: string) => resolveEnergyPrefill(atIso, Object.values(entries),
         latest.current.state?.settings.start_of_day ?? DEFAULT_START_OF_DAY), [entries]);
     const clearError = useCallback(() => setError(null), []);
